@@ -1,0 +1,7 @@
+{
+  "name": "Daily Three Sentences",
+  "description": "A personal English learning tool focused on learning three sentences daily with AI-powered study, review, and achievement tracking.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

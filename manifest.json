@@ -1,0 +1,33 @@
+
+{
+  "name": "每日三句 - AI 英语学习",
+  "short_name": "每日三句",
+  "description": "基于 AI 的每日三句英语学习工具，支持离线查看与本地存储。",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#f5f5f7",
+  "theme_color": "#0071e3",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "https://img.icons8.com/fluency/96/bookmark.png",
+      "sizes": "96x96",
+      "type": "image/png"
+    },
+    {
+      "src": "https://img.icons8.com/fluency/144/bookmark.png",
+      "sizes": "144x144",
+      "type": "image/png"
+    },
+    {
+      "src": "https://img.icons8.com/fluency/192/bookmark.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://img.icons8.com/fluency/512/bookmark.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
