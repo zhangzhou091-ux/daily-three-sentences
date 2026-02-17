@@ -1,9 +1,8 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { Sentence, StudyStep, DictationRecord } from '../types';
 import { geminiService } from '../services/geminiService';
 import { storageService } from '../services/storageService';
-// 新增：导入supabase实例（路径根据你的项目结构，确保正确）
-import { supabase } from '../services/supabase';
 
 interface StudyPageProps {
   sentences: Sentence[];
@@ -20,31 +19,6 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   const [animatingLearnedId, setAnimatingLearnedId] = useState<string | null>(null);
   
   const settings = storageService.getSettings();
-
-  // 新增：Supabase数据测试函数
-  async function fetchSupabaseData() {
-    try {
-      const { data, error } = await supabase
-        .from('daily_sentences')  // 对应你创建的表名
-        .select('*');             // 读取所有数据
-      
-      if (error) {
-        console.error('❌ Supabase读取数据失败：', error);
-        alert('Supabase连接失败！请查看控制台报错');
-      } else {
-        console.log('✅ Supabase成功读取数据：', data);
-        // 可选：如果需要在页面显示数据，可新增state存储
-        // setSupabaseData(data);
-      }
-    } catch (err) {
-      console.error('❌ Supabase请求异常：', err);
-    }
-  }
-
-  // 新增：页面加载时调用Supabase测试函数
-  useEffect(() => {
-    fetchSupabaseData();
-  }, []);
 
   const todayStr = useMemo(() => {
     const d = new Date();
@@ -207,11 +181,6 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-700 pb-20">
-      {/* 新增：Supabase测试提示（不影响原有UI，可选择保留/删除） */}
-      <div className="px-2 text-xs text-blue-500 font-bold">
-        🔍 Supabase数据同步测试中 → 按F12打开控制台查看结果
-      </div>
-
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 px-2">
         <div>
           <p className="text-gray-500 text-xs font-bold uppercase tracking-widest mb-1 flex items-center gap-2">
