@@ -27,6 +27,12 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # 新增：从 GitHub Secrets 生成 .env.local 文件（关键步骤）
+      - name: Create .env.local
+        run: |
+          echo "VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}" > .env.local
+          echo "VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}" >> .env.local
+
       # 4. 构建生产版本（生成 dist 目录）
       - name: Build project
         run: npm run build
