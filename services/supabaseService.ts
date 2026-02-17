@@ -13,11 +13,24 @@ class SupabaseService {
   private isConfigured: boolean = false;
   // 🔴 新增：用户名（用于数据隔离，替代原user_id）
   private userName: string = '';
+  // 🔴 新增：并发初始化锁定（解决多实例核心）
+  private isInitializing: boolean = false;
 
   // 🔴 核心修改：改为async方法，支持用户名绑定，防止重复创建
   async init(url: string, key: string, userName: string): Promise<SyncResult> {
+    // 新增：并发锁定，防止同时调用init创建多实例
+    if (this.isInitializing) {
+      return {
+        success: false,
+        message: '正在初始化Supabase，请稍后重试',
+        errorType: 'concurrent_init'
+      };
+    }
+    this.isInitializing = true;
+
     // 检查是否已有相同用户的有效客户端，避免重复创建
     if (this.client && this.isConfigured && this.userName === userName) {
+      this.isInitializing = false; // 重置锁定
       return {
         success: true,
         message: `✅ 已使用现有配置，用户：${userName}`
@@ -29,6 +42,7 @@ class SupabaseService {
       this.isConfigured = false;
       this.client = null;
       this.userName = '';
+      this.isInitializing = false; // 重置锁定
       return {
         success: false,
         message: 'URL或KEY不能为空，请检查配置',
@@ -39,6 +53,7 @@ class SupabaseService {
       this.isConfigured = false;
       this.client = null;
       this.userName = '';
+      this.isInitializing = false; // 重置锁定
       return {
         success: false,
         message: '用户名不能为空（用于数据隔离）',
@@ -63,18 +78,15 @@ class SupabaseService {
         }
       } catch (contextErr) {
         if (import.meta.env.DEV) {
-          console.error('❌ 绑定用户名上下文失败：', contextErr);
+          console.error('❌ 绑定用户名上下文失败（非致命，不影响同步）：', contextErr);
         }
-        return {
-          success: false,
-          message: '配置成功，但用户名绑定失败（请检查Supabase是否创建set_config函数）',
-          errorType: 'context_failed'
-        };
+        // 降级处理：不阻断核心逻辑，仅警告
       }
 
       // 更新配置状态
       this.isConfigured = true;
       this.userName = userName;
+      this.isInitializing = false; // 重置锁定
       if (import.meta.env.DEV) {
         console.log(`✅ Supabase配置成功，用户名：${this.userName}`);
       }
@@ -87,6 +99,7 @@ class SupabaseService {
       this.isConfigured = false;
       this.client = null;
       this.userName = '';
+      this.isInitializing = false; // 重置锁定
       if (import.meta.env.DEV) {
         console.error('❌ Supabase初始化失败：', err);
       }
@@ -98,13 +111,19 @@ class SupabaseService {
     }
   }
 
-  // 🔴 新增：清空配置，解决多实例问题
+  // 🔴 修复：清空配置+销毁旧实例，解决多实例问题
   clearConfig(): void {
-    this.client = null;
+    // 销毁旧客户端引用（核心：释放内存，解决多实例警告）
+    if (this.client) {
+      (this.client as any).auth = null;
+      (this.client as any).rest = null;
+      this.client = null;
+    }
     this.isConfigured = false;
     this.userName = '';
+    this.isInitializing = false; // 重置锁定
     if (import.meta.env.DEV) {
-      console.log('ℹ️ Supabase配置已清空');
+      console.log('ℹ️ Supabase配置已清空（含旧实例销毁）');
     }
   }
 
@@ -112,12 +131,6 @@ class SupabaseService {
   get isReady() {
     return this.isConfigured && this.client !== null && !!this.userName;
   }
-
-  // 🔴 移除：登录相关方法（不再需要）
-  // async signUp(email: string, pass: string) { ... }
-  // async signIn(email: string, pass: string) { ... }
-  // async signOut() { ... }
-  // async getSession() { ... }
 
   // --- 同步核心逻辑（修改为用户名隔离）---
   async syncSentences(localSentences: Sentence[]): Promise<{ sentences: Sentence[], message: string }> {
@@ -127,6 +140,21 @@ class SupabaseService {
     }
 
     try {
+      // 新增：过滤无效本地数据（避免400）
+      const validLocalSentences = localSentences.filter(s => 
+        s.id && s.content && s.updatedAt // 确保核心字段非空
+      );
+      if (validLocalSentences.length !== localSentences.length) {
+        const invalidCount = localSentences.length - validLocalSentences.length;
+        console.warn(`⚠️ 过滤了${invalidCount}条无效本地数据（缺少id/content/updatedAt）`);
+      }
+
+      // 🔴 新增：查询前先设置上下文参数（解决参数未识别错误）
+      await this.client.rpc('set_config', {
+        config_key: 'app.current_user_name',
+        config_value: this.userName
+      });
+
       // 1. 获取云端最新数据（按userName隔离）
       const { data: cloudData, error } = await this.client
         .from('sentences')
@@ -135,12 +163,12 @@ class SupabaseService {
 
       if (error) {
         console.error("Fetch cloud sentences error:", error);
-        return { sentences: localSentences, message: `同步失败：${error.message}` };
+        return { sentences: validLocalSentences, message: `同步失败：${error.message}` };
       }
 
       // 2. 合并本地与云端数据（Last-Write-Wins策略）
       const cloudMap = new Map<string, Sentence>((cloudData || []).map((s: any) => [String(s.id), s as Sentence]));
-      const localMap = new Map<string, Sentence>(localSentences.map(s => [s.id, s]));
+      const localMap = new Map<string, Sentence>(validLocalSentences.map(s => [s.id, s]));
       const merged: Sentence[] = [];
       const toUpload: any[] = [];
 
@@ -168,9 +196,12 @@ class SupabaseService {
         }
       }
 
-      // 3. 批量上传变更数据到云端
+      // 3. 批量上传变更数据到云端（新增onConflict策略，解决400）
       if (toUpload.length > 0) {
-        const { error: uploadError } = await this.client.from('sentences').upsert(toUpload);
+        const { error: uploadError } = await this.client
+          .from('sentences')
+          .upsert(toUpload, { onConflict: 'id' }); // 🔴 关键：指定冲突解决策略
+        
         if (uploadError) {
           console.error("Upload sentences error:", uploadError);
           return { sentences: merged, message: `部分同步：${uploadError.message}` };
@@ -194,10 +225,18 @@ class SupabaseService {
     }
 
     try {
-      await this.client.from('user_stats').upsert({ 
-        ...stats, 
-        user_name: this.userName // 🔴 替换为user_name
+      // 🔴 新增：写入前先设置上下文参数（解决参数未识别错误）
+      await this.client.rpc('set_config', {
+        config_key: 'app.current_user_name',
+        config_value: this.userName
       });
+
+      await this.client
+        .from('user_stats')
+        .upsert({ 
+          ...stats, 
+          user_name: this.userName // 🔴 替换为user_name
+        }, { onConflict: 'id' }); // 🔴 新增：冲突策略
       return { success: true, message: '统计数据推送成功' };
     } catch (err: any) {
       console.error("Push stats error:", err);
@@ -212,6 +251,12 @@ class SupabaseService {
     }
 
     try {
+      // 🔴 新增：查询前先设置上下文参数（解决参数未识别错误）
+      await this.client.rpc('set_config', {
+        config_key: 'app.current_user_name',
+        config_value: this.userName
+      });
+
       const { data, error } = await this.client
         .from('user_stats')
         .select('*')
