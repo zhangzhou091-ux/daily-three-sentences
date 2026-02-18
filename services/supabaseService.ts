@@ -159,7 +159,7 @@ class SupabaseService {
       const { data: cloudData, error } = await this.client
         .from('sentences')
         .select('*')
-        .eq('user_name', this.userName); // 🔴 替换为user_name
+        .eq('username', this.userName); // 🔴 关键修改：user_name → username
 
       if (error) {
         console.error("Fetch cloud sentences error:", error);
@@ -182,14 +182,14 @@ class SupabaseService {
           // 本地更新时间更新则用本地，否则用云端
           if (local.updatedAt > cloud.updatedAt) {
             merged.push(local);
-            toUpload.push({ ...local, user_name: this.userName }); // 🔴 加入user_name
+            toUpload.push({ ...local, username: this.userName }); // 🔴 关键修改：user_name → username
           } else {
             merged.push(cloud);
           }
         } else if (local) {
           // 本地有、云端无，加入上传列表
           merged.push(local);
-          toUpload.push({ ...local, user_name: this.userName }); // 🔴 加入user_name
+          toUpload.push({ ...local, username: this.userName }); // 🔴 关键修改：user_name → username
         } else if (cloud) {
           // 云端有、本地无，加入合并结果
           merged.push(cloud);
@@ -235,7 +235,7 @@ class SupabaseService {
         .from('user_stats')
         .upsert({ 
           ...stats, 
-          user_name: this.userName // 🔴 替换为user_name
+          username: this.userName // 🔴 关键修改：user_name → username
         }, { onConflict: 'id' }); // 🔴 新增：冲突策略
       return { success: true, message: '统计数据推送成功' };
     } catch (err: any) {
@@ -260,7 +260,7 @@ class SupabaseService {
       const { data, error } = await this.client
         .from('user_stats')
         .select('*')
-        .eq('user_name', this.userName) // 🔴 替换为user_name
+        .eq('username', this.userName) // 🔴 关键修改：user_name → username
         .single();
 
       if (error) {

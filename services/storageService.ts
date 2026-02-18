@@ -1,4 +1,3 @@
-
 import { Sentence, UserStats, DictationRecord, UserSettings } from '../types';
 import { dbService } from './dbService';
 import { supabaseService } from './supabaseService';
@@ -18,11 +17,16 @@ const EBBINGHAUS_INTERVALS = [0, 1, 2, 4, 7, 15, 31, 60, 120, 365];
 
 export const storageService = {
   // --- 同步逻辑 ---
-  initSync: () => {
+  initSync: async () => { // 🔴 修改：改为async，因为supabaseService.init是异步的
     const config = localStorage.getItem(STORAGE_KEYS.SYNC_CONFIG);
     if (config) {
       const { url, key } = JSON.parse(config);
-      supabaseService.init(url, key);
+      // 🔴 修改：补充userName参数（从设置中读取）
+      const settings = storageService.getSettings();
+      const syncResult = await supabaseService.init(url, key, settings.userName);
+      if (import.meta.env.DEV) {
+        console.log('同步初始化结果：', syncResult);
+      }
     }
   },
 
@@ -30,12 +34,17 @@ export const storageService = {
     if (!supabaseService.isReady) return;
     const local = await dbService.getAll();
     const synced = await supabaseService.syncSentences(local);
-    if (synced.length > local.length || true) {
-      await dbService.putAll(synced);
+    
+    // 🔴 修改1：正确解析返回值（synced.sentences）
+    // 🔴 修改2：移除冗余的 || true
+    if (synced.sentences.length > local.length) {
+      await dbService.putAll(synced.sentences); // 🔴 修改3：传入正确的数组
     }
     
     const localStats = storageService.getStats();
-    const cloudStats = await supabaseService.pullStats();
+    const cloudStatsResult = await supabaseService.pullStats(); // 🔴 重命名变量，更清晰
+    // 🔴 修改4：正确解析统计数据（cloudStatsResult.stats）
+    const cloudStats = cloudStatsResult.stats;
     if (cloudStats && cloudStats.updatedAt > localStats.updatedAt) {
       storageService.saveStats(cloudStats, false);
     } else {
@@ -59,6 +68,11 @@ export const storageService = {
   },
   deleteSentence: async (id: string) => {
     await dbService.delete(id);
+    // 🔴 修改：删除后触发云同步，保持数据一致
+    if (supabaseService.isReady) {
+      const remaining = await dbService.getAll();
+      supabaseService.syncSentences(remaining);
+    }
   },
 
   getSettings: (): UserSettings => {
@@ -68,7 +82,7 @@ export const storageService = {
       voiceName: 'Kore',
       showChineseFirst: false,
       autoPlayAudio: true,
-      userName: 'English Learner',
+      userName: 'English Learner', // 默认用户名，可由用户修改
       themeColor: '#f5f5f7',
       updatedAt: Date.now()
     };
@@ -77,6 +91,12 @@ export const storageService = {
   saveSettings: (settings: UserSettings) => {
     const updated = { ...settings, updatedAt: Date.now() };
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(updated));
+    // 🔴 新增：修改用户名后重新初始化同步（确保数据隔离正确）
+    const syncConfig = localStorage.getItem(STORAGE_KEYS.SYNC_CONFIG);
+    if (syncConfig) {
+      const { url, key } = JSON.parse(syncConfig);
+      supabaseService.init(url, key, updated.userName);
+    }
   },
   getStats: (): UserStats => {
     const data = localStorage.getItem(STORAGE_KEYS.STATS);
@@ -164,10 +184,16 @@ export const storageService = {
   clearVocabulary: async () => {
     await dbService.clear();
     localStorage.removeItem(STORAGE_KEYS.DAILY_SELECTION);
+    // 🔴 新增：清空后同步云端
+    if (supabaseService.isReady) {
+      supabaseService.syncSentences([]);
+    }
   },
   clearAllData: async () => {
     await dbService.clear();
     localStorage.clear();
+    // 🔴 新增：清空后重置同步配置
+    supabaseService.clearConfig();
     window.location.reload();
   }
 };
