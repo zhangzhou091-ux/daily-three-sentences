@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo, useRef } from 'react';
 import { Sentence } from '../types';
 import { storageService } from '../services/storageService';
@@ -20,6 +19,17 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isImporting, setIsImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 工具函数：安全获取标签数组（核心修复）
+  const getSafeTags = (tags: unknown): string[] => {
+    // 如果是数组，直接返回；如果是字符串，按分隔符分割；否则返回空数组
+    if (Array.isArray(tags)) {
+      return tags.filter(tag => typeof tag === 'string' && tag.trim() !== '');
+    } else if (typeof tags === 'string') {
+      return tags.split(/[，,;；]/).map(t => t.trim()).filter(t => t !== '');
+    }
+    return [];
+  };
 
   const addSentence = async () => {
     if (!newEn || !newZh) return;
@@ -96,7 +106,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
             masteryLevel: 0,
             timesReviewed: 0,
             wrongDictations: 0,
-            tags: row.Tags || row['标签'] ? String(row.Tags || row['标签']).split(/[;；,，]/).map((t: string) => t.trim()) : [],
+            tags: getSafeTags(row.Tags || row['标签']), // 修复：使用安全函数处理标签
             updatedAt: Date.now(),
             isManual: false 
           }));
@@ -125,7 +135,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
     return sentences.filter(s => 
       s.english.toLowerCase().includes(query) || 
       s.chinese.includes(query) ||
-      s.tags.some(t => t.toLowerCase().includes(query))
+      getSafeTags(s.tags).some(t => t.toLowerCase().includes(query)) // 修复：使用安全函数
     );
   }, [sentences, searchQuery]);
 
@@ -136,7 +146,13 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
       { name: '完全掌握', value: sentences.filter(s => s.intervalIndex >= 9).length, color: '#10b981' }
     ];
     const tagMap: Record<string, number> = {};
-    sentences.forEach(s => s.tags?.forEach(tag => tagMap[tag] = (tagMap[tag] || 0) + 1));
+    // 修复：使用安全函数遍历标签，避免forEach报错
+    sentences.forEach(s => {
+      const safeTags = getSafeTags(s.tags);
+      safeTags.forEach(tag => {
+        tagMap[tag] = (tagMap[tag] || 0) + 1;
+      });
+    });
     const tagData = Object.entries(tagMap).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value).slice(0, 5);
     return { mastery, tagData };
   }, [sentences]);
@@ -145,7 +161,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
     const data = sentences.map(s => ({
       English: s.english,
       Chinese: s.chinese,
-      Tags: (s.tags || []).join(';'),
+      Tags: getSafeTags(s.tags).join(';'), // 修复：使用安全函数
       Stage: s.intervalIndex,
       AddedAt: new Date(s.addedAt).toLocaleString()
     }));
@@ -291,8 +307,9 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
                 </div>
                 <button onClick={() => deleteSentence(s.id)} className="w-8 h-8 flex items-center justify-center text-gray-300 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all">✕</button>
               </div>
+              {/* 修复：使用安全函数渲染标签 */}
               <div className="flex flex-wrap gap-2 mb-6">
-                {s.tags?.map(tag => (
+                {getSafeTags(s.tags).map(tag => (
                   <span key={tag} className="px-3 py-1 bg-gray-50 text-gray-400 rounded-full text-[9px] font-black uppercase tracking-widest">{tag}</span>
                 ))}
               </div>

@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { Sentence, StudyStep, DictationRecord } from '../types';
 import { geminiService } from '../services/geminiService';
@@ -29,6 +28,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     const savedIds = storageService.getTodaySelection();
     
     if (savedIds.length > 0) {
+      // 核心修改：保留完整的今日学习列表，不再过滤已掌握的句子
       const selected = sentences.filter(s => savedIds.includes(s.id));
       if (selected.length > 0) return selected;
     }
@@ -43,7 +43,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     });
 
     const sorted = available.sort((a, b) => a.addedAt - b.addedAt);
-    const newSelection = sorted.slice(0, settings.dailyTarget);
+    const newSelection = sorted.slice(0, 
+      settings.dailyTarget // 👈 仅修改此处：补全参数，读取配置的每日学习数量（已设为3）
+      );
     
     if (newSelection.length > 0) {
       storageService.saveTodaySelection(newSelection.map(s => s.id));

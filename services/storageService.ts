@@ -42,13 +42,19 @@ export const storageService = {
     }
     
     const localStats = storageService.getStats();
-    const cloudStatsResult = await supabaseService.pullStats(); // 🔴 重命名变量，更清晰
-    // 🔴 修改4：正确解析统计数据（cloudStatsResult.stats）
-    const cloudStats = cloudStatsResult.stats;
-    if (cloudStats && cloudStats.updatedAt > localStats.updatedAt) {
-      storageService.saveStats(cloudStats, false);
-    } else {
-      await supabaseService.pushStats(localStats);
+    try { // 🔴 新增：添加异常捕获，避免同步统计数据失败导致整体逻辑中断
+      const cloudStatsResult = await supabaseService.pullStats(); // 🔴 重命名变量，更清晰
+      // 🔴 修改4：正确解析统计数据（cloudStatsResult.stats）
+      const cloudStats = cloudStatsResult?.stats; // 🔴 新增：可选链操作，避免undefined
+      if (cloudStats && cloudStats.updatedAt > localStats.updatedAt) {
+        storageService.saveStats(cloudStats, false);
+      } else {
+        await storageService.saveStats(localStats); // 🔴 修改：调用自身方法，复用推送逻辑
+      }
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.warn('同步统计数据失败，使用本地数据:', err);
+      }
     }
   },
 
@@ -100,7 +106,9 @@ export const storageService = {
   },
   getStats: (): UserStats => {
     const data = localStorage.getItem(STORAGE_KEYS.STATS);
+    // 🔴 核心修改：生成有效的 UUID 作为主键，匹配 Supabase 表结构
     const defaultStats: UserStats = { 
+      id: crypto.randomUUID?.() || `user_${Date.now().toString(36)}`, 
       streak: 0, 
       lastLearnDate: '', 
       totalPoints: 0, 
@@ -109,13 +117,37 @@ export const storageService = {
       lastCompletionDate: '',
       updatedAt: Date.now()
     };
-    return data ? { ...defaultStats, ...JSON.parse(data) } : defaultStats;
+    const parsedStats = data ? JSON.parse(data) : {};
+    // 🔴 确保 ID 始终为有效的 UUID
+    parsedStats.id = parsedStats.id || defaultStats.id;
+    return { ...defaultStats, ...parsedStats };
   },
-  saveStats: (stats: UserStats, triggerCloud: boolean = true) => {
+  saveStats: async (stats: UserStats, triggerCloud: boolean = true) => { // 🔴 保持异步
     const updated = { ...stats, updatedAt: Date.now() };
+    // 🔴 强制保证主键为有效的 UUID
+    updated.id = updated.id || crypto.randomUUID?.() || `user_${Date.now().toString(36)}`;
+    
+    // 🔴 核心修改：直接推送精简字段，彻底避免 400 错误
+    const minimalStats = {
+      id: updated.id, // 主键，UUID 类型
+      streak: updated.streak,
+      total_points: updated.totalPoints,       // 驼峰 → 下划线
+      updated_at: updated.updatedAt,           // 驼峰 → 下划线
+    };
+
+    // 本地存储仍保留驼峰式，兼容前端逻辑
     localStorage.setItem(STORAGE_KEYS.STATS, JSON.stringify(updated));
+    
     if (triggerCloud && supabaseService.isReady) {
-      supabaseService.pushStats(updated);
+      try {
+        // 直接推送精简字段，避免第一次全字段推送失败
+        await supabaseService.pushStats(minimalStats);
+        if (import.meta.env.DEV) console.log('✅ 统计数据同步到 Supabase 成功');
+      } catch (err) {
+        if (import.meta.env.DEV) {
+          console.error('❌ 同步失败，本地数据已保存:', err);
+        }
+      }
     }
   },
 
