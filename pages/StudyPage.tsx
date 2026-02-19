@@ -1,7 +1,16 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Sentence, StudyStep, DictationRecord } from '../types';
 import { geminiService } from '../services/geminiService';
 import { storageService } from '../services/storageService';
+
+// ———— 常量抽离，方便统一修改 ————
+const LEARN_XP = 15;
+const DICTATION_XP = 20;
+const LEARNED_ANIMATION_DELAY = 800;
+const MAX_REVIEW_LEVEL = 10;
+// 新增：固定每日学习和复习数量
+const DAILY_LEARN_TARGET = 3;
+const DAILY_REVIEW_TARGET = 3;
 
 interface StudyPageProps {
   sentences: Sentence[];
@@ -16,65 +25,117 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   const [dictationList, setDictationList] = useState<DictationRecord[]>([]);
   const [targetDictationId, setTargetDictationId] = useState<string | null>(null);
   const [animatingLearnedId, setAnimatingLearnedId] = useState<string | null>(null);
+  // ———— 新增：按句子ID记录反馈状态 {句子ID: 是否已反馈} ————
+  const [reviewFeedbackStatus, setReviewFeedbackStatus] = useState<Record<string, boolean>>({});
   
-  const settings = storageService.getSettings();
+  // 防内存泄漏：定时器 ref
+  const animationTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const settings = useMemo(() => storageService.getSettings(), []);
 
   const todayStr = useMemo(() => {
     const d = new Date();
     return d.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
   }, []);
 
+  // ———— 核心修改：每日学习列表生成逻辑（固定为3个句子） ————
   const dailySelection = useMemo(() => {
     const savedIds = storageService.getTodaySelection();
-    
-    if (savedIds.length > 0) {
-      // 核心修改：保留完整的今日学习列表，不再过滤已掌握的句子
-      const selected = sentences.filter(s => savedIds.includes(s.id));
-      if (selected.length > 0) return selected;
-    }
-
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const todayDateStr = now.toISOString().split('T')[0]; // 当天日期（YYYY-MM-DD）
 
-    const available = sentences.filter(s => {
-      if (s.intervalIndex > 0) return false;
-      if (s.isManual && s.addedAt >= todayStart) return false; 
-      return true;
-    });
+    // 1. 处理已保存的今日句子：保留「未掌握」或「当天标记掌握」的句子
+    const retainedSentences: Sentence[] = [];
+    if (savedIds.length > 0) {
+      savedIds.forEach(id => {
+        const sentence = sentences.find(s => s.id === id);
+        if (!sentence) return;
 
-    const sorted = available.sort((a, b) => a.addedAt - b.addedAt);
-    const newSelection = sorted.slice(0, 
-      settings.dailyTarget // 👈 仅修改此处：补全参数，读取配置的每日学习数量（已设为3）
-      );
-    
-    if (newSelection.length > 0) {
-      storageService.saveTodaySelection(newSelection.map(s => s.id));
+        // 保留规则：
+        // - 未标记掌握（intervalIndex=0）→ 一直保留
+        // - 已标记掌握但标记时间是当天 → 当天仍保留，次日移除
+        const isLearnedToday = sentence.lastReviewedAt 
+          ? new Date(sentence.lastReviewedAt).toISOString().split('T')[0] === todayDateStr 
+          : false;
+        
+        if (sentence.intervalIndex === 0 || isLearnedToday) {
+          retainedSentences.push(sentence);
+        }
+      });
+    }
+
+    // 2. 如果保留的句子数量不足3个，补充新句子（核心修改：固定3个目标）
+    const needSupplementCount = DAILY_LEARN_TARGET - retainedSentences.length;
+    if (needSupplementCount > 0) {
+      // 筛选可补充的新句子：未掌握、非当天手动添加、未在保留列表中
+      const available = sentences.filter(s => {
+        // 排除条件：
+        // - 已掌握（intervalIndex>0）
+        // - 当天手动添加的
+        // - 已在保留列表中
+        const isInRetained = retainedSentences.some(rs => rs.id === s.id);
+        if (s.intervalIndex > 0 || (s.isManual && s.addedAt >= todayStart) || isInRetained) {
+          return false;
+        }
+        return true;
+      });
+
+      // 排序并补充
+      const sorted = available.sort((a, b) => a.addedAt - b.addedAt);
+      const supplementSentences = sorted.slice(0, needSupplementCount);
+      retainedSentences.push(...supplementSentences);
+    }
+
+    // 3. 确保最终列表不超过3个，保存最终的今日句子列表
+    const finalSelection = retainedSentences.slice(0, DAILY_LEARN_TARGET);
+    if (finalSelection.length > 0) {
+      storageService.saveTodaySelection(finalSelection.map(s => s.id));
     }
     
-    return newSelection;
-  }, [sentences, settings.dailyTarget]);
+    return finalSelection;
+  }, [sentences]);
 
+  // ———— 核心修改：复习队列限制为3个句子 ————
   const reviewQueue = useMemo(() => 
     sentences.filter(s => s.nextReviewDate && s.nextReviewDate <= Date.now())
+             .slice(0, DAILY_REVIEW_TARGET) // 截取前3个复习句子
   , [sentences]);
 
   const dictationPool = useMemo(() => 
     sentences.filter(s => s.intervalIndex > 0)
   , [sentences]);
 
+  // 切换句子/标签时重置翻转
   useEffect(() => {
     setIsFlipped(false);
   }, [currentIndex, activeTab]);
 
+  // ———— 新增：切换到复习标签时重置所有句子的反馈状态 ————
+  useEffect(() => {
+    if (activeTab === 'review') {
+      setReviewFeedbackStatus({});
+    }
+  }, [activeTab]);
+
+  // 初始化今日默写记录
   useEffect(() => {
     setDictationList(storageService.getTodayDictations());
   }, []);
 
+  // 自动选默写目标
   useEffect(() => {
     if (activeTab === 'dictation' && !targetDictationId && dictationPool.length > 0) {
       pickNewDictationTarget();
     }
   }, [activeTab, targetDictationId, dictationPool]);
+
+  // 清理定时器，防内存泄漏
+  useEffect(() => {
+    return () => {
+      if (animationTimerRef.current) clearTimeout(animationTimerRef.current);
+    };
+  }, []);
 
   const pickNewDictationTarget = () => {
     if (dictationPool.length === 0) return;
@@ -84,102 +145,154 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     setUserInput('');
   };
 
+  // 播放语音（异常捕获）
   const speak = async (text: string) => {
-    await geminiService.speak(text);
+    if (!text?.trim()) return;
+    try {
+      await geminiService.speak(text);
+    } catch (err) {
+      console.warn('语音播放失败', err);
+    }
   };
 
+  // 标记掌握
   const handleMarkLearned = async (id: string) => {
     const sentence = sentences.find(s => s.id === id);
     if (!sentence || sentence.intervalIndex > 0) return;
 
     setAnimatingLearnedId(id);
 
-    const { nextIndex, nextDate } = storageService.calculateNextReview(0, 'easy');
-    const updatedSentence = { 
-      ...sentence, 
-      intervalIndex: nextIndex, 
-      nextReviewDate: nextDate,
-      lastReviewedAt: Date.now(),
-      updatedAt: Date.now()
-    };
-    
-    await storageService.addSentence(updatedSentence);
-    
-    setTimeout(async () => {
-      await onUpdate();
-      setAnimatingLearnedId(null);
+    try {
+      const { nextIndex, nextDate } = storageService.calculateNextReview(0, 'easy');
+      const updatedSentence: Sentence = { 
+        ...sentence, 
+        intervalIndex: nextIndex, 
+        nextReviewDate: nextDate,
+        lastReviewedAt: Date.now(),
+        updatedAt: Date.now()
+      };
       
-      const stats = storageService.getStats();
-      stats.totalPoints += 15;
-      const today = new Date().toISOString().split('T')[0];
-      if (stats.lastLearnDate !== today) {
-          stats.streak += 1;
-          stats.lastLearnDate = today;
-      }
-      storageService.saveStats(stats);
-    }, 800);
+      await storageService.addSentence(updatedSentence);
+      
+      animationTimerRef.current = setTimeout(async () => {
+        try {
+          await onUpdate();
+          setAnimatingLearnedId(null);
+          
+          const stats = storageService.getStats();
+          stats.totalPoints += LEARN_XP;
+          const today = new Date().toISOString().split('T')[0];
+          if (stats.lastLearnDate !== today) {
+            stats.streak += 1;
+            stats.lastLearnDate = today;
+          }
+          storageService.saveStats(stats);
+        } catch (err) {
+          console.warn('更新学习数据失败', err);
+          setAnimatingLearnedId(null);
+        }
+      }, LEARNED_ANIMATION_DELAY);
+    } catch (err) {
+      console.warn('标记掌握失败', err);
+      setAnimatingLearnedId(null);
+    }
   };
 
+  // ———— 核心修改：复习反馈逻辑 ————
   const handleReviewFeedback = async (id: string, feedback: 'easy' | 'hard' | 'forgot') => {
+    // 1. 已反馈则直接返回，防止重复操作
+    if (reviewFeedbackStatus[id]) return;
+    
     const sentence = sentences.find(s => s.id === id);
     if (!sentence) return;
-    
-    const { nextIndex, nextDate } = storageService.calculateNextReview(
-      sentence.intervalIndex, 
-      feedback,
-      sentence.timesReviewed
-    );
 
-    const updated = { 
-      ...sentence, 
-      intervalIndex: nextIndex, 
-      nextReviewDate: nextDate,
-      lastReviewedAt: Date.now(),
-      timesReviewed: sentence.timesReviewed + 1,
-      updatedAt: Date.now()
-    };
-    
-    await storageService.addSentence(updated);
-    await onUpdate();
-    
-    if (currentIndex < reviewQueue.length - 1) {
-      setCurrentIndex(currentIndex + 1);
-    } else {
-      setCurrentIndex(0);
-      setActiveTab('dictation');
+    try {
+      const { nextIndex, nextDate } = storageService.calculateNextReview(
+        sentence.intervalIndex, 
+        feedback,
+        sentence.timesReviewed
+      );
+
+      const updated: Sentence = { 
+        ...sentence, 
+        intervalIndex: nextIndex, 
+        nextReviewDate: nextDate,
+        lastReviewedAt: Date.now(),
+        timesReviewed: (sentence.timesReviewed || 0) + 1,
+        updatedAt: Date.now()
+      };
+      
+      // 仅写入本地存储，当天reviewQueue仍基于原始sentences，次日生效
+      await storageService.addSentence(updated);
+      await onUpdate();
+      
+      // 2. 标记该句子为已反馈（控制按钮禁用）
+      setReviewFeedbackStatus(prev => ({
+        ...prev,
+        [id]: true
+      }));
+
+      // 3. 循环切换到下一句，始终留在复习页（移除跳默写逻辑）
+      setCurrentIndex(prev => (prev + 1) % reviewQueue.length);
+      // 4. 切换后重置卡片翻转状态
+      setIsFlipped(false);
+    } catch (err) {
+      console.warn('复习保存失败', err);
     }
   };
 
+  // 默写核对（空输入拦截）
   const handleDictationCheck = () => {
+    if (!userInput.trim()) {
+      alert('请输入默写内容后再核对');
+      return;
+    }
+
     const target = sentences.find(s => s.id === targetDictationId);
     if (!target) return;
-    const isCorrect = userInput.trim().toLowerCase() === target.english.trim().toLowerCase();
-    const newRecord: DictationRecord = {
-      sentenceId: target.id,
-      status: isCorrect ? 'correct' : 'wrong',
-      timestamp: Date.now(),
-      isFinished: false
-    };
-    const newList = [newRecord, ...dictationList];
-    setDictationList(newList);
-    storageService.saveTodayDictations(newList);
     
-    if (isCorrect) {
-      const stats = storageService.getStats();
-      stats.dictationCount += 1;
-      stats.totalPoints += 20;
-      storageService.saveStats(stats);
-      setUserInput('');
-      setTargetDictationId(null);
-    } else {
-      setIsFlipped(true);
+    try {
+      const isCorrect = userInput.trim().toLowerCase() === target.english.trim().toLowerCase();
+      const newRecord: DictationRecord = {
+        sentenceId: target.id,
+        status: isCorrect ? 'correct' : 'wrong',
+        timestamp: Date.now(),
+        isFinished: false
+      };
+      
+      const newList = [newRecord, ...dictationList];
+      setDictationList(newList);
+      storageService.saveTodayDictations(newList);
+      
+      if (isCorrect) {
+        const stats = storageService.getStats();
+        stats.dictationCount = (stats.dictationCount || 0) + 1;
+        stats.totalPoints += DICTATION_XP;
+        storageService.saveStats(stats);
+        setUserInput('');
+        setTargetDictationId(null);
+      } else {
+        setIsFlipped(true);
+      }
+    } catch (err) {
+      console.warn('默写核对失败', err);
     }
   };
 
-  const targetSentence = sentences.find(s => s.id === targetDictationId);
-  const currentSentence = dailySelection[currentIndex];
-  const isCurrentlyLearned = currentSentence && currentSentence.intervalIndex > 0;
+  // ———— 安全取值，防止页面报错 ————
+  const targetSentence = useMemo(() => 
+    sentences.find(s => s.id === targetDictationId) || null
+  , [sentences, targetDictationId]);
+  
+  const currentSentence = dailySelection[currentIndex] || null;
+  const isCurrentlyLearned = currentSentence?.intervalIndex > 0;
   const isAnimating = currentSentence && animatingLearnedId === currentSentence.id;
+  
+  // ———— 新增：当前复习句子及反馈状态（用于按钮禁用） ————
+  const currentReviewSentence = reviewQueue[currentIndex] || null;
+  const isCurrentReviewSentenceFeedbacked = currentReviewSentence 
+    ? reviewFeedbackStatus[currentReviewSentence.id] || false 
+    : false;
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-700 pb-20">
@@ -216,8 +329,22 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 <div 
                   className={`card-inner apple-card ${isFlipped ? 'card-flipped' : ''}`}
                   onClick={() => setIsFlipped(!isFlipped)}
+                  style={{ position: 'relative', width: '100%', height: '100%' }}
                 >
-                  <div className={`card-front p-10 transition-all duration-700 ${isCurrentlyLearned || isAnimating ? 'bg-green-50/20' : ''}`}>
+                  {/* 学习卡片正面 - 修复翻转后遮挡问题 */}
+                  <div 
+                    className={`card-front p-10 transition-all duration-700 ${isCurrentlyLearned || isAnimating ? 'bg-green-50/20' : ''}`}
+                    style={{ 
+                      backfaceVisibility: 'hidden', 
+                      position: 'absolute', 
+                      inset: 0,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      textAlign: 'center'
+                    }}
+                  >
                     {(isCurrentlyLearned || isAnimating) && (
                       <div className="bg-green-100 text-green-600 text-[10px] font-black px-4 py-1.5 rounded-full mb-6 flex items-center gap-2 shadow-sm border border-green-200/50">
                         <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
@@ -226,7 +353,10 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     )}
                     
                     <button 
-                      onClick={(e) => { e.stopPropagation(); speak(dailySelection[currentIndex].english); }}
+                      onClick={(e) => { 
+                        e.stopPropagation(); 
+                        if (currentSentence) speak(currentSentence.english); 
+                      }}
                       className="w-20 h-20 rounded-full flex items-center justify-center mb-8 shadow-inner transition-all relative bg-blue-50 text-blue-600 hover:scale-110 active:scale-95 z-20"
                     >
                       <span className="text-3xl">🔊</span>
@@ -234,14 +364,24 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     </button>
 
                     <h3 className="text-2xl font-black text-gray-900 leading-tight mb-2 max-w-sm px-4">
-                      {dailySelection[currentIndex].english}
+                      {currentSentence?.english || ''}
                     </h3>
                     <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mt-6 animate-bounce">点击卡片翻转显示中文</p>
                   </div>
 
-                  <div className="card-back p-10 flex flex-col items-center justify-center">
+                  {/* 学习卡片背面 - 修复翻转后遮挡问题 */}
+                  <div 
+                    className="card-back p-10 flex flex-col items-center justify-center"
+                    style={{ 
+                      backfaceVisibility: 'hidden', 
+                      position: 'absolute', 
+                      inset: 0,
+                      transform: 'rotateY(180deg)',
+                      textAlign: 'center'
+                    }}
+                  >
                     <p className="text-2xl text-gray-800 font-bold leading-relaxed px-6">
-                      {dailySelection[currentIndex].chinese}
+                      {currentSentence?.chinese || ''}
                     </p>
                     <div className="mt-10 px-6 py-2 bg-gray-100 rounded-full text-[10px] font-black text-gray-400 uppercase tracking-widest">
                       CHINESE MEANING
@@ -253,11 +393,11 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
               <div className="flex flex-col gap-4">
                 {!isCurrentlyLearned && !isAnimating ? (
                   <button
-                    onClick={() => handleMarkLearned(dailySelection[currentIndex].id)}
+                    onClick={() => currentSentence && handleMarkLearned(currentSentence.id)}
                     className="w-full bg-black text-white py-5 rounded-[2rem] font-black text-xl shadow-2xl shadow-black/10 hover:bg-gray-800 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
                   >
                     <span>标记掌握</span>
-                    <span className="text-sm opacity-50">+15 XP</span>
+                    <span className="text-sm opacity-50">+{LEARN_XP} XP</span>
                   </button>
                 ) : (
                   <button
@@ -276,13 +416,25 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 )}
                 
                 <div className="flex justify-between items-center px-6">
-                    <button disabled={currentIndex === 0} onClick={() => setCurrentIndex(currentIndex - 1)} className={`text-[11px] font-bold uppercase tracking-widest transition-colors ${currentIndex === 0 ? 'text-gray-200' : 'text-gray-400 hover:text-blue-500'}`}>← Prev</button>
+                    <button 
+                      disabled={currentIndex === 0} 
+                      onClick={() => setCurrentIndex(currentIndex - 1)} 
+                      className={`text-[11px] font-bold uppercase tracking-widest transition-colors ${currentIndex === 0 ? 'text-gray-200' : 'text-gray-400 hover:text-blue-500'}`}
+                    >
+                      ← Prev
+                    </button>
                     <div className="flex items-center gap-2">
                        <span className="text-[11px] text-gray-900 font-black tracking-widest">{currentIndex + 1}</span>
                        <span className="text-[11px] text-gray-300 font-black tracking-widest">/</span>
                        <span className="text-[11px] text-gray-400 font-black tracking-widest">{dailySelection.length}</span>
                     </div>
-                    <button disabled={currentIndex === dailySelection.length - 1} onClick={() => setCurrentIndex(currentIndex + 1)} className={`text-[11px] font-bold uppercase tracking-widest transition-colors ${currentIndex === dailySelection.length - 1 ? 'text-gray-200' : 'text-gray-400 hover:text-blue-500'}`}>Next →</button>
+                    <button 
+                      disabled={currentIndex === dailySelection.length - 1} 
+                      onClick={() => setCurrentIndex(currentIndex + 1)} 
+                      className={`text-[11px] font-bold uppercase tracking-widest transition-colors ${currentIndex === dailySelection.length - 1 ? 'text-gray-200' : 'text-gray-400 hover:text-blue-500'}`}
+                    >
+                      Next →
+                    </button>
                 </div>
               </div>
             </div>
@@ -302,23 +454,45 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 <div 
                   className={`card-inner apple-card ${isFlipped ? 'card-flipped' : ''}`}
                   onClick={() => setIsFlipped(!isFlipped)}
+                  style={{ position: 'relative', width: '100%', height: '100%' }}
                 >
-                  <div className="card-front p-12">
+                  {/* 复习卡片正面 - 修复翻转后遮挡问题 */}
+                  <div 
+                    className="card-front p-12"
+                    style={{ 
+                      backfaceVisibility: 'hidden', 
+                      position: 'absolute', 
+                      inset: 0,
+                      display: 'flex',
+                      flexDirection: 'column'
+                    }}
+                  >
                     <div className="absolute top-8 right-10 flex flex-col items-end">
                       <span className="text-[10px] font-black text-blue-500 uppercase tracking-widest mb-1">Level</span>
                       <div className="flex gap-1">
-                        {[...Array(10)].map((_, i) => (
-                          <div key={i} className={`w-1.5 h-3 rounded-full ${i < reviewQueue[currentIndex].intervalIndex ? 'bg-blue-500 shadow-[0_0_5px_rgba(59,130,246,0.3)]' : 'bg-gray-100'}`} />
+                        {[...Array(MAX_REVIEW_LEVEL)].map((_, i) => (
+                          <div 
+                            key={i} 
+                            className={`w-1.5 h-3 rounded-full ${
+                              i < (reviewQueue[currentIndex]?.intervalIndex || 0) 
+                                ? 'bg-blue-500 shadow-[0_0_5px_rgba(59,130,246,0.3)]' 
+                                : 'bg-gray-100'
+                            }`} 
+                          />
                         ))}
                       </div>
                     </div>
                     <p className="text-[10px] font-black text-gray-300 uppercase tracking-[0.2em] mb-4">科学复习卡片</p>
                     <h3 className="text-2xl font-black text-gray-800 max-w-xs leading-snug">
-                      {reviewQueue[currentIndex].english}
+                      {reviewQueue[currentIndex]?.english || ''}
                     </h3>
                     
                     <button 
-                      onClick={(e) => { e.stopPropagation(); speak(reviewQueue[currentIndex].english); }}
+                      onClick={(e) => { 
+                        e.stopPropagation(); 
+                        const sen = reviewQueue[currentIndex];
+                        if (sen) speak(sen.english); 
+                      }}
                       className="mt-10 w-16 h-16 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-2xl hover:scale-110 active:scale-95 transition-all z-20"
                     >
                       🔊
@@ -327,8 +501,20 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mt-12 animate-pulse">点击翻转查看翻译</p>
                   </div>
 
-                  <div className="card-back p-12 flex flex-col items-center justify-center">
-                    <h4 className="text-2xl font-bold text-gray-900 mb-6 leading-relaxed">{reviewQueue[currentIndex].chinese}</h4>
+                  {/* 复习卡片背面 - 修复翻转后遮挡问题 */}
+                  <div 
+                    className="card-back p-12 flex flex-col items-center justify-center"
+                    style={{ 
+                      backfaceVisibility: 'hidden', 
+                      position: 'absolute', 
+                      inset: 0,
+                      transform: 'rotateY(180deg)',
+                      textAlign: 'center'
+                    }}
+                  >
+                    <h4 className="text-2xl font-bold text-gray-900 mb-6 leading-relaxed">
+                      {reviewQueue[currentIndex]?.chinese || ''}
+                    </h4>
                     <div className="bg-blue-50 text-blue-500 px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-[0.2em]">
                       Scientific Review
                     </div>
@@ -336,10 +522,62 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 </div>
               </div>
 
+              {/* ———— 修改：按钮添加禁用状态，根据当前句子反馈状态控制 ———— */}
               <div className="grid grid-cols-3 gap-4">
-                <button onClick={() => handleReviewFeedback(reviewQueue[currentIndex].id, 'forgot')} className="bg-white text-red-400 py-5 rounded-[1.8rem] font-bold shadow-sm border border-red-50 hover:bg-red-50 transition-all">不记得</button>
-                <button onClick={() => handleReviewFeedback(reviewQueue[currentIndex].id, 'hard')} className="bg-white text-orange-400 py-5 rounded-[1.8rem] font-bold shadow-sm border border-orange-50 hover:bg-orange-50 transition-all">有模糊</button>
-                <button onClick={() => handleReviewFeedback(reviewQueue[currentIndex].id, 'easy')} className="bg-blue-600 text-white py-5 rounded-[1.8rem] font-black shadow-xl shadow-blue-200 active:scale-95 transition-all">很简单</button>
+                <button 
+                  onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 'forgot')} 
+                  disabled={isCurrentReviewSentenceFeedbacked}
+                  className={`bg-white py-5 rounded-[1.8rem] font-bold shadow-sm border transition-all ${
+                    isCurrentReviewSentenceFeedbacked 
+                      ? 'text-gray-300 border-gray-100 cursor-not-allowed' 
+                      : 'text-red-400 border-red-50 hover:bg-red-50'
+                  }`}
+                >
+                  不记得
+                </button>
+                <button 
+                  onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 'hard')} 
+                  disabled={isCurrentReviewSentenceFeedbacked}
+                  className={`bg-white py-5 rounded-[1.8rem] font-bold shadow-sm border transition-all ${
+                    isCurrentReviewSentenceFeedbacked 
+                      ? 'text-gray-300 border-gray-100 cursor-not-allowed' 
+                      : 'text-orange-400 border-orange-50 hover:bg-orange-50'
+                  }`}
+                >
+                  有模糊
+                </button>
+                <button 
+                  onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 'easy')} 
+                  disabled={isCurrentReviewSentenceFeedbacked}
+                  className={`py-5 rounded-[1.8rem] font-black shadow-xl active:scale-95 transition-all ${
+                    isCurrentReviewSentenceFeedbacked 
+                      ? 'bg-gray-200 text-gray-400 shadow-none cursor-not-allowed' 
+                      : 'bg-blue-600 text-white shadow-blue-200'
+                  }`}
+                >
+                  很简单
+                </button>
+              </div>
+
+              {/* ———— 新增：复习页手动切换句子按钮（优化体验） ———— */}
+              <div className="flex justify-between items-center px-6 mt-4">
+                <button 
+                  onClick={() => setCurrentIndex(prev => (prev - 1 + reviewQueue.length) % reviewQueue.length)}
+                  className="text-[11px] font-bold uppercase tracking-widest text-gray-400 hover:text-blue-500 transition-colors"
+                >
+                  ← 上一句
+                </button>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-gray-900 font-black">{currentIndex + 1}</span>
+                  <span className="text-[11px] text-gray-300 font-black">/</span>
+                  <span className="text-[11px] text-gray-400 font-black">{reviewQueue.length}</span>
+                </div>
+                <button 
+                  onClick={() => setCurrentIndex(prev => (prev + 1) % reviewQueue.length)}
+                  className="text-[11px] font-bold uppercase tracking-widest text-gray-400 hover:text-blue-500 transition-colors"
+                >
+                  下一句 →
+                </button>
               </div>
             </div>
           ) : (
@@ -361,11 +599,18 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     <h3 className="text-xl font-black text-gray-900 tracking-tight">盲听默写</h3>
                     <p className="text-[10px] font-black text-orange-500 uppercase tracking-widest mt-1">Dictation Challenge</p>
                   </div>
-                  <button onClick={pickNewDictationTarget} className="w-10 h-10 flex items-center justify-center bg-orange-50 text-orange-400 rounded-full hover:bg-orange-100 transition-colors">🔄</button>
+                  <button 
+                    onClick={pickNewDictationTarget} 
+                    className="w-10 h-10 flex items-center justify-center bg-orange-50 text-orange-400 rounded-full hover:bg-orange-100 transition-colors"
+                  >
+                    🔄
+                  </button>
                 </div>
                 
                 <div className="bg-orange-50/40 p-8 rounded-[2rem] border border-orange-100/50 text-center mb-8">
-                  <p className="text-xl font-bold text-gray-700 leading-relaxed italic">"{targetSentence?.chinese}"</p>
+                  <p className="text-xl font-bold text-gray-700 leading-relaxed italic">
+                    "{targetSentence?.chinese || '暂无题目'}"
+                  </p>
                 </div>
 
                 <textarea 
@@ -376,15 +621,31 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 />
 
                 <div className="grid grid-cols-2 gap-4 mt-8">
-                  <button onClick={() => { setIsFlipped(!isFlipped); if(!isFlipped) speak(targetSentence?.english || ""); }} className="bg-white text-gray-400 py-5 rounded-[2rem] font-bold border border-gray-100 active:scale-95 transition-all">{isFlipped ? '隐藏答案' : '听音提示'}</button>
-                  <button onClick={handleDictationCheck} className="bg-orange-500 text-white py-5 rounded-[2rem] font-black text-lg shadow-xl shadow-orange-200 active:scale-95 transition-all">核对</button>
+                  <button 
+                    onClick={() => { 
+                      setIsFlipped(!isFlipped); 
+                      if(!isFlipped && targetSentence) speak(targetSentence.english); 
+                    }} 
+                    className="bg-white text-gray-400 py-5 rounded-[2rem] font-bold border border-gray-100 active:scale-95 transition-all"
+                  >
+                    {isFlipped ? '隐藏答案' : '听音提示'}
+                  </button>
+                  <button 
+                    onClick={handleDictationCheck} 
+                    className="bg-orange-500 text-white py-5 rounded-[2rem] font-black text-lg shadow-xl shadow-orange-200 active:scale-95 transition-all"
+                  >
+                    核对
+                  </button>
                 </div>
 
                 {isFlipped && targetSentence && (
                   <div className="mt-8 p-8 bg-blue-50 rounded-[2rem] animate-in slide-in-from-top-4">
                     <p className="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-2">标准答案</p>
                     <p className="text-blue-800 font-bold text-lg leading-tight">{targetSentence.english}</p>
-                    <button onClick={() => speak(targetSentence.english)} className="mt-4 font-bold text-xs flex items-center gap-1.5 text-blue-500 hover:text-blue-700 transition-colors">
+                    <button 
+                      onClick={() => speak(targetSentence.english)} 
+                      className="mt-4 font-bold text-xs flex items-center gap-1.5 text-blue-500 hover:text-blue-700 transition-colors"
+                    >
                       <span>🔊</span> 再次播放
                     </button>
                   </div>
@@ -403,13 +664,16 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
               <div className="space-y-3">
                 {dictationList.map((item, idx) => {
                   const s = sentences.find(sent => sent.id === item.sentenceId);
+                  if (!s) return null;
                   return (
                     <div key={idx} className="apple-card p-5 flex items-center justify-between group bg-white/60 hover:bg-white transition-all">
                       <div className="flex-1 pr-4">
-                        <p className="text-sm font-bold text-gray-800 line-clamp-1">{s?.english}</p>
-                        <p className="text-[10px] text-gray-400 font-medium">{s?.chinese}</p>
+                        <p className="text-sm font-bold text-gray-800 line-clamp-1">{s.english}</p>
+                        <p className="text-[10px] text-gray-400 font-medium">{s.chinese}</p>
                       </div>
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black ${item.status === 'correct' ? 'bg-green-100 text-green-600' : 'bg-red-50 text-red-400'}`}>
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black ${
+                        item.status === 'correct' ? 'bg-green-100 text-green-600' : 'bg-red-50 text-red-400'
+                      }`}>
                         {item.status === 'correct' ? '✓' : '×'}
                       </div>
                     </div>

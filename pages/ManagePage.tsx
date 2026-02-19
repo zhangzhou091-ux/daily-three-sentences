@@ -1,8 +1,7 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { Sentence } from '../types';
 import { storageService } from '../services/storageService';
-import { geminiService } from '../services/geminiService';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis } from 'recharts';
+import { PieChart, Pie, Cell, Tooltip, BarChart, Bar, XAxis, YAxis } from 'recharts';
 import * as XLSX from 'xlsx';
 
 interface ManagePageProps {
@@ -14,26 +13,29 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
   const [newEn, setNewEn] = useState('');
   const [newZh, setNewZh] = useState('');
   const [newTags, setNewTags] = useState('');
-  const [aiTopic, setAiTopic] = useState('');
-  const [isGenerating, setIsGenerating] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isImporting, setIsImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 工具函数：安全获取标签数组（核心修复）
+  // 轻量标签缓存
+  let tagCache: Record<string, string[]> = {};
   const getSafeTags = (tags: unknown): string[] => {
-    // 如果是数组，直接返回；如果是字符串，按分隔符分割；否则返回空数组
+    const cacheKey = typeof tags === 'string' ? tags : JSON.stringify(tags);
+    if (tagCache[cacheKey]) return tagCache[cacheKey];
+    
+    let result: string[] = [];
     if (Array.isArray(tags)) {
-      return tags.filter(tag => typeof tag === 'string' && tag.trim() !== '');
+      result = tags.filter(tag => typeof tag === 'string' && tag.trim() !== '');
     } else if (typeof tags === 'string') {
-      return tags.split(/[，,;；]/).map(t => t.trim()).filter(t => t !== '');
+      result = tags.split(/[，,;；]/).map(t => t.trim()).filter(t => t !== '');
     }
-    return [];
+    tagCache[cacheKey] = result;
+    return result;
   };
 
   const addSentence = async () => {
     if (!newEn || !newZh) return;
-    const tagsArray = newTags.split(/[，,]/).map(t => t.trim()).filter(t => t !== '');
+    const tagsArray = getSafeTags(newTags);
     
     const newItem: Sentence = {
       id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
@@ -55,21 +57,6 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
     setNewEn('');
     setNewZh('');
     setNewTags('');
-  };
-
-  const handleAiSuggest = async () => {
-    if (!aiTopic) return;
-    setIsGenerating(true);
-    try {
-      const suggestions = await geminiService.suggestSentences(aiTopic);
-      if (suggestions.length > 0) {
-        setNewEn(suggestions[0].english);
-        setNewZh(suggestions[0].chinese);
-        setNewTags(aiTopic);
-      }
-    } finally {
-      setIsGenerating(false);
-    }
   };
 
   const deleteSentence = async (id: string) => {
@@ -106,7 +93,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
             masteryLevel: 0,
             timesReviewed: 0,
             wrongDictations: 0,
-            tags: getSafeTags(row.Tags || row['标签']), // 修复：使用安全函数处理标签
+            tags: getSafeTags(row.Tags || row['标签']),
             updatedAt: Date.now(),
             isManual: false 
           }));
@@ -130,30 +117,42 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
   };
 
   const filteredSentences = useMemo(() => {
-    if (!searchQuery) return sentences;
+    if (!searchQuery || searchQuery.trim() === '') return sentences;
     const query = searchQuery.toLowerCase();
     return sentences.filter(s => 
       s.english.toLowerCase().includes(query) || 
       s.chinese.includes(query) ||
-      getSafeTags(s.tags).some(t => t.toLowerCase().includes(query)) // 修复：使用安全函数
+      getSafeTags(s.tags).some(t => t.toLowerCase().includes(query))
     );
   }, [sentences, searchQuery]);
 
   const stats = useMemo(() => {
+    if (sentences.length === 0) {
+      return {
+        mastery: [{ name: '初识', value: 0, color: '#e5e7eb' }, { name: '复习中', value: 0, color: '#3b82f6' }, { name: '完全掌握', value: 0, color: '#10b981' }],
+        tagData: []
+      };
+    }
+
     const mastery = [
       { name: '初识', value: sentences.filter(s => s.intervalIndex === 0).length, color: '#e5e7eb' },
       { name: '复习中', value: sentences.filter(s => s.intervalIndex > 0 && s.intervalIndex < 9).length, color: '#3b82f6' },
       { name: '完全掌握', value: sentences.filter(s => s.intervalIndex >= 9).length, color: '#10b981' }
     ];
+    
     const tagMap: Record<string, number> = {};
-    // 修复：使用安全函数遍历标签，避免forEach报错
     sentences.forEach(s => {
       const safeTags = getSafeTags(s.tags);
       safeTags.forEach(tag => {
         tagMap[tag] = (tagMap[tag] || 0) + 1;
       });
     });
-    const tagData = Object.entries(tagMap).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value).slice(0, 5);
+    
+    const tagData = Object.entries(tagMap)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 5);
+    
     return { mastery, tagData };
   }, [sentences]);
 
@@ -161,7 +160,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
     const data = sentences.map(s => ({
       English: s.english,
       Chinese: s.chinese,
-      Tags: getSafeTags(s.tags).join(';'), // 修复：使用安全函数
+      Tags: getSafeTags(s.tags).join(';'),
       Stage: s.intervalIndex,
       AddedAt: new Date(s.addedAt).toLocaleString()
     }));
@@ -206,60 +205,36 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
           <div className="space-y-6 text-center md:text-left">
-            <h3 className="text-[11px] font-black text-gray-300 uppercase tracking-widest">Mastery Distribution</h3>
-            <div className="h-48 relative">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={stats.mastery} dataKey="value" innerRadius={50} outerRadius={70} paddingAngle={10} stroke="none">
-                    {stats.mastery.map((entry, index) => <Cell key={index} fill={entry.color} />)}
-                  </Pie>
-                  <Tooltip contentStyle={{borderRadius: '1.2rem', border: 'none', boxShadow: '0 8px 24px rgba(0,0,0,0.05)'}} />
-                </PieChart>
-              </ResponsiveContainer>
+            <h3 className="text-[11px] font-black text-gray-300 uppercase tracking-widest">MASTERY DISTRIBUTION</h3>
+            <div className="h-48 min-h-48 relative">
+              {/* 移除 ResponsiveContainer，直接用固定宽高渲染饼图 */}
+              <PieChart width={200} height={200}>
+                <Pie data={stats.mastery} dataKey="value" innerRadius={50} outerRadius={70} paddingAngle={10} stroke="none">
+                  {stats.mastery.map((entry, index) => <Cell key={index} fill={entry.color} />)}
+                </Pie>
+                <Tooltip contentStyle={{borderRadius: '1.2rem', border: 'none', boxShadow: '0 8px 24px rgba(0,0,0,0.05)'}} />
+              </PieChart>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                 <span className="text-2xl font-black text-gray-800">{sentences.length}</span>
-                <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">Records</span>
+                <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">RECORDS</span>
               </div>
             </div>
           </div>
           <div className="space-y-6">
-            <h3 className="text-[11px] font-black text-gray-300 uppercase tracking-widest">Hot Keywords</h3>
-            <div className="h-48">
+            <h3 className="text-[11px] font-black text-gray-300 uppercase tracking-widest">HOT KEYWORDS</h3>
+            <div className="h-48 min-h-48">
+              {/* 移除 ResponsiveContainer，直接用固定宽高渲染柱状图 */}
               {stats.tagData.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={stats.tagData} layout="vertical" margin={{left: 0, right: 30}}>
-                    <XAxis type="number" hide />
-                    <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={{fontSize: 11, fontWeight: 700, fill: '#1f2937'}} width={60} />
-                    <Bar dataKey="value" fill="#3b82f6" radius={[0, 8, 8, 0]} barSize={12} />
-                  </BarChart>
-                </ResponsiveContainer>
+                <BarChart width={300} height={150} data={stats.tagData} layout="vertical" margin={{left: 0, right: 30}}>
+                  <XAxis type="number" hide />
+                  <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={{fontSize: 11, fontWeight: 700, fill: '#1f2937'}} width={60} />
+                  <Bar dataKey="value" fill="#3b82f6" radius={[0, 8, 8, 0]} barSize={12} />
+                </BarChart>
               ) : (
                 <div className="h-full flex items-center justify-center text-gray-300 text-xs italic">库内暂无标签</div>
               )}
             </div>
           </div>
-        </div>
-      </div>
-
-      <div className="apple-card p-10 space-y-8 bg-blue-50/20 border-blue-100">
-        <div className="flex items-center gap-3">
-          <span className="text-2xl">⚡️</span>
-          <h2 className="text-xl font-black text-gray-900 tracking-tight">智力检索</h2>
-        </div>
-        <div className="flex gap-3">
-          <input 
-            value={aiTopic} 
-            onChange={(e) => setAiTopic(e.target.value)} 
-            placeholder="从内置句库寻找灵感..." 
-            className="flex-1 px-6 py-4 bg-white rounded-2xl border-none shadow-sm focus:ring-2 focus:ring-blue-100 outline-none text-sm font-medium" 
-          />
-          <button 
-            onClick={handleAiSuggest} 
-            disabled={isGenerating} 
-            className="bg-blue-600 text-white px-8 rounded-2xl font-black text-sm shadow-xl shadow-blue-200 disabled:opacity-50 active:scale-95 transition-all"
-          >
-            {isGenerating ? '匹配中...' : '灵感'}
-          </button>
         </div>
       </div>
 
@@ -307,7 +282,6 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
                 </div>
                 <button onClick={() => deleteSentence(s.id)} className="w-8 h-8 flex items-center justify-center text-gray-300 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all">✕</button>
               </div>
-              {/* 修复：使用安全函数渲染标签 */}
               <div className="flex flex-wrap gap-2 mb-6">
                 {getSafeTags(s.tags).map(tag => (
                   <span key={tag} className="px-3 py-1 bg-gray-50 text-gray-400 rounded-full text-[9px] font-black uppercase tracking-widest">{tag}</span>

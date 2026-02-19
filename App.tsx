@@ -21,6 +21,9 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   
+  // 🔴 仅新增这1行：导航栏显示/隐藏状态（默认隐藏）
+  const [isNavVisible, setIsNavVisible] = useState(false);
+  
   // Supabase配置相关状态
   const [supabaseUrl, setSupabaseUrl] = useState('');
   const [supabaseKey, setSupabaseKey] = useState('');
@@ -361,8 +364,8 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* 头部（仅配置成功后显示） */}
-      {isConfigured && (
+      {/* 🔴 修改1：顶部导航 - 仅配置成功+导航显示时显示（新增isNavVisible） */}
+      {isConfigured && isNavVisible && (
         <header className="fixed top-0 left-0 right-0 h-20 bg-white/80 backdrop-blur-2xl z-40 border-b border-black/[0.03] px-8 flex items-center justify-between pointer-events-none sm:pointer-events-auto safe-area-top">
           <div className="flex flex-col">
             <span className="text-[11px] font-black text-blue-600 uppercase tracking-[0.2em] leading-none mb-1">D3S Platform</span>
@@ -385,17 +388,41 @@ const App: React.FC = () => {
         </header>
       )}
 
+      {/* 🔴 主内容区：完全保留原始样式，不做任何修改（避免空白） */}
       <main className="w-full max-w-screen-sm px-4 pt-24 pb-32 sm:pt-32 sm:pb-12 h-full overflow-y-auto custom-scrollbar">
         <div className="w-full">
            {renderView()}
         </div>
       </main>
 
-      {/* 移动端导航（仅配置成功后显示） */}
-      {isConfigured && (
+      {/* 🔴 修改2：底部导航 - 仅配置成功+导航显示时显示（新增isNavVisible） */}
+      {isConfigured && isNavVisible && (
         <div className="sm:hidden fixed bottom-8 left-1/2 -translate-x-1/2 w-full max-w-[380px] px-4 z-50 safe-area-bottom">
           <Navbar currentView={currentView} setView={setCurrentView} />
         </div>
+      )}
+
+      {/* 🔴 新增：简单的唤起按钮（绝对不会导致空白） */}
+      {isConfigured && (
+        <button
+          onClick={() => setIsNavVisible(!isNavVisible)}
+          style={{
+            position: 'fixed',
+            bottom: '20px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            width: '50px',
+            height: '50px',
+            borderRadius: '50%',
+            backgroundColor: 'white',
+            border: 'none',
+            boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
+            zIndex: 999,
+            cursor: 'pointer'
+          }}
+        >
+          {isNavVisible ? '隐藏' : '显示'}
+        </button>
       )}
     </div>
   );
