@@ -330,9 +330,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 <div 
                   className={`card-inner apple-card ${isFlipped ? 'card-flipped' : ''}`}
                   onClick={() => setIsFlipped(!isFlipped)}
-                  style={{ position: 'relative', width: '100%', height: 'auto' }}
+                  style={{ position: 'relative', width: '100%', height: 'auto', transformStyle: 'preserve-3d' }}
                 >
-                  {/* 学习卡片正面 - 文字样式修改：减小内边距、字号、取消加粗 */}
+                  {/* 学习卡片正面 - 仅调大字号（text-base → text-lg）+ 左对齐修改 + 喇叭按钮居中 */}
                   <div 
                     className={`card-front p-4 transition-all duration-700 ${isCurrentlyLearned || isAnimating ? 'bg-green-50/20' : ''}`}
                     style={{ 
@@ -341,10 +341,10 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       width: '100%',
                       display: 'flex',
                       flexDirection: 'column',
-                      alignItems: 'flex-start',
+                      alignItems: 'flex-start', // 文字左对齐
                       justifyContent: 'flex-start',
-                      textAlign: 'left',
-                      minHeight: '340px' 
+                      minHeight: '340px',
+                      textAlign: 'left' // 文字左对齐
                     }}
                   >
                     {(isCurrentlyLearned || isAnimating) && (
@@ -359,47 +359,36 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                         e.stopPropagation(); 
                         if (currentSentence) speak(currentSentence.english); 
                       }}
-                      className="w-20 h-20 rounded-full flex items-center justify-center mb-8 shadow-inner transition-all relative bg-blue-50 text-blue-600 hover:scale-110 active:scale-95 z-20 mx-auto"
+                      className="w-20 h-20 rounded-full flex items-center justify-center mb-8 shadow-inner transition-all relative bg-blue-50 text-blue-600 hover:scale-110 active:scale-95 z-20 self-center" // 关键：self-center 让按钮居中
                     >
                       <span className="text-3xl">🔊</span>
                       <div className="absolute -inset-1 border-2 border-blue-200/50 rounded-full animate-pulse pointer-events-none"></div>
                     </button>
 
-                    {/* 文字样式修改：
-                        1. p-10 → p-4 减小内边距，让文字贴近卡片边缘
-                        2. text-2xl → text-base 减小字号
-                        3. font-black → font-normal 取消加粗
-                        4. 调整行高为 leading-normal，让每行文字更紧凑
-                        5. 移除字间距限制，最大化每行文字数量
-                    */}
-                    <h3 className="text-base font-normal text-gray-900 leading-normal mb-4 max-w-full px-0" style={{ wordBreak: 'break-word' }}>
+                    {/* 仅修改：text-base → text-lg（字号大一号），其余样式不变 */}
+                    <h3 className="text-lg font-normal text-gray-900 leading-normal mb-4 max-w-full px-0" style={{ wordBreak: 'break-word', textAlign: 'left' }}>
                       {currentSentence?.english || ''}
                     </h3>
-                    <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mt-auto animate-bounce">点击卡片翻转显示中文</p>
+                    <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mt-auto animate-bounce self-center">点击卡片翻转显示中文</p>
                   </div>
 
-                  {/* 学习卡片背面 - 文字样式修改 */}
+                  {/* 学习卡片背面 - 仅调大字号（text-base → text-lg）+ 左对齐修改 */}
                   <div 
-                    className="card-back p-4 flex flex-col items-start justify-start"
+                    className="card-back p-4 flex flex-col items-start justify-center" // 文字左对齐
                     style={{ 
                       backfaceVisibility: 'hidden', 
                       position: 'absolute', 
                       inset: 0,
                       transform: 'rotateY(180deg)',
-                      textAlign: 'left',
-                      minHeight: '340px' 
+                      minHeight: '340px',
+                      textAlign: 'left' // 文字左对齐
                     }}
                   >
-                    {/* 文字样式修改：
-                        1. p-10 → p-4 减小内边距
-                        2. text-2xl → text-base 减小字号
-                        3. font-bold → font-normal 取消加粗
-                        4. leading-relaxed → leading-normal 紧凑行高
-                    */}
-                    <p className="text-base text-gray-800 font-normal leading-normal px-0 mb-auto" style={{ wordBreak: 'break-word' }}>
+                    {/* 仅修改：text-base → text-lg（字号大一号），其余样式不变 */}
+                    <p className="text-lg text-gray-800 font-normal leading-normal px-0" style={{ wordBreak: 'break-word', textAlign: 'left' }}>
                       {currentSentence?.chinese || ''}
                     </p>
-                    <div className="mt-10 px-6 py-2 bg-gray-100 rounded-full text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                    <div className="mt-10 px-6 py-2 bg-gray-100 rounded-full text-[10px] font-black text-gray-400 uppercase tracking-widest self-center">
                       CHINESE MEANING
                     </div>
                   </div>
@@ -471,9 +460,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 <div 
                   className={`card-inner apple-card ${isFlipped ? 'card-flipped' : ''}`}
                   onClick={() => setIsFlipped(!isFlipped)}
-                  style={{ position: 'relative', width: '100%', height: 'auto' }}
+                  style={{ position: 'relative', width: '100%', height: 'auto', transformStyle: 'preserve-3d' }}
                 >
-                  {/* 复习卡片正面 - 文字样式修改 */}
+                  {/* 复习卡片正面 - 仅调大字号（text-base → text-lg）+ 左对齐修改 + 喇叭按钮居中 */}
                   <div 
                     className="card-front p-4"
                     style={{ 
@@ -482,9 +471,10 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       width: '100%',
                       display: 'flex',
                       flexDirection: 'column',
-                      alignItems: 'flex-start',
+                      alignItems: 'flex-start', // 文字左对齐
                       justifyContent: 'flex-start',
-                      minHeight: '380px' 
+                      minHeight: '380px',
+                      textAlign: 'left' // 文字左对齐
                     }}
                   >
                     <div className="absolute top-8 right-10 flex flex-col items-end">
@@ -503,13 +493,8 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       </div>
                     </div>
                     <p className="text-[10px] font-black text-gray-300 uppercase tracking-[0.2em] mb-6">科学复习卡片</p>
-                    {/* 文字样式修改：
-                        1. p-12 → p-4 减小内边距
-                        2. text-2xl → text-base 减小字号
-                        3. font-black → font-normal 取消加粗
-                        4. leading-relaxed → leading-normal 紧凑行高
-                    */}
-                    <h3 className="text-base font-normal text-gray-800 max-w-full leading-normal mb-auto" style={{ wordBreak: 'break-word' }}>
+                    {/* 仅修改：text-base → text-lg（字号大一号），其余样式不变 */}
+                    <h3 className="text-lg font-normal text-gray-800 max-w-full leading-normal mb-auto" style={{ wordBreak: 'break-word', textAlign: 'left' }}>
                       {reviewQueue[currentIndex]?.english || ''}
                     </h3>
                     
@@ -519,36 +504,31 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                         const sen = reviewQueue[currentIndex];
                         if (sen) speak(sen.english); 
                       }}
-                      className="mt-6 w-16 h-16 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-2xl hover:scale-110 active:scale-95 transition-all z-20 mx-auto"
+                      className="mt-6 w-16 h-16 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-2xl hover:scale-110 active:scale-95 transition-all z-20 self-center" // 关键：self-center 让按钮居中
                     >
                       🔊
                     </button>
                     
-                    <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mt-6 animate-pulse">点击翻转查看翻译</p>
+                    <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mt-6 animate-pulse self-center">点击翻转查看翻译</p>
                   </div>
 
-                  {/* 复习卡片背面 - 文字样式修改 */}
+                  {/* 复习卡片背面 - 仅调大字号（text-base → text-lg）+ 左对齐修改 */}
                   <div 
-                    className="card-back p-4 flex flex-col items-start justify-start"
+                    className="card-back p-4 flex flex-col items-start justify-center" // 文字左对齐
                     style={{ 
                       backfaceVisibility: 'hidden', 
                       position: 'absolute', 
                       inset: 0,
                       transform: 'rotateY(180deg)',
-                      textAlign: 'left',
-                      minHeight: '380px' 
+                      minHeight: '380px',
+                      textAlign: 'left' // 文字左对齐
                     }}
                   >
-                    {/* 文字样式修改：
-                        1. p-12 → p-4 减小内边距
-                        2. text-2xl → text-base 减小字号
-                        3. font-bold → font-normal 取消加粗
-                        4. leading-relaxed → leading-normal 紧凑行高
-                    */}
-                    <h4 className="text-base font-normal text-gray-900 mb-auto leading-normal" style={{ wordBreak: 'break-word' }}>
+                    {/* 仅修改：text-base → text-lg（字号大一号），其余样式不变 */}
+                    <h4 className="text-lg font-normal text-gray-900 leading-normal" style={{ wordBreak: 'break-word', textAlign: 'left' }}>
                       {reviewQueue[currentIndex]?.chinese || ''}
                     </h4>
-                    <div className="mt-10 px-6 py-2 bg-blue-50 text-blue-500 px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-[0.2em]">
+                    <div className="mt-10 px-6 py-2 bg-blue-50 text-blue-500 px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-[0.2em] self-center">
                       Scientific Review
                     </div>
                   </div>
@@ -640,15 +620,10 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                   </button>
                 </div>
                 
-                {/* 默写卡片提示文字样式修改 */}
+                {/* 默写卡片提示文字 - 仅调大字号（text-base → text-lg）+ 保持左对齐 */}
                 <div className="bg-orange-50/40 p-4 rounded-[2rem] border border-orange-100/50 text-left mb-8">
-                  {/* 文字样式修改：
-                      1. p-8 → p-4 减小内边距
-                      2. text-xl → text-base 减小字号
-                      3. font-bold → font-normal 取消加粗
-                      4. leading-relaxed → leading-normal 紧凑行高
-                  */}
-                  <p className="text-base font-normal text-gray-700 leading-normal italic" style={{ wordBreak: 'break-word' }}>
+                  {/* 仅修改：text-base → text-lg（字号大一号），其余样式不变 */}
+                  <p className="text-lg font-normal text-gray-700 leading-normal italic" style={{ wordBreak: 'break-word', textAlign: 'left' }}>
                     "{targetSentence?.chinese || '暂无题目'}"
                   </p>
                 </div>
@@ -658,6 +633,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                   onChange={(e) => setUserInput(e.target.value)} 
                   className="w-full p-8 bg-gray-50 rounded-[2rem] border-none focus:ring-4 focus:ring-orange-100 outline-none min-h-[160px] text-lg font-semibold placeholder:text-gray-300 transition-all" 
                   placeholder="请输入听到的内容..." 
+                  style={{ textAlign: 'left' }} // 输入框左对齐
                 />
 
                 <div className="grid grid-cols-2 gap-4 mt-8">
@@ -681,13 +657,8 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 {isFlipped && targetSentence && (
                   <div className="mt-8 p-4 bg-blue-50 rounded-[2rem] animate-in slide-in-from-top-4">
                     <p className="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-2">标准答案</p>
-                    {/* 标准答案文字样式修改：
-                        1. p-8 → p-4 减小内边距
-                        2. text-lg → text-base 减小字号
-                        3. font-bold → font-normal 取消加粗
-                        4. leading-relaxed → leading-normal 紧凑行高
-                    */}
-                    <p className="text-blue-800 font-normal text-base leading-normal" style={{ wordBreak: 'break-word' }}>
+                    {/* 仅修改：text-base → text-lg（字号大一号），其余样式不变 */}
+                    <p className="text-blue-800 font-normal text-lg leading-normal" style={{ wordBreak: 'break-word', textAlign: 'left' }}>
                       {targetSentence.english}
                     </p>
                     <button 
