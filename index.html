@@ -10,20 +10,22 @@
   <!-- 移除弃用的apple-mobile-web-app-capable标签 -->
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="每日三句">
+  <!-- 新增：禁止iOS自动为图标添加圆角/高光，强制使用自定义样式 -->
+  <meta name="apple-touch-icon-precomposed" content="true">
 
-  <!-- 🔴 核心修改：自定义iOS主屏幕图标（替换原有单图标，添加多尺寸适配） -->
+  <!-- 🔴 核心修改：自定义iOS主屏幕图标（修复GitHub Pages子路径问题，改为相对路径） -->
   <!-- iPhone/iPod Touch (180x180) - 核心尺寸 -->
-  <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon-180x180.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon-180x180.png">
   <!-- iPad (167x167) -->
-  <link rel="apple-touch-icon" sizes="167x167" href="/icons/apple-touch-icon-167x167.png">
+  <link rel="apple-touch-icon" sizes="167x167" href="./icons/apple-touch-icon-167x167.png">
   <!-- iPad Pro (152x152) -->
-  <link rel="apple-touch-icon" sizes="152x152" href="/icons/apple-touch-icon-152x152.png">
+  <link rel="apple-touch-icon" sizes="152x152" href="./icons/apple-touch-icon-152x152.png">
   <!-- 备用基础尺寸 (120x120) -->
-  <link rel="apple-touch-icon" sizes="120x120" href="/icons/apple-touch-icon-120x120.png">
+  <link rel="apple-touch-icon" sizes="120x120" href="./icons/apple-touch-icon-120x120.png">
   <!-- 兜底图标（无尺寸指定，兼容旧设备） -->
-  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
 
-  <!-- 优化：增加manifest.json存在性判断，避免404 -->
+  <!-- 优化：增加manifest.json存在性判断，避免404（改为相对路径） -->
   <link rel="manifest" href="/daily-three-sentences/assets/manifest-2bGunATJ.json" onerror="this.remove()">
 
   <!-- Tailwind CSS（优化：添加生产环境提示，保留CDN方便开发） -->
