@@ -590,8 +590,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mt-auto animate-bounce self-center">点击卡片翻转显示中文</p>
                   </div>
 
+                  {/* ========== 修改1：学习卡片反面样式调整 - 对齐文字起始行 ========== */}
                   <div 
-                    className="card-back p-6 flex flex-col items-start justify-center"
+                    className="card-back p-6 flex flex-col items-start justify-start"  // 关键：将justify-center改为justify-start
                     style={{ 
                       backfaceVisibility: 'hidden', 
                       position: 'absolute', 
@@ -603,6 +604,14 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       paddingBottom: '20px'
                     }}
                   >
+                    {/* 占位：和正面的"已进入计划"标签对齐 */}
+                    {(isCurrentlyLearned || isAnimating) && (
+                      <div className="opacity-0 mb-4 pointer-events-none">占位</div>
+                    )}
+                    
+                    {/* 占位：和正面的播放按钮对齐 */}
+                    <div className="w-20 h-20 mb-6 opacity-0 pointer-events-none self-center"></div>
+                    
                     <p className="text-lg text-gray-800 font-normal leading-normal px-0" style={{ wordBreak: 'break-word', textAlign: 'left', margin: 0, padding: 0 }}>
                       {currentSentence?.chinese || ''}
                     </p>
@@ -729,8 +738,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mt-6 animate-pulse self-center">点击翻转查看翻译</p>
                   </div>
 
+                  {/* ========== 修改2：复习卡片反面样式调整 - 对齐文字起始行 ========== */}
                   <div 
-                    className="card-back p-6 flex flex-col items-start justify-center"
+                    className="card-back p-6 flex flex-col items-start justify-start"  // 关键：将justify-center改为justify-start
                     style={{ 
                       backfaceVisibility: 'hidden', 
                       position: 'absolute', 
@@ -742,9 +752,20 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       paddingBottom: '20px'
                     }}
                   >
+                    {/* 占位：和正面的Level标签对齐 */}
+                    <div className="absolute top-8 right-10 opacity-0 pointer-events-none">占位</div>
+                    
+                    {/* 占位：和正面的"科学复习卡片"文字对齐 */}
+                    <p className="text-[10px] opacity-0 mb-4 pointer-events-none">占位</p>
+                    
+                    {/* 核心文字 - 现在和正面文字起始行完全对齐 */}
                     <h4 className="text-lg font-normal text-gray-900 leading-normal" style={{ wordBreak: 'break-word', textAlign: 'left', margin: 0, padding: 0 }}>
                       {reviewQueue[currentIndex]?.chinese || ''}
                     </h4>
+                    
+                    {/* 占位：和正面的播放按钮对齐 */}
+                    <div className="w-16 h-16 mt-6 opacity-0 pointer-events-none self-center"></div>
+                    
                     <div className="mt-10 px-6 py-2 bg-blue-50 text-blue-500 px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-[0.2em] self-center">
                       Scientific Review
                     </div>
