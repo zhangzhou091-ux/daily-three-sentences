@@ -196,8 +196,21 @@ export const storageService = {
     }
   },
 
-  getTodaySelection: (): string[] => {
+  // ==============================================
+  // 核心修改：getTodaySelection 加入云端拉取（优先用云端数据）
+  // ==============================================
+  getTodaySelection: async (): Promise<string[]> => {
     const today = new Date().toISOString().split('T')[0];
+    // 若云同步就绪，优先从云端拉取并覆盖本地
+    if (supabaseService.isReady) {
+      const cloudRes = await supabaseService.pullDailySelection(today);
+      if (cloudRes.ids) {
+        // 云端有数据，覆盖本地存储
+        storageService.save(STORAGE_KEYS.DAILY_SELECTION, { date: today, ids: cloudRes.ids });
+        return cloudRes.ids;
+      }
+    }
+    // 云同步未就绪/云端无数据，读取本地
     const data = localStorage.getItem(STORAGE_KEYS.DAILY_SELECTION);
     if (data) {
       const parsed = JSON.parse(data);
@@ -206,9 +219,18 @@ export const storageService = {
     return [];
   },
   
-  saveTodaySelection: (ids: string[]) => {
+  // ==============================================
+  // 核心修改：saveTodaySelection 加入云端推送（本地保存后推送到云）
+  // ==============================================
+  saveTodaySelection: async (ids: string[]) => {
     const today = new Date().toISOString().split('T')[0];
-    localStorage.setItem(STORAGE_KEYS.DAILY_SELECTION, JSON.stringify({ date: today, ids }));
+    // 先保存到本地
+    const saveData = { date: today, ids: ids };
+    localStorage.setItem(STORAGE_KEYS.DAILY_SELECTION, JSON.stringify(saveData));
+    // 云同步就绪则推送到云端
+    if (supabaseService.isReady) {
+      await supabaseService.pushDailySelection(today, ids);
+    }
   },
   
   getTodayDictations: (): DictationRecord[] => {
