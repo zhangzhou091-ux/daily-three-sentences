@@ -16,6 +16,46 @@ const STORAGE_KEYS = {
 const EBBINGHAUS_INTERVALS = [0, 1, 2, 4, 7, 15, 31, 60, 120, 365];
 
 export const storageService = {
+  // ==============================================
+  // 新增：适配 offlineQueueService 的核心方法（解决 get/save 不存在问题）
+  // ==============================================
+  /**
+   * 从本地存储获取数据（供 offlineQueueService 调用）
+   * @param key 存储键名
+   * @returns 解析后的对象/数组，无数据返回 null
+   */
+  get(key: string) {
+    try {
+      const rawData = localStorage.getItem(key);
+      if (!rawData) return null;
+      return JSON.parse(rawData);
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.error(`❌ 获取本地存储失败 [key: ${key}]`, err);
+      }
+      return null;
+    }
+  },
+
+  /**
+   * 保存数据到本地存储（供 offlineQueueService 调用）
+   * @param key 存储键名
+   * @param value 要保存的数据（对象/数组/基本类型）
+   */
+  save(key: string, value: any) {
+    try {
+      const stringifiedValue = typeof value === 'string' ? value : JSON.stringify(value);
+      localStorage.setItem(key, stringifiedValue);
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.error(`❌ 保存本地存储失败 [key: ${key}]`, err);
+      }
+    }
+  },
+
+  // ==============================================
+  // 原有逻辑（完全保留，未做任何修改）
+  // ==============================================
   // --- 同步逻辑 ---
   initSync: async () => { 
     const config = localStorage.getItem(STORAGE_KEYS.SYNC_CONFIG);

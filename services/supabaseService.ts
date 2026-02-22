@@ -252,6 +252,118 @@ class SupabaseService {
       return { stats: null, message: `拉取异常：${err.message}` };
     }
   }
+
+  // ======================================
+  // 新增：适配离线队列的同步方法（核心）
+  // ======================================
+
+  /**
+   * 更新句子（用于markLearned/reviewFeedback同步）
+   * @param sentence 待更新的句子
+   */
+  async updateSentence(sentence: Sentence): Promise<boolean> {
+    if (!this.client || !this.isReady) {
+      console.warn('❌ Supabase未初始化，更新句子失败');
+      return false;
+    }
+
+    try {
+      const cleanUserName = this.userName;
+      const dbSentence = this.mapSentenceToDb(sentence, cleanUserName);
+
+      const { error } = await this.client
+        .from('sentences')
+        .update(dbSentence)
+        .eq('id', sentence.id)
+        .eq('username', cleanUserName); // 增加用户名过滤，确保数据隔离
+
+      if (error) {
+        console.error('❌ 同步更新句子失败:', error.message);
+        return false;
+      }
+
+      console.log(`✅ 句子${sentence.id}更新同步成功`);
+      return true;
+    } catch (err: any) {
+      console.error('❌ 更新句子异常:', err.message);
+      return false;
+    }
+  }
+
+  /**
+   * 添加新句子（用于addSentence同步）
+   * @param sentence 新句子
+   */
+  async addSentence(sentence: Sentence): Promise<boolean> {
+    if (!this.client || !this.isReady) {
+      console.warn('❌ Supabase未初始化，添加句子失败');
+      return false;
+    }
+
+    try {
+      // 确保ID合法
+      const validSentence = this.isValidUUID(sentence.id) 
+        ? sentence 
+        : { ...sentence, id: this.generateValidUUID() };
+      
+      const cleanUserName = this.userName;
+      const dbSentence = this.mapSentenceToDb(validSentence, cleanUserName);
+
+      const { error } = await this.client
+        .from('sentences')
+        .insert([dbSentence]);
+
+      if (error) {
+        console.error('❌ 同步添加句子失败:', error.message);
+        return false;
+      }
+
+      console.log(`✅ 句子${validSentence.id}添加同步成功`);
+      return true;
+    } catch (err: any) {
+      console.error('❌ 添加句子异常:', err.message);
+      return false;
+    }
+  }
+
+  /**
+   * 同步默写记录
+   * @param record 默写记录（需确保你的Supabase有dictation_records表）
+   */
+  async syncDictationRecord(record: any): Promise<boolean> {
+    if (!this.client || !this.isReady) {
+      console.warn('❌ Supabase未初始化，同步默写记录失败');
+      return false;
+    }
+
+    try {
+      const cleanUserName = this.userName;
+      // 适配数据库字段（建议dictation_records表包含以下字段）
+      const dbRecord = {
+        id: this.generateValidUUID(), // 生成唯一ID
+        sentence_id: record.sentenceId,
+        status: record.status, // correct/wrong
+        timestamp: record.timestamp,
+        is_finished: record.isFinished || false,
+        username: cleanUserName // 关联用户名，确保数据隔离
+      };
+
+      const { error } = await this.client
+        .from('dictation_records')
+        .insert([dbRecord]);
+
+      if (error) {
+        console.error('❌ 同步默写记录失败:', error.message);
+        return false;
+      }
+
+      console.log(`✅ 默写记录${dbRecord.id}同步成功`);
+      return true;
+    } catch (err: any) {
+      console.error('❌ 同步默写记录异常:', err.message);
+      return false;
+    }
+  }
 }
 
 export const supabaseService = new SupabaseService();

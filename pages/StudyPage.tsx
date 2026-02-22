@@ -2,6 +2,9 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Sentence, StudyStep, DictationRecord } from '../types';
 import { geminiService } from '../services/geminiService';
 import { storageService } from '../services/storageService';
+// ———— 新增：导入离线队列服务和supabase服务 ————
+import { offlineQueueService, OfflineOperation } from '../services/offlineQueueService';
+import { supabaseService } from '../services/supabaseService';
 
 // ———— 常量抽离，方便统一修改 ————
 const LEARN_XP = 15;
@@ -27,6 +30,11 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   const [animatingLearnedId, setAnimatingLearnedId] = useState<string | null>(null);
   // ———— 新增：按句子ID记录反馈状态 {句子ID: 是否已反馈} ————
   const [reviewFeedbackStatus, setReviewFeedbackStatus] = useState<Record<string, boolean>>({});
+  // ———— 新增：网络状态和同步状态管理 ————
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'failed'>('idle');
+  // ———— 新增：同步锁（防止重复同步） ————
+  const isSyncingRef = useRef(false);
   
   // 防内存泄漏：定时器 ref
   const animationTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -68,14 +76,17 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     // 2. 如果保留的句子数量不足3个，补充新句子（核心修改：手动句子优先插队）
     const needSupplementCount = DAILY_LEARN_TARGET - retainedSentences.length;
     if (needSupplementCount > 0) {
-      // 筛选可补充的新句子：未掌握、非当天手动添加、未在保留列表中
+      // 筛选可补充的新句子：未掌握、【绝对排除当天手动添加的句子】、未在保留列表中
       const available = sentences.filter(s => {
-        // 排除条件：
-        // - 已掌握（intervalIndex>0）
-        // - 当天手动添加的手动句子（s.isManual && s.addedAt >= todayStart）
-        // - 已在保留列表中
         const isInRetained = retainedSentences.some(rs => rs.id === s.id);
-        if (s.intervalIndex > 0 || (s.isManual && s.addedAt >= todayStart) || isInRetained) {
+        // 核心修改：明确排除「当天添加的手动句子」，确保当天学习列表不受影响
+        const isManualAddedToday = s.isManual && s.addedAt >= todayStart;
+
+        if (
+          s.intervalIndex > 0 ||       // 已掌握的句子排除
+          isManualAddedToday ||        // 当天新增的手动句子：当天绝对不补充
+          isInRetained                 // 已在今日列表的句子排除
+        ) {
           return false;
         }
         return true;
@@ -149,6 +160,103 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     };
   }, []);
 
+  // ———— 新增：网络状态监听 + 离线同步触发 ————
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      console.log('🔌 网络已恢复，开始同步离线操作');
+      syncOfflineOperations(); // 网络恢复自动同步
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      console.log('📴 网络已断开，操作将存入离线队列');
+    };
+    
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    
+    // 组件挂载时检查一次网络状态
+    setIsOnline(navigator.onLine);
+    // 组件挂载时尝试同步一次离线操作
+    syncOfflineOperations();
+    
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // ———— 新增：离线操作同步核心函数 ————
+  const syncOfflineOperations = async () => {
+    // 防止重复同步
+    if (isSyncingRef.current || !isOnline) return;
+    
+    const pendingOps = offlineQueueService.getPendingOperations();
+    if (pendingOps.length === 0) {
+      setSyncStatus('idle');
+      return;
+    }
+
+    isSyncingRef.current = true;
+    setSyncStatus('syncing');
+    console.log(`📤 开始同步${pendingOps.length}个离线操作`);
+
+    for (const op of pendingOps) {
+      try {
+        offlineQueueService.updateOperationStatus(op.id, 'syncing');
+        
+        // 根据操作类型执行同步
+        let syncSuccess = false;
+        switch (op.type) {
+          case 'markLearned':
+            syncSuccess = await supabaseService.updateSentence(op.payload.updatedSentence!);
+            break;
+          case 'reviewFeedback':
+            syncSuccess = await supabaseService.updateSentence(op.payload.updatedSentence!);
+            break;
+          case 'addSentence':
+            syncSuccess = await supabaseService.addSentence(op.payload.sentence!);
+            break;
+          case 'dictationRecord':
+            syncSuccess = await supabaseService.syncDictationRecord(op.payload.record!);
+            break;
+          default:
+            console.warn('⚠️ 未知操作类型，跳过同步:', op.type);
+            syncSuccess = false;
+        }
+
+        // 同步成功：移除队列；失败：标记为failed
+        if (syncSuccess) {
+          offlineQueueService.removeOperation(op.id);
+        } else {
+          offlineQueueService.updateOperationStatus(op.id, 'failed');
+          throw new Error(`操作${op.id}同步失败`);
+        }
+      } catch (err) {
+        console.error(`❌ 同步操作失败: ${op.id}`, err);
+        offlineQueueService.updateOperationStatus(op.id, 'failed');
+        // 指数退避重试（简单版：延迟1秒后重试，最多3次）
+        if (op.retryCount < 3) {
+          setTimeout(() => syncOfflineOperations(), 1000 * (op.retryCount + 1));
+        }
+      }
+    }
+
+    // 同步完成后刷新数据
+    await onUpdate();
+    isSyncingRef.current = false;
+    
+    // 更新同步状态
+    const remainingOps = offlineQueueService.getPendingOperations().length;
+    setSyncStatus(remainingOps > 0 ? 'failed' : 'idle');
+    console.log(`✅ 离线操作同步完成，剩余${remainingOps}个失败操作`);
+  };
+
+  // ———— 新增：获取离线队列数量（用于UI提示） ————
+  const offlineQueueCount = useMemo(() => {
+    return offlineQueueService.getPendingOperations().length;
+  }, [syncStatus]);
+
   const pickNewDictationTarget = () => {
     if (dictationPool.length === 0) return;
     const randomIdx = Math.floor(Math.random() * dictationPool.length);
@@ -167,7 +275,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     }
   };
 
-  // 标记掌握
+  // ———— 改造：标记掌握（集成离线队列） ————
   const handleMarkLearned = async (id: string) => {
     const sentence = sentences.find(s => s.id === id);
     if (!sentence || sentence.intervalIndex > 0) return;
@@ -184,13 +292,52 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         updatedAt: Date.now()
       };
       
+      // 第一步：先写入本地存储（保证离线可用）
       await storageService.addSentence(updatedSentence);
       
-      animationTimerRef.current = setTimeout(async () => {
-        try {
+      // 第二步：处理网络状态
+      if (!isOnline) {
+        // 离线：添加到队列
+        offlineQueueService.addOperation({
+          type: 'markLearned',
+          payload: { id, updatedSentence }
+        });
+        
+        // 完成本地UI更新
+        animationTimerRef.current = setTimeout(async () => {
           await onUpdate();
           setAnimatingLearnedId(null);
           
+          // 更新本地统计
+          const stats = storageService.getStats();
+          stats.totalPoints += LEARN_XP;
+          const today = new Date().toISOString().split('T')[0];
+          if (stats.lastLearnDate !== today) {
+            stats.streak += 1;
+            stats.lastLearnDate = today;
+          }
+          storageService.saveStats(stats);
+        }, LEARNED_ANIMATION_DELAY);
+        return;
+      }
+
+      // 第三步：在线：尝试同步到云端
+      animationTimerRef.current = setTimeout(async () => {
+        try {
+          // 同步到云端
+          const syncSuccess = await supabaseService.updateSentence(updatedSentence);
+          if (!syncSuccess) {
+            // 同步失败：加入离线队列
+            offlineQueueService.addOperation({
+              type: 'markLearned',
+              payload: { id, updatedSentence }
+            });
+          }
+          
+          await onUpdate();
+          setAnimatingLearnedId(null);
+          
+          // 更新本地统计
           const stats = storageService.getStats();
           stats.totalPoints += LEARN_XP;
           const today = new Date().toISOString().split('T')[0];
@@ -200,7 +347,12 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
           }
           storageService.saveStats(stats);
         } catch (err) {
-          console.warn('更新学习数据失败', err);
+          console.warn('标记掌握-云端同步失败，已加入离线队列', err);
+          // 异常：加入离线队列
+          offlineQueueService.addOperation({
+            type: 'markLearned',
+            payload: { id, updatedSentence }
+          });
           setAnimatingLearnedId(null);
         }
       }, LEARNED_ANIMATION_DELAY);
@@ -210,7 +362,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     }
   };
 
-  // ———— 核心修改：复习反馈逻辑 ————
+  // ———— 核心修改：复习反馈逻辑（集成离线队列） ————
   const handleReviewFeedback = async (id: string, feedback: 'easy' | 'hard' | 'forgot') => {
     // 1. 已反馈则直接返回，防止重复操作
     if (reviewFeedbackStatus[id]) return;
@@ -236,24 +388,57 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
       
       // 仅写入本地存储，当天reviewQueue仍基于原始sentences，次日生效
       await storageService.addSentence(updated);
-      await onUpdate();
       
-      // 2. 标记该句子为已反馈（控制按钮禁用）
-      setReviewFeedbackStatus(prev => ({
-        ...prev,
-        [id]: true
-      }));
+      // ———— 新增：处理离线同步 ————
+      if (!isOnline) {
+        // 离线：添加到队列
+        offlineQueueService.addOperation({
+          type: 'reviewFeedback',
+          payload: { id, updatedSentence: updated, feedback }
+        });
+        
+        // 更新本地状态
+        setReviewFeedbackStatus(prev => ({ ...prev, [id]: true }));
+        setCurrentIndex(prev => (prev + 1) % reviewQueue.length);
+        setIsFlipped(false);
+        await onUpdate();
+        return;
+      }
 
-      // 3. 循环切换到下一句，始终留在复习页（移除跳默写逻辑）
-      setCurrentIndex(prev => (prev + 1) % reviewQueue.length);
-      // 4. 切换后重置卡片翻转状态
-      setIsFlipped(false);
+      // 在线：尝试同步到云端
+      try {
+        const syncSuccess = await supabaseService.updateSentence(updated);
+        if (!syncSuccess) {
+          offlineQueueService.addOperation({
+            type: 'reviewFeedback',
+            payload: { id, updatedSentence: updated, feedback }
+          });
+        }
+        
+        // 2. 标记该句子为已反馈（控制按钮禁用）
+        setReviewFeedbackStatus(prev => ({
+          ...prev,
+          [id]: true
+        }));
+
+        // 3. 循环切换到下一句，始终留在复习页（移除跳默写逻辑）
+        setCurrentIndex(prev => (prev + 1) % reviewQueue.length);
+        // 4. 切换后重置卡片翻转状态
+        setIsFlipped(false);
+        await onUpdate();
+      } catch (err) {
+        console.warn('复习反馈-云端同步失败，已加入离线队列', err);
+        offlineQueueService.addOperation({
+          type: 'reviewFeedback',
+          payload: { id, updatedSentence: updated, feedback }
+        });
+      }
     } catch (err) {
       console.warn('复习保存失败', err);
     }
   };
 
-  // 默写核对（空输入拦截）
+  // ———— 改造：默写核对（集成离线队列） ————
   const handleDictationCheck = () => {
     if (!userInput.trim()) {
       alert('请输入默写内容后再核对');
@@ -272,10 +457,30 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         isFinished: false
       };
       
+      // 第一步：更新本地默写记录
       const newList = [newRecord, ...dictationList];
       setDictationList(newList);
       storageService.saveTodayDictations(newList);
       
+      // 第二步：处理网络状态
+      if (!isOnline) {
+        // 离线：添加到队列
+        offlineQueueService.addOperation({
+          type: 'dictationRecord',
+          payload: { record: newRecord }
+        });
+      } else {
+        // 在线：尝试同步
+        supabaseService.syncDictationRecord(newRecord).catch(err => {
+          console.warn('默写记录-云端同步失败，已加入离线队列', err);
+          offlineQueueService.addOperation({
+            type: 'dictationRecord',
+            payload: { record: newRecord }
+          });
+        });
+      }
+      
+      // 第三步：更新UI和统计
       if (isCorrect) {
         const stats = storageService.getStats();
         stats.dictationCount = (stats.dictationCount || 0) + 1;
@@ -308,6 +513,31 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-700 pb-20">
+      {/* ———— 新增：网络和同步状态提示 ———— */}
+      {!isOnline && (
+        <div className="bg-orange-50 text-orange-600 text-sm font-bold px-4 py-2 rounded-lg flex items-center gap-2">
+          <span>📴 离线模式</span>
+          <span>操作将在网络恢复后自动同步</span>
+        </div>
+      )}
+      {isOnline && syncStatus === 'syncing' && (
+        <div className="bg-blue-50 text-blue-600 text-sm font-bold px-4 py-2 rounded-lg flex items-center gap-2">
+          <span>🔄 同步中</span>
+          <span>正在同步{offlineQueueCount}个离线操作</span>
+        </div>
+      )}
+      {isOnline && syncStatus === 'failed' && offlineQueueCount > 0 && (
+        <div className="bg-red-50 text-red-600 text-sm font-bold px-4 py-2 rounded-lg flex items-center gap-2">
+          <span>⚠️ 同步失败</span>
+          <button 
+            onClick={syncOfflineOperations}
+            className="text-red-700 underline hover:text-red-900"
+          >
+            点击重试（{offlineQueueCount}个操作）
+          </button>
+        </div>
+      )}
+
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 px-2">
         <div>
           <p className="text-gray-500 text-xs font-bold uppercase tracking-widest mb-1 flex items-center gap-2">
@@ -346,7 +576,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 >
                   {/* 学习卡片正面 - 仅调大字号（text-base → text-lg）+ 左对齐修改 + 喇叭按钮居中 */}
                   <div 
-                    className={`card-front p-4 transition-all duration-700 ${isCurrentlyLearned || isAnimating ? 'bg-green-50/20' : ''}`}
+                    className={`card-front p-6 transition-all duration-700 ${isCurrentlyLearned || isAnimating ? 'bg-green-50/20' : ''}`}
                     style={{ 
                       backfaceVisibility: 'hidden', 
                       position: 'relative', 
@@ -356,11 +586,13 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       alignItems: 'flex-start', // 文字左对齐
                       justifyContent: 'flex-start',
                       minHeight: '340px',
-                      textAlign: 'left' // 文字左对齐
+                      textAlign: 'left', // 文字左对齐
+                      paddingTop: '20px',
+                      paddingBottom: '20px'
                     }}
                   >
                     {(isCurrentlyLearned || isAnimating) && (
-                      <div className="bg-green-100 text-green-600 text-[10px] font-black px-4 py-1.5 rounded-full mb-6 flex items-center gap-2 shadow-sm border border-green-200/50">
+                      <div className="bg-green-100 text-green-600 text-[10px] font-black px-4 py-1.5 rounded-full mb-4 flex items-center gap-2 shadow-sm border border-green-200/50">
                         <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
                         已进入计划
                       </div>
@@ -371,14 +603,14 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                         e.stopPropagation(); 
                         if (currentSentence) speak(currentSentence.english); 
                       }}
-                      className="w-20 h-20 rounded-full flex items-center justify-center mb-8 shadow-inner transition-all relative bg-blue-50 text-blue-600 hover:scale-110 active:scale-95 z-20 self-center" // 关键：self-center 让按钮居中
+                      className="w-20 h-20 rounded-full flex items-center justify-center mb-6 shadow-inner transition-all relative bg-blue-50 text-blue-600 hover:scale-110 active:scale-95 z-20 self-center" // 关键：self-center 让按钮居中
                     >
                       <span className="text-3xl">🔊</span>
                       <div className="absolute -inset-1 border-2 border-blue-200/50 rounded-full animate-pulse pointer-events-none"></div>
                     </button>
 
-                    {/* 仅修改：text-base → text-lg（字号大一号），其余样式不变 */}
-                    <h3 className="text-lg font-normal text-gray-900 leading-normal mb-4 max-w-full px-0" style={{ wordBreak: 'break-word', textAlign: 'left' }}>
+                    {/* 核心修改：移除mb-4，添加mt-0，确保文字从同一行开始 */}
+                    <h3 className="text-lg font-normal text-gray-900 leading-normal mt-0 max-w-full px-0" style={{ wordBreak: 'break-word', textAlign: 'left', margin: 0, padding: 0 }}>
                       {currentSentence?.english || ''}
                     </h3>
                     <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mt-auto animate-bounce self-center">点击卡片翻转显示中文</p>
@@ -386,18 +618,20 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
 
                   {/* 学习卡片背面 - 仅调大字号（text-base → text-lg）+ 左对齐修改 */}
                   <div 
-                    className="card-back p-4 flex flex-col items-start justify-center" // 文字左对齐
+                    className="card-back p-6 flex flex-col items-start justify-center" // 文字左对齐
                     style={{ 
                       backfaceVisibility: 'hidden', 
                       position: 'absolute', 
                       inset: 0,
                       transform: 'rotateY(180deg)',
                       minHeight: '340px',
-                      textAlign: 'left' // 文字左对齐
+                      textAlign: 'left', // 文字左对齐
+                      paddingTop: '20px',
+                      paddingBottom: '20px'
                     }}
                   >
-                    {/* 仅修改：text-base → text-lg（字号大一号），其余样式不变 */}
-                    <p className="text-lg text-gray-800 font-normal leading-normal px-0" style={{ wordBreak: 'break-word', textAlign: 'left' }}>
+                    {/* 核心修改：移除所有margin/padding，确保文字从同一行开始 */}
+                    <p className="text-lg text-gray-800 font-normal leading-normal px-0" style={{ wordBreak: 'break-word', textAlign: 'left', margin: 0, padding: 0 }}>
                       {currentSentence?.chinese || ''}
                     </p>
                     <div className="mt-10 px-6 py-2 bg-gray-100 rounded-full text-[10px] font-black text-gray-400 uppercase tracking-widest self-center">
@@ -476,7 +710,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 >
                   {/* 复习卡片正面 - 仅调大字号（text-base → text-lg）+ 左对齐修改 + 喇叭按钮居中 */}
                   <div 
-                    className="card-front p-4"
+                    className="card-front p-6"
                     style={{ 
                       backfaceVisibility: 'hidden', 
                       position: 'relative', 
@@ -486,7 +720,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       alignItems: 'flex-start', // 文字左对齐
                       justifyContent: 'flex-start',
                       minHeight: '380px',
-                      textAlign: 'left' // 文字左对齐
+                      textAlign: 'left', // 文字左对齐
+                      paddingTop: '20px',
+                      paddingBottom: '20px'
                     }}
                   >
                     <div className="absolute top-8 right-10 flex flex-col items-end">
@@ -504,9 +740,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                         ))}
                       </div>
                     </div>
-                    <p className="text-[10px] font-black text-gray-300 uppercase tracking-[0.2em] mb-6">科学复习卡片</p>
-                    {/* 仅修改：text-base → text-lg（字号大一号），其余样式不变 */}
-                    <h3 className="text-lg font-normal text-gray-800 max-w-full leading-normal mb-auto" style={{ wordBreak: 'break-word', textAlign: 'left' }}>
+                    <p className="text-[10px] font-black text-gray-300 uppercase tracking-[0.2em] mb-4">科学复习卡片</p>
+                    {/* 核心修改：移除mb-auto，添加mt-0，确保文字从同一行开始 */}
+                    <h3 className="text-lg font-normal text-gray-800 max-w-full leading-normal mt-0" style={{ wordBreak: 'break-word', textAlign: 'left', margin: 0, padding: 0 }}>
                       {reviewQueue[currentIndex]?.english || ''}
                     </h3>
                     
@@ -526,18 +762,20 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
 
                   {/* 复习卡片背面 - 仅调大字号（text-base → text-lg）+ 左对齐修改 */}
                   <div 
-                    className="card-back p-4 flex flex-col items-start justify-center" // 文字左对齐
+                    className="card-back p-6 flex flex-col items-start justify-center" // 文字左对齐
                     style={{ 
                       backfaceVisibility: 'hidden', 
                       position: 'absolute', 
                       inset: 0,
                       transform: 'rotateY(180deg)',
                       minHeight: '380px',
-                      textAlign: 'left' // 文字左对齐
+                      textAlign: 'left', // 文字左对齐
+                      paddingTop: '20px',
+                      paddingBottom: '20px'
                     }}
                   >
-                    {/* 仅修改：text-base → text-lg（字号大一号），其余样式不变 */}
-                    <h4 className="text-lg font-normal text-gray-900 leading-normal" style={{ wordBreak: 'break-word', textAlign: 'left' }}>
+                    {/* 核心修改：移除所有margin/padding，确保文字从同一行开始 */}
+                    <h4 className="text-lg font-normal text-gray-900 leading-normal" style={{ wordBreak: 'break-word', textAlign: 'left', margin: 0, padding: 0 }}>
                       {reviewQueue[currentIndex]?.chinese || ''}
                     </h4>
                     <div className="mt-10 px-6 py-2 bg-blue-50 text-blue-500 px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-[0.2em] self-center">
