@@ -358,9 +358,10 @@ class SupabaseService {
         updated_at: new Date().toISOString()
       };
       // 按user_name+date做冲突更新，保证一个用户一天只有一条数据
+      // 修复：去掉列名之间的空格，兼容Supabase语法
       const { error } = await this.client
         .from('daily_selections')
-        .upsert(dbData, { onConflict: 'user_name, date' });
+        .upsert(dbData, { onConflict: 'user_name,date' });
       if (error) {
         console.error('❌ 推送当日学习列表失败:', error.message);
         return { success: false, message: `推送失败：${error.message}` };
@@ -390,7 +391,7 @@ class SupabaseService {
         .eq('date', date)
         .maybeSingle();
       if (error) {
-        console.error('❌ 拉取当日学习列表失败:', error.message);
+        console.error("❌ 拉取当日学习列表失败:", error.message);
         return { ids: null, message: `拉取失败：${error.message}` };
       }
       if (!data || !data.sentence_ids) {
@@ -399,7 +400,7 @@ class SupabaseService {
       console.log(`✅ 当日学习列表[${date}]从云端拉取成功`);
       return { ids: data.sentence_ids, message: '拉取成功' };
     } catch (err: any) {
-      console.error('❌ 拉取当日学习列表异常:', err.message);
+      console.error("❌ 拉取当日学习列表异常:", err.message);
       return { ids: null, message: `拉取异常：${err.message}` };
     }
   }
