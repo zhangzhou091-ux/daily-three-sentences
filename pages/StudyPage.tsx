@@ -38,7 +38,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     return d.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
   }, []);
 
-  // ———— 核心修改：每日学习列表生成逻辑（固定为3个句子） ————
+  // ———— 核心修改：每日学习列表生成逻辑（手动句子优先插队） ————
   const dailySelection = useMemo(() => {
     const savedIds = storageService.getTodaySelection();
     const now = new Date();
@@ -65,14 +65,14 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
       });
     }
 
-    // 2. 如果保留的句子数量不足3个，补充新句子（核心修改：固定3个目标）
+    // 2. 如果保留的句子数量不足3个，补充新句子（核心修改：手动句子优先插队）
     const needSupplementCount = DAILY_LEARN_TARGET - retainedSentences.length;
     if (needSupplementCount > 0) {
       // 筛选可补充的新句子：未掌握、非当天手动添加、未在保留列表中
       const available = sentences.filter(s => {
         // 排除条件：
         // - 已掌握（intervalIndex>0）
-        // - 当天手动添加的
+        // - 当天手动添加的手动句子（s.isManual && s.addedAt >= todayStart）
         // - 已在保留列表中
         const isInRetained = retainedSentences.some(rs => rs.id === s.id);
         if (s.intervalIndex > 0 || (s.isManual && s.addedAt >= todayStart) || isInRetained) {
@@ -81,9 +81,21 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         return true;
       });
 
-      // 排序并补充
-      const sorted = available.sort((a, b) => a.addedAt - b.addedAt);
-      const supplementSentences = sorted.slice(0, needSupplementCount);
+      // ———— 关键修改：拆分手动/导入句子，手动句子优先 ————
+      // 2.1 筛选手动录入的可补充句子（优先插队）
+      const manualSentences = available.filter(s => s.isManual === true);
+      // 2.2 筛选导入的可补充句子
+      const importedSentences = available.filter(s => s.isManual === false || s.isManual === undefined);
+      
+      // 2.3 排序规则：手动句子按添加时间倒序（最新录入的优先），导入句子按添加时间正序
+      const sortedManual = manualSentences.sort((a, b) => b.addedAt - a.addedAt); // 最新手动录入的优先
+      const sortedImported = importedSentences.sort((a, b) => a.addedAt - b.addedAt); // 最早导入的优先
+      
+      // 2.4 合并：手动句子在前，导入句子在后，确保手动句子优先补充
+      const sortedAll = [...sortedManual, ...sortedImported];
+      
+      // 2.5 补充所需数量的句子
+      const supplementSentences = sortedAll.slice(0, needSupplementCount);
       retainedSentences.push(...supplementSentences);
     }
 
