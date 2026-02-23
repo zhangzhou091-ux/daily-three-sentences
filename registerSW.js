@@ -1,0 +1,1 @@
+if('serviceWorker' in navigator) {window.addEventListener('load', () => {navigator.serviceWorker.register('/daily-three-sentences/sw.js', { scope: '/daily-three-sentences/' })})}
