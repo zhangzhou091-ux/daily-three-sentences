@@ -4,6 +4,7 @@ import { geminiService } from '../services/geminiService';
 import { storageService } from '../services/storageService';
 import { offlineQueueService, OfflineOperation } from '../services/offlineQueueService';
 import { supabaseService } from '../services/supabaseService';
+
 // 常量抽离
 const LEARN_XP = 15;
 const DICTATION_XP = 20;
@@ -11,10 +12,12 @@ const LEARNED_ANIMATION_DELAY = 800;
 const MAX_REVIEW_LEVEL = 10;
 const DAILY_LEARN_TARGET = 3; // 学习数量硬约束：固定3个【不可修改】
 const DAILY_REVIEW_TARGET = 3; // 复习数量硬约束：固定3个
+
 interface StudyPageProps {
   sentences: Sentence[];
   onUpdate: () => Promise<void>;
 }
+
 const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   const [activeTab, setActiveTab] = useState<StudyStep>('learn');
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -41,6 +44,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     const d = new Date();
     return d.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
   }, []);
+
   // ★★★ 核心修改2：新增useEffect，异步生成当日学习列表，全程硬锁3个数量 ★★★
   useEffect(() => {
     // 生成当日学习列表的核心函数（异步）
@@ -117,29 +121,35 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     sentences.filter(s => s.nextReviewDate && s.nextReviewDate <= Date.now())
              .slice(0, DAILY_REVIEW_TARGET)
   , [sentences]);
+  
   const dictationPool = useMemo(() => 
     sentences.filter(s => s.intervalIndex > 0)
   , [sentences]);
+
   // 切换句子/标签时重置翻转
   useEffect(() => {
     setIsFlipped(false);
   }, [currentIndex, activeTab]);
+
   // 切换到复习标签时重置反馈状态
   useEffect(() => {
     if (activeTab === 'review') {
       setReviewFeedbackStatus({});
     }
   }, [activeTab]);
+
   // 初始化今日默写记录
   useEffect(() => {
     setDictationList(storageService.getTodayDictations());
   }, []);
+
   // 自动选默写目标
   useEffect(() => {
     if (activeTab === 'dictation' && !targetDictationId && dictationPool.length > 0) {
       pickNewDictationTarget();
     }
   }, [activeTab, targetDictationId, dictationPool]);
+
   // 清理定时器
   useEffect(() => {
     return () => {
@@ -147,6 +157,48 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
       if (dictationRefreshTimerRef.current) clearTimeout(dictationRefreshTimerRef.current);
     };
   }, []);
+
+  // ★★★ 新增核心优化：监听PWA缓存更新、全量句子加载、当日列表云端更新 ★★★
+  useEffect(() => {
+    // 监听全量句子加载完成（配合storageService的分片加载）
+    const handleSentencesFullLoaded = async (e: CustomEvent) => {
+      await onUpdate();
+      if (import.meta.env.DEV) {
+        console.log('📥 全量句子加载完成，页面已刷新');
+      }
+    };
+
+    // 监听当日列表云端更新（配合storageService的本地优先）
+    const handleDailySelectionUpdated = async (e: CustomEvent) => {
+      await generateDailySelection(); // 重新生成当日列表
+      if (import.meta.env.DEV) {
+        console.log('☁️ 当日列表云端更新，页面已刷新');
+      }
+    };
+
+    // 监听PWA Service Worker更新（解决PWA缓存导致的更新不生效问题）
+    const handleSwUpdate = async (e: Event) => {
+      if (import.meta.env.DEV) {
+        console.log('🔄 PWA有新版本更新，正在刷新缓存');
+      }
+      // 触发页面全量刷新，加载最新资源
+      await onUpdate();
+      window.location.reload();
+    };
+
+    // 绑定事件监听
+    window.addEventListener('sentencesFullLoaded', handleSentencesFullLoaded as EventListener);
+    window.addEventListener('dailySelectionUpdated', handleDailySelectionUpdated as EventListener);
+    navigator.serviceWorker?.addEventListener('controllerchange', handleSwUpdate);
+
+    // 清理函数
+    return () => {
+      window.removeEventListener('sentencesFullLoaded', handleSentencesFullLoaded as EventListener);
+      window.removeEventListener('dailySelectionUpdated', handleDailySelectionUpdated as EventListener);
+      navigator.serviceWorker?.removeEventListener('controllerchange', handleSwUpdate);
+    };
+  }, [onUpdate]);
+
   // 网络状态监听 + 离线同步
   useEffect(() => {
     const handleOnline = () => {
@@ -170,6 +222,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
+
   // 离线操作同步核心函数
   const syncOfflineOperations = async () => {
     if (isSyncingRef.current || !isOnline) return;
@@ -225,10 +278,12 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     setSyncStatus(remainingOps > 0 ? 'failed' : 'idle');
     console.log(`✅ 离线操作同步完成，剩余${remainingOps}个失败操作`);
   };
+
   // 离线队列数量
   const offlineQueueCount = useMemo(() => {
     return offlineQueueService.getPendingOperations().length;
   }, [syncStatus]);
+
   // 选择新的默写目标
   const pickNewDictationTarget = () => {
     if (dictationPool.length === 0) return;
@@ -237,6 +292,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     setIsFlipped(false);
     setUserInput('');
   };
+
   // ========== 核心修复2：重写刷新按钮逻辑，移除复杂判断，确保点击必触发 ==========
   const handleDictationRefresh = () => {
     // 1. 安全校验：只有有默写池数据时才执行
@@ -258,6 +314,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     // 调试日志（可选，可删除）
     console.log('🔄 默写按钮点击触发，已刷新新句子');
   };
+
   // 播放语音
   const speak = async (text: string) => {
     if (!text?.trim()) return;
@@ -267,6 +324,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
       console.warn('语音播放失败', err);
     }
   };
+
   // 标记掌握
   const handleMarkLearned = async (id: string) => {
     const sentence = sentences.find(s => s.id === id);
@@ -340,6 +398,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
       setAnimatingLearnedId(null);
     }
   };
+
   // 复习反馈
   const handleReviewFeedback = async (id: string, feedback: 'easy' | 'hard' | 'forgot') => {
     if (reviewFeedbackStatus[id]) return;
@@ -402,6 +461,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
       console.warn('复习保存失败', err);
     }
   };
+
   // 默写核对
   const handleDictationCheck = () => {
     if (!userInput.trim()) {
@@ -453,6 +513,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
       console.warn('默写核对失败', err);
     }
   };
+
   // 安全取值
   const targetSentence = useMemo(() => 
     sentences.find(s => s.id === targetDictationId) || null
@@ -466,6 +527,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   const isCurrentReviewSentenceFeedbacked = currentReviewSentence 
     ? reviewFeedbackStatus[currentReviewSentence.id] || false 
     : false;
+
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-700 pb-20">
       {/* 网络和同步状态提示 */}
@@ -492,6 +554,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
           </button>
         </div>
       )}
+
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 px-2">
         <div>
           <p className="text-gray-500 text-xs font-bold uppercase tracking-widest mb-1 flex items-center gap-2">
@@ -504,18 +567,19 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         </div>
         <div className="flex bg-gray-200/50 p-1.5 rounded-[1.5rem] self-start sm:self-auto backdrop-blur-md">
             {(['learn', 'review', 'dictation'] as StudyStep[]).map(tab => (
-            <button
+              <button
                 key={tab}
                 onClick={() => { setActiveTab(tab); setCurrentIndex(0); setIsFlipped(false); }}
                 className={`px-4 py-2 text-[11px] font-black uppercase tracking-wider rounded-[1.2rem] transition-all duration-300 ${
-                activeTab === tab ? 'bg-white shadow-sm text-blue-600' : 'text-gray-400 hover:text-gray-600'
+                  activeTab === tab ? 'bg-white shadow-sm text-blue-600' : 'text-gray-400 hover:text-gray-600'
                 }`}
-            >
+              >
                 {tab === 'learn' ? '学习' : tab === 'review' ? '复习' : '默写'}
-            </button>
+              </button>
             ))}
         </div>
       </div>
+
       <div className="min-h-[460px]">
         {activeTab === 'learn' && (
           dailySelection.length > 0 ? (
@@ -651,6 +715,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
             </div>
           )
         )}
+
         {activeTab === 'review' && (
           reviewQueue.length > 0 ? (
             <div className="space-y-8 animate-in slide-in-from-right-4 duration-500">
@@ -806,6 +871,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
             </div>
           )
         )}
+
         {activeTab === 'dictation' && (
           <div className="space-y-10 animate-in slide-in-from-left-4 duration-500">
             {dictationPool.length > 0 ? (
@@ -920,4 +986,5 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     </div>
   );
 };
+
 export default StudyPage;

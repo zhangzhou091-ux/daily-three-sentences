@@ -97,10 +97,23 @@ class SupabaseService {
         return s;
       });
       const cleanUserName = this.userName;
+
+      // ==============================================
+      // 核心优化：计算本地最新更新时间，实现增量拉取（非全量）
+      // ==============================================
+      const localLatestUpdatedAt = validLocalSentences.length 
+        ? Math.max(...validLocalSentences.map(s => s.updatedAt)) 
+        : 0;
+
+      // 增量拉取：仅获取云端【更新时间晚于本地最新】的数据，大幅减少手机端数据传输
       const { data: cloudData, error } = await this.client
         .from('sentences')
         .select('*')
-        .eq('username', cleanUserName); 
+        .eq('username', cleanUserName)
+        .gt('updatedat', localLatestUpdatedAt); // 新增：增量过滤条件
+      // ==============================================
+      // 原有合并逻辑完全保留，无任何修改
+      // ==============================================
       if (error) {
         console.error("❌ Fetch cloud sentences error:", error.message);
         return { sentences: validLocalSentences, message: `同步失败：${error.message}` };

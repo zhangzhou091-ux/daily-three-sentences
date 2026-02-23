@@ -6,7 +6,8 @@ const STORAGE_KEYS = {
   STATS: 'd3s_user_stats_v3',
   DAILY_SELECTION: 'd3s_daily_selection',
   SETTINGS: 'd3s_settings_v3',
-  SYNC_CONFIG: 'd3s_sync_config'
+  SYNC_CONFIG: 'd3s_sync_config',
+  LAST_SYNC_TIME: 'd3s_last_sync_time' // 新增：存储最后一次全量同步时间，持久化避免刷新丢失
 };
 
 /**
@@ -14,6 +15,8 @@ const STORAGE_KEYS = {
  * 0: 新学习, 1: 1天后, 2: 2天后, 3: 4天后, 4: 7天后...
  */
 const EBBINGHAUS_INTERVALS = [0, 1, 2, 4, 7, 15, 31, 60, 120, 365];
+// 新增：同步节流间隔（手机端设10分钟，避免频繁全量同步）
+const SYNC_INTERVAL = 10 * 60 * 1000;
 
 export const storageService = {
   // ==============================================
@@ -54,7 +57,7 @@ export const storageService = {
   },
 
   // ==============================================
-  // 原有逻辑（完全保留，未做任何修改）
+  // 原有逻辑（仅优化 performFullSync 同步节流，其余保留）
   // ==============================================
   // --- 同步逻辑 ---
   initSync: async () => { 
@@ -71,6 +74,18 @@ export const storageService = {
 
   performFullSync: async () => {
     if (!supabaseService.isReady) return;
+    // 新增：同步节流核心逻辑 - 读取最后同步时间，判断是否超过间隔
+    const lastSyncTimeStr = localStorage.getItem(STORAGE_KEYS.LAST_SYNC_TIME);
+    const lastSyncTime = lastSyncTimeStr ? Number(lastSyncTimeStr) : 0;
+    const now = Date.now();
+    // 未到间隔时间，直接跳过全量同步
+    if (now - lastSyncTime < SYNC_INTERVAL) {
+      if (import.meta.env.DEV) {
+        console.log(`🔴 未到同步间隔（${SYNC_INTERVAL/60000}分钟），跳过全量同步`);
+      }
+      return;
+    }
+
     const local = await dbService.getAll();
     // 同步前先按 addedAt 排序，保证本地数据有序
     const localSorted = local.sort((a, b) => a.addedAt - b.addedAt);
@@ -86,10 +101,16 @@ export const storageService = {
     try { 
       const cloudStatsResult = await supabaseService.pullStats(); 
       const cloudStats = cloudStatsResult?.stats; 
-      if (cloudStats && cloudStats.updatedAt > localStats.updatedAt) {
+      // 优化：兼容 cloudStats 无 updatedAt 字段的情况
+      if (cloudStats && cloudStats.lastLearnDate && new Date(cloudStats.lastLearnDate).getTime() > new Date(localStats.lastLearnDate).getTime()) {
         storageService.saveStats(cloudStats, false);
       } else {
         await storageService.saveStats(localStats); 
+      }
+      // 新增：同步成功后，更新最后同步时间（持久化）
+      localStorage.setItem(STORAGE_KEYS.LAST_SYNC_TIME, now.toString());
+      if (import.meta.env.DEV) {
+        console.log('✅ 全量同步完成，更新最后同步时间');
       }
     } catch (err) {
       if (import.meta.env.DEV) {
@@ -99,11 +120,24 @@ export const storageService = {
   },
 
   // --- 基础操作 ---
-  // 核心修复：查询后强制按 addedAt 升序排序，保证顺序和导入一致
+  // 核心优化：分片加载，先返回前50条避免阻塞渲染，后台加载全量
   getSentences: async (): Promise<Sentence[]> => {
     const allSentences = await dbService.getAll();
-    // 按 addedAt 升序排序（导入时 addedAt 是递增的，对应导入顺序）
-    return allSentences.sort((a, b) => a.addedAt - b.addedAt);
+    const sortedSentences = allSentences.sort((a, b) => a.addedAt - b.addedAt);
+    // 手机端优化：先返回前50条快速渲染，后台异步加载全量并触发事件
+    if (sortedSentences.length > 50) {
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('sentencesFullLoaded', { 
+          detail: sortedSentences 
+        }));
+        if (import.meta.env.DEV) {
+          console.log('✅ 后台加载全量句子完成，触发事件');
+        }
+      }, 0);
+      return sortedSentences.slice(0, 50);
+    }
+    // 数据量少则直接返回全量
+    return sortedSentences;
   },
   
   saveSentences: async (sentences: Sentence[]) => {
@@ -197,30 +231,55 @@ export const storageService = {
   },
 
   // ==============================================
-  // 核心修改：getTodaySelection 加入云端拉取（优先用云端数据）
+  // 核心优化：本地优先加载，后台异步拉取云端（解决手机端加载慢）
   // ==============================================
   getTodaySelection: async (): Promise<string[]> => {
     const today = new Date().toISOString().split('T')[0];
-    // 若云同步就绪，优先从云端拉取并覆盖本地
+    // 核心优化：先读本地数据快速返回，保证页面秒开
+    const localData = localStorage.getItem(STORAGE_KEYS.DAILY_SELECTION);
+    if (localData) {
+      const parsed = JSON.parse(localData);
+      if (parsed.date === today && Array.isArray(parsed.ids)) {
+        // 云端同步就绪：后台异步拉取，有差异再更新本地，不阻塞页面
+        if (supabaseService.isReady) {
+          (async () => {
+            try {
+              const cloudRes = await supabaseService.pullDailySelection(today);
+              if (cloudRes.ids && JSON.stringify(cloudRes.ids) !== JSON.stringify(parsed.ids)) {
+                // 云端数据不同，更新本地并触发页面更新事件
+                storageService.save(STORAGE_KEYS.DAILY_SELECTION, { date: today, ids: cloudRes.ids });
+                window.dispatchEvent(new CustomEvent('dailySelectionUpdated', { 
+                  detail: cloudRes.ids 
+                }));
+                if (import.meta.env.DEV) {
+                  console.log('✅ 后台拉取云端当日列表，已更新本地');
+                }
+              }
+            } catch (err) {
+              if (import.meta.env.DEV) {
+                console.warn('❌ 后台拉取云端当日列表失败:', err);
+              }
+            }
+          })();
+        }
+        // 直接返回本地数据，页面快速渲染
+        return parsed.ids;
+      }
+    }
+
+    // 本地无数据，再拉取云端
     if (supabaseService.isReady) {
       const cloudRes = await supabaseService.pullDailySelection(today);
       if (cloudRes.ids) {
-        // 云端有数据，覆盖本地存储
         storageService.save(STORAGE_KEYS.DAILY_SELECTION, { date: today, ids: cloudRes.ids });
         return cloudRes.ids;
       }
-    }
-    // 云同步未就绪/云端无数据，读取本地
-    const data = localStorage.getItem(STORAGE_KEYS.DAILY_SELECTION);
-    if (data) {
-      const parsed = JSON.parse(data);
-      if (parsed.date === today) return parsed.ids;
     }
     return [];
   },
   
   // ==============================================
-  // 核心修改：saveTodaySelection 加入云端推送（本地保存后推送到云）
+  // 原有逻辑：保留不变
   // ==============================================
   saveTodaySelection: async (ids: string[]) => {
     const today = new Date().toISOString().split('T')[0];
@@ -283,6 +342,8 @@ export const storageService = {
   clearVocabulary: async () => {
     await dbService.clear();
     localStorage.removeItem(STORAGE_KEYS.DAILY_SELECTION);
+    // 新增：清除同步时间，下次打开强制同步
+    localStorage.removeItem(STORAGE_KEYS.LAST_SYNC_TIME);
     if (supabaseService.isReady) {
       supabaseService.syncSentences([]);
     }
