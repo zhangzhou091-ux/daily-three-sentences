@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { storageService } from '../services/storageService';
+import { storageService } from '../services/storage';
 import { supabaseService, SyncResult } from '../services/supabaseService';
+import { syncQueueService } from '../services/syncQueueService';
 import { UserSettings } from '../types';
 
 // 🔴 统一配置KEY（和App.tsx保持一致）
@@ -10,9 +11,10 @@ const MESSAGE_DURATION = 3000;
 
 interface SettingsPageProps {
   sentencesCount: number;
+  onConfigUpdate?: () => void;
 }
 
-const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount }) => {
+const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpdate }) => {
   const [settings, setSettings] = useState<UserSettings>(storageService.getSettings());
   // 🔴 读取统一的配置KEY，兼容旧配置
   const [syncConfig, setSyncConfig] = useState(() => {
@@ -29,28 +31,28 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount }) => {
     return { url: '', key: '' };
   });
 
-  // 同步状态管理
   const [isSyncReady, setIsSyncReady] = useState(supabaseService.isReady);
   const [loading, setLoading] = useState<boolean>(false);
-  // 🔴 新增：内联提示消息（替代alert，体验更好）
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [syncQueueStatus, setSyncQueueStatus] = useState(syncQueueService.getQueueStatus());
 
   // 🔴 优化：实时同步supabase状态，添加防抖
   const updateSyncStatus = useCallback(() => {
     setIsSyncReady(supabaseService.isReady);
   }, []);
 
-  // 🔴 优化：监听supabase状态变化（组件挂载/更新时检查）
   useEffect(() => {
-    // 初始检查
     updateSyncStatus();
     
-    // 定期检查状态（防止App.tsx配置后页面状态不同步）
     const statusCheckTimer = setInterval(updateSyncStatus, 2000);
     
-    // 组件卸载时清理定时器
+    const queueInterval = setInterval(() => {
+      setSyncQueueStatus(syncQueueService.getQueueStatus());
+    }, 1000);
+    
     return () => {
       clearInterval(statusCheckTimer);
+      clearInterval(queueInterval);
     };
   }, [updateSyncStatus]);
 
@@ -87,7 +89,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount }) => {
     }
   }, [message]);
 
-  // 🔴 优化：保存同步配置（统一KEY+完善错误处理+内联提示）
+  // 🔴 优化：保存同步配置（统一KEY+完善错误处理+内联提示+配置验证）
   const handleSaveSyncConfig = async () => {
     // 前置校验
     if (!settings.userName) {
@@ -98,6 +100,26 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount }) => {
       setMessage({ text: '请填写完整的Supabase URL和Anon Key！', type: 'error' });
       return;
     }
+    
+    // 验证 URL 格式
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(syncConfig.url);
+      if (parsedUrl.protocol !== 'https:') {
+        setMessage({ text: '❌ Supabase URL 必须使用 HTTPS 协议', type: 'error' });
+        return;
+      }
+    } catch {
+      setMessage({ text: '❌ Supabase URL 格式无效', type: 'error' });
+      return;
+    }
+    
+    // 验证 Key 格式（基本检查）
+    if (syncConfig.key.length < 20) {
+      setMessage({ text: '❌ Supabase Key 长度无效（应 ≥ 20 字符）', type: 'error' });
+      return;
+    }
+    
     if (isSyncReady) {
       setMessage({ text: '✅ 云同步已激活，无需重复配置！', type: 'info' });
       return;
@@ -123,7 +145,10 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount }) => {
 
       if (initResult.success) {
         setMessage({ text: initResult.message, type: 'success' });
-        updateSyncStatus(); // 更新同步状态
+        updateSyncStatus();
+        if (onConfigUpdate) {
+          onConfigUpdate();
+        }
       } else {
         setMessage({ text: `配置失败：${initResult.message}`, type: 'error' });
       }
@@ -180,7 +205,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount }) => {
   };
 
   return (
-    <div className="space-y-10 animate-in fade-in slide-in-from-bottom-2 duration-700 pb-20">
+    <div className="space-y-10 animate-in fade-in slide-in-from-bottom-2 duration-700 pb-20 max-w-4xl mx-auto">
       {/* 🔴 新增：内联提示消息 */}
       {message && (
         <div 
@@ -260,44 +285,164 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount }) => {
         </div>
       </div>
 
-      {/* Local Settings */}
-      <div className="space-y-4">
-        <h3 className="text-[11px] font-black text-gray-400 uppercase tracking-[0.3em] ml-6">本地外观</h3>
-        <div className="apple-card p-10 space-y-6">
-           <div className="flex flex-col gap-4">
-              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-2">用户昵称</label>
-              <input 
-                type="text" 
-                value={settings.userName} 
-                onChange={(e) => handleUpdate('userName', e.target.value)}
-                className="text-xl font-black text-gray-900 bg-gray-50 rounded-2xl px-6 py-4 border-none focus:ring-2 focus:ring-blue-100 placeholder-gray-300"
-                placeholder="你的名字（用于云同步数据隔离）"
-                disabled={loading}
-              />
-           </div>
+      {/* Grid Layout for Desktop */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Left Column */}
+        <div className="space-y-8">
+          {/* Local Settings */}
+          <div className="space-y-2">
+            <h3 className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">本地外观</h3>
+            <div className="apple-card p-6 space-y-4">
+              <div className="flex flex-col gap-2">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">用户昵称</label>
+                  <input 
+                    type="text" 
+                    value={settings.userName} 
+                    onChange={(e) => handleUpdate('userName', e.target.value)}
+                    className="text-lg font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-blue-100 placeholder-gray-300 w-full"
+                    placeholder="你的名字（用于云同步数据隔离）"
+                    disabled={loading}
+                  />
+              </div>
+            </div>
+          </div>
+
+          {/* Daily Target Settings */}
+          <div className="space-y-2">
+            <h3 className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">每日目标</h3>
+            <div className="apple-card p-6 space-y-6">
+              <div className="flex flex-col gap-3">
+                <div className="flex justify-between items-center">
+                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">每日学习</label>
+                   <span className="text-xs font-bold text-blue-500">{settings.dailyLearnTarget === 999 ? '不限' : `${settings.dailyLearnTarget}个`}</span>
+                </div>
+                <div className="grid grid-cols-4 gap-2">
+                  {[3, 5, 8, 999].map(val => (
+                    <button
+                      key={val}
+                      onClick={() => handleUpdate('dailyLearnTarget', val)}
+                      className={`py-2 rounded-lg text-xs font-bold transition-all ${
+                        settings.dailyLearnTarget === val
+                          ? 'bg-blue-500 text-white shadow-md'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      }`}
+                    >
+                      {val === 999 ? '∞' : val}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              
+              <div className="flex flex-col gap-3">
+                <div className="flex justify-between items-center">
+                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">每日复习</label>
+                   <span className="text-xs font-bold text-green-500">{settings.dailyReviewTarget === 999 ? '不限' : `${settings.dailyReviewTarget}个`}</span>
+                </div>
+                <div className="grid grid-cols-4 gap-2">
+                  {[3, 5, 8, 999].map(val => (
+                    <button
+                      key={val}
+                      onClick={() => handleUpdate('dailyReviewTarget', val)}
+                      className={`py-2 rounded-lg text-xs font-bold transition-all ${
+                        settings.dailyReviewTarget === val
+                          ? 'bg-green-500 text-white shadow-md'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      }`}
+                    >
+                      {val === 999 ? '∞' : val}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column */}
+        <div className="space-y-8">
+           {/* Sync Status Panel */}
+          {isSyncReady && (
+            <div className="space-y-2">
+              <h3 className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">同步状态</h3>
+              <div className="apple-card p-6 space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-gray-50 rounded-2xl p-4 text-center">
+                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">待同步</p>
+                    <p className={`text-2xl font-black ${syncQueueStatus.pendingCount > 0 ? 'text-orange-500' : 'text-green-500'}`}>
+                      {syncQueueStatus.pendingCount}
+                    </p>
+                  </div>
+                  <div className="bg-gray-50 rounded-2xl p-4 text-center">
+                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">状态</p>
+                    <p className={`text-sm font-bold ${syncQueueStatus.isSyncing ? 'text-blue-500' : 'text-green-500'}`}>
+                      {syncQueueStatus.isSyncing ? '同步中' : '已同步'}
+                    </p>
+                  </div>
+                </div>
+                
+                {syncQueueStatus.lastSyncTime && (
+                  <div className="flex justify-between text-[10px] text-gray-400 px-1">
+                    <span>上次同步</span>
+                    <span>{new Date(syncQueueStatus.lastSyncTime).toLocaleTimeString('zh-CN')}</span>
+                  </div>
+                )}
+                
+                {syncQueueStatus.lastSyncError && (
+                  <div className="bg-red-50 rounded-xl p-3 text-xs text-red-500 text-center">
+                    {syncQueueStatus.lastSyncError}
+                  </div>
+                )}
+                
+                <div className="grid grid-cols-2 gap-3 pt-2">
+                  <button
+                    onClick={async () => {
+                      const result = await syncQueueService.syncNow();
+                      if (result.success) {
+                        setMessage({ text: '同步成功', type: 'success' });
+                      } else {
+                        setMessage({ text: result.message, type: 'error' });
+                      }
+                    }}
+                    disabled={syncQueueStatus.isSyncing || syncQueueStatus.pendingCount === 0}
+                    className="bg-blue-500 text-white py-2.5 rounded-xl text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-blue-600 transition-colors"
+                  >
+                    立即同步
+                  </button>
+                  <button
+                    onClick={() => {
+                      syncQueueService.clearError();
+                      setSyncQueueStatus(syncQueueService.getQueueStatus());
+                    }}
+                    disabled={!syncQueueStatus.lastSyncError}
+                    className="bg-gray-100 text-gray-600 py-2.5 rounded-xl text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-200 transition-colors"
+                  >
+                    清除错误
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Danger Zone */}
-      <div className="space-y-4">
-        <h3 className="text-[11px] font-black text-red-400 uppercase tracking-[0.3em] ml-6">危险区域</h3>
-        <div className="apple-card p-10 border border-red-100 bg-red-50/30">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
+      <div className="space-y-2">
+        <h3 className="text-[11px] font-black text-red-400 uppercase tracking-[0.2em] ml-2">危险区域</h3>
+        <div className="apple-card p-6 border border-red-100 bg-red-50/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <h4 className="text-sm font-black text-red-600 uppercase tracking-tight">重置所有本地数据</h4>
-              <p className="text-[11px] text-red-400 font-medium mt-1 leading-relaxed">
-                这将删除您在本设备上的所有句子库、学习统计、积分以及设置。如果未开启云同步，数据将无法恢复。
+              <h4 className="text-sm font-black text-red-600 uppercase tracking-tight">重置所有数据</h4>
+              <p className="text-[10px] text-red-400 font-medium mt-1 leading-relaxed max-w-md">
+                永久删除本地所有句子、学习统计和设置。
               </p>
             </div>
             <button 
               onClick={handleClearAllData}
               disabled={loading}
-              className="bg-red-500 text-white px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-red-200 active:scale-95 transition-all whitespace-nowrap"
+              className="bg-red-500 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg shadow-red-200 active:scale-95 transition-all whitespace-nowrap hover:bg-red-600"
               style={{ opacity: loading ? 0.7 : 1, cursor: loading ? 'not-allowed' : 'pointer' }}
             >
-              清空全部数据
+              清空数据
             </button>
-          </div>
         </div>
       </div>
 

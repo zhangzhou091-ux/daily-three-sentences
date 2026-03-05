@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from 'react';
-import { Sentence } from '../types';
-import { storageService } from '../services/storageService';
+import { Sentence, UserStats } from '../types';
+import { storageService } from '../services/storage';
+import { deviceService } from '../services/deviceService';
 
-// ======================== 常量配置 ========================
 const LEVEL_CONFIG = [
   { lv: 1, title: '初级探索者', minPoints: 0, maxPoints: 200, color: 'from-blue-500 to-indigo-400' },
   { lv: 2, title: '新晋学者', minPoints: 200, maxPoints: 600, color: 'from-indigo-500 to-purple-400' },
@@ -19,12 +19,13 @@ const ACHIEVEMENT_CATEGORIES = {
   review: { title: '复习巩固成就', icon: '🔄', color: 'green' },
   dictation: { title: '默写能手成就', icon: '✍️', color: 'teal' },
   points: { title: '积分成长成就', icon: '💎', color: 'amber' },
-  monthly: { title: '月度挑战成就', icon: '🗓️', color: 'sky' },
+  fsrs: { title: 'FSRS 记忆成就', icon: '🧠', color: 'indigo' },
+  batch: { title: '批量同步成就', icon: '⚡', color: 'cyan' },
 };
 
 const ACHIEVEMENT_MILESTONES = [
-  { id: 'streak-7', category: 'streak', title: '滴水穿石', icon: '🔥', target: 7, currentKey: 'streak', desc: '连续 7 天不间断学习' },
-  { id: 'streak-30', category: 'streak', title: '百日坚持', icon: '🌱', target: 30, currentKey: 'streak', desc: '连续 30 天不间断学习' },
+  { id: 'streak-7', category: 'streak', title: '滴水穿石', icon: '🔥', target: 7, currentKey: 'streak', desc: '连续 7 天完成每日目标' },
+  { id: 'streak-30', category: 'streak', title: '百日坚持', icon: '🌱', target: 30, currentKey: 'streak', desc: '连续 30 天完成每日目标' },
   { id: 'total-days-100', category: 'streak', title: '日积月累', icon: '📆', target: 100, currentKey: 'totalDaysLearned', desc: '累计学习天数达到 100 天' },
   { id: 'max-streak-50', category: 'streak', title: '连胜王者', icon: '🏆', target: 50, currentKey: 'maxStreak', desc: '历史最高连续学习 50 天' },
   { id: 'collection-100', category: 'collection', title: '厚积薄发', icon: '🎓', target: 100, currentKey: 'sentenceCount', desc: '词库句子总数达到 100' },
@@ -39,24 +40,25 @@ const ACHIEVEMENT_MILESTONES = [
   { id: 'dictation-accuracy-95', category: 'dictation', title: '默写全对', icon: '💯', target: 95, currentKey: 'dictationAccuracy', desc: '默写正确率达到 95%' },
   { id: 'points-2000', category: 'points', title: '积分巨贾', icon: '💎', target: 2000, currentKey: 'totalPoints', desc: '累计获得超过 2000 积分' },
   { id: 'points-5000', category: 'points', title: '积分富豪', icon: '💰', target: 5000, currentKey: 'totalPoints', desc: '累计获得超过 5000 积分' },
-  { id: 'monthly-rate-80', category: 'monthly', title: '月度达标', icon: '📅', target: 80, currentKey: 'monthAvgRate', desc: '月度平均完成率达到 80%' },
-  { id: 'monthly-rate-100', category: 'monthly', title: '月度王者', icon: '🏅', target: 100, currentKey: 'monthAvgRate', desc: '月度平均完成率达到 100%' },
+  { id: 'fsrs-stability-3', category: 'fsrs', title: 'FSRS 达人', icon: '🧠', target: 3, currentKey: 'avgStability', desc: '平均记忆稳定性达到 3.0' },
+  { id: 'fsrs-stability-7', category: 'fsrs', title: '记忆大师', icon: '🧠', target: 7, currentKey: 'avgStability', desc: '平均记忆稳定性达到 7.0' },
+  { id: 'batch-master', category: 'batch', title: '批量大师', icon: '⚡', target: 10, currentKey: 'batchSyncCount', desc: '累计完成 10 次批量同步' },
+  { id: 'batch-expert', category: 'batch', title: '同步专家', icon: '⚡', target: 50, currentKey: 'batchSyncCount', desc: '累计完成 50 次批量同步' },
 ];
 
-// ======================== 工具函数 ========================
 const formatDate = (date: Date) => date.toISOString().split('T')[0];
 const formatMonth = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 const getDaysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate();
 
-const getRecentDays = (days: number) => {
+const getRecentDays = (days: number, dailyTarget: number) => {
   return Array.from({ length: days }, (_, i) => {
     const d = new Date();
     d.setDate(d.getDate() - (days - 1 - i));
-    return { date: d, dateStr: formatDate(d), day: d.toLocaleDateString('zh-CN', { weekday: 'short' }), target: 3 };
+    return { date: d, dateStr: formatDate(d), day: d.toLocaleDateString('zh-CN', { weekday: 'short' }), target: dailyTarget };
   });
 };
 
-const getRecentMonths = (months: number) => {
+const getRecentMonths = (months: number, dailyTarget: number) => {
   return Array.from({ length: months }, (_, i) => {
     const d = new Date();
     d.setMonth(d.getMonth() - (months - 1 - i));
@@ -65,7 +67,7 @@ const getRecentMonths = (months: number) => {
     const monthStr = formatMonth(d);
     const monthName = d.toLocaleDateString('zh-CN', { month: 'short' });
     const days = getDaysInMonth(year, month);
-    const target = days * 3;
+    const target = days * dailyTarget;
     return { year, month, monthStr, monthName, days, target };
   });
 };
@@ -82,7 +84,7 @@ const calculateMasteryStats = (sentences: Sentence[]) => {
 
   const levelCounts = levels.map(level => {
     const count = sentences.filter(s => s.intervalIndex >= level.min && s.intervalIndex <= level.max).length;
-    const ratio = Math.round((count / sentences.length) * 100);
+    const ratio = sentences.length > 0 ? Math.round((count / sentences.length) * 100) : 0;
     return { ...level, count, ratio };
   });
 
@@ -104,7 +106,28 @@ const calculateLevelInfo = (totalPoints: number) => {
   };
 };
 
-// ======================== 子组件 ========================
+const calculateFSRSStats = (sentences: Sentence[]) => {
+  const learnedSentences = sentences.filter(s => s.intervalIndex > 0 && s.stability);
+  
+  if (learnedSentences.length === 0) {
+    return { avgStability: 0, avgDifficulty: 0, avgInterval: 0, lapseRate: 0, totalLapses: 0 };
+  }
+
+  const totalStability = learnedSentences.reduce((sum, s) => sum + (s.stability || 0), 0);
+  const totalDifficulty = learnedSentences.reduce((sum, s) => sum + (s.difficulty || 0), 0);
+  const totalScheduledDays = learnedSentences.reduce((sum, s) => sum + (s.scheduledDays || 0), 0);
+  const totalLapses = learnedSentences.reduce((sum, s) => sum + (s.lapses || 0), 0);
+  const totalReps = learnedSentences.reduce((sum, s) => sum + (s.reps || 0), 0);
+
+  return {
+    avgStability: parseFloat((totalStability / learnedSentences.length).toFixed(1)),
+    avgDifficulty: parseFloat((totalDifficulty / learnedSentences.length).toFixed(1)),
+    avgInterval: parseFloat((totalScheduledDays / learnedSentences.length).toFixed(1)),
+    lapseRate: totalReps > 0 ? parseFloat(((totalLapses / totalReps) * 100).toFixed(1)) : 0,
+    totalLapses,
+  };
+};
+
 const EmptyState: React.FC<{ icon: string; title: string; desc: string }> = ({ icon, title, desc }) => {
   return (
     <div className="apple-card rounded-xl p-5 text-center space-y-3">
@@ -189,12 +212,16 @@ const StatCard: React.FC<{
   );
 };
 
-// ======================== 主组件（优化布局） ========================
 const AchievementPage: React.FC<{ sentences: Sentence[] }> = ({ sentences }) => {
   const [filterType, setFilterType] = useState<'all' | 'unlocked' | 'locked'>('all');
   
-  // 基础数据
-  const rawStats = storageService.getStats() || {};
+  const settings = storageService.getSettings();
+  const dailyLearnTarget = settings.dailyLearnTarget || 3;
+  const dailyReviewTarget = settings.dailyReviewTarget || 3;
+  const dailyTarget = dailyLearnTarget + dailyReviewTarget;
+  const isMobile = deviceService.isMobile();
+
+  const rawStats = storageService.getStats();
   const stats = useMemo(() => ({
     streak: rawStats.streak || 0,
     maxStreak: rawStats.maxStreak || rawStats.streak || 0,
@@ -206,9 +233,14 @@ const AchievementPage: React.FC<{ sentences: Sentence[] }> = ({ sentences }) => 
     totalDaysLearned: rawStats.totalDaysLearned || 0,
     weekDictationCount: rawStats.weekDictationCount || 0,
     maxDailyDictation: rawStats.maxDailyDictation || 0,
+    mobileLearnCount: rawStats.mobileLearnCount || 0,
+    mobileReviewCount: rawStats.mobileReviewCount || 0,
+    mobileDictationCount: rawStats.mobileDictationCount || 0,
+    batchSyncCount: rawStats.batchSyncCount || 0,
+    avgStability: rawStats.avgStability || 0,
+    totalLapses: rawStats.totalLapses || 0,
   }), [rawStats]);
 
-  // 核心数据计算（精简版）
   const coreData = useMemo(() => {
     const sentenceCount = sentences.length;
     const masteredLv7 = sentences.filter(s => s.intervalIndex >= 7).length;
@@ -216,24 +248,21 @@ const AchievementPage: React.FC<{ sentences: Sentence[] }> = ({ sentences }) => 
     const totalReviewTimes = sentences.reduce((sum, s) => sum + (s.timesReviewed || 0), 0);
     const learnedTotal = sentences.filter(s => s.intervalIndex > 0).length;
     
-    // 本月数据（整合到核心数据）
     const currentMonth = new Date();
     const currentMonthStr = formatMonth(currentMonth);
     const learnedSentences = sentences.filter(s => s.intervalIndex > 0 && s.lastReviewedAt);
     const monthlyCompleteMap = new Map<string, number>();
     learnedSentences.forEach(s => {
-      const sMonthStr = formatMonth(new Date(s.lastReviewedAt));
+      const sMonthStr = formatMonth(new Date(s.lastReviewedAt!));
       monthlyCompleteMap.set(sMonthStr, (monthlyCompleteMap.get(sMonthStr) || 0) + 1);
     });
     const currentMonthComplete = monthlyCompleteMap.get(currentMonthStr) || 0;
-    const currentMonthTarget = getDaysInMonth(currentMonth.getFullYear(), currentMonth.getMonth()) * 3;
+    const currentMonthTarget = getDaysInMonth(currentMonth.getFullYear(), currentMonth.getMonth()) * dailyTarget;
     const currentMonthCompleteRate = currentMonthTarget > 0 ? Math.min(100, Math.round((currentMonthComplete / currentMonthTarget) * 100)) : 0;
     
-    // 学习效率
     const avgDailyLearn = stats.totalDaysLearned > 0 ? parseFloat((learnedTotal / stats.totalDaysLearned).toFixed(1)) : 0;
     const qualifiedRate = stats.totalDaysLearned > 0 ? Math.min(100, Math.round((stats.streakQualified / stats.totalDaysLearned) * 100)) : 0;
     
-    // 默写统计
     const dictationAccuracy = stats.totalDictation > 0 
       ? Math.min(100, Math.round((stats.dictationCount / stats.totalDictation) * 100)) 
       : learnedTotal > 0 ? Math.round((stats.dictationCount / learnedTotal) * 100) : 0;
@@ -243,18 +272,18 @@ const AchievementPage: React.FC<{ sentences: Sentence[] }> = ({ sentences }) => 
       currentMonthComplete, currentMonthCompleteRate,
       avgDailyLearn, qualifiedRate, dictationAccuracy
     };
-  }, [sentences, stats]);
+  }, [sentences, stats, dailyTarget]);
+
+  const fsrsStats = useMemo(() => calculateFSRSStats(sentences), [sentences]);
 
   const levelInfo = useMemo(() => calculateLevelInfo(stats.totalPoints), [stats.totalPoints]);
 
-  // 周/月数据（合并展示）
   const cycleData = useMemo(() => {
-    // 周数据
-    const recent7Days = getRecentDays(7);
+    const recent7Days = getRecentDays(7, dailyTarget);
     const learnedSentences = sentences.filter(s => s.intervalIndex > 0 && s.lastReviewedAt);
     const dailyCompleteMap = new Map<string, number>();
     learnedSentences.forEach(s => {
-      const sDateStr = formatDate(new Date(s.lastReviewedAt));
+      const sDateStr = formatDate(new Date(s.lastReviewedAt!));
       dailyCompleteMap.set(sDateStr, (dailyCompleteMap.get(sDateStr) || 0) + 1);
     });
     const weekDailyData = recent7Days.map(day => ({ ...day, complete: Math.min(dailyCompleteMap.get(day.dateStr) || 0, day.target) }));
@@ -262,11 +291,10 @@ const AchievementPage: React.FC<{ sentences: Sentence[] }> = ({ sentences }) => 
     const weekTotalTarget = weekDailyData.reduce((sum, d) => sum + d.target, 0);
     const weekCompleteRate = weekTotalTarget > 0 ? Math.min(100, Math.round((weekTotalComplete / weekTotalTarget) * 100)) : 0;
 
-    // 月数据
-    const recent6Months = getRecentMonths(6);
+    const recent6Months = getRecentMonths(6, dailyTarget);
     const monthlyCompleteMap = new Map<string, number>();
     learnedSentences.forEach(s => {
-      const sMonthStr = formatMonth(new Date(s.lastReviewedAt));
+      const sMonthStr = formatMonth(new Date(s.lastReviewedAt!));
       monthlyCompleteMap.set(sMonthStr, (monthlyCompleteMap.get(sMonthStr) || 0) + 1);
     });
     const monthDailyData = recent6Months.map(month => ({
@@ -278,7 +306,6 @@ const AchievementPage: React.FC<{ sentences: Sentence[] }> = ({ sentences }) => 
     const monthTotalTarget = monthDailyData.reduce((sum, m) => sum + m.target, 0);
     const monthAvgRate = monthTotalTarget > 0 ? Math.min(100, Math.round((monthTotalComplete / monthTotalTarget) * 100)) : 0;
 
-    // 热力图数据
     const heatmapData = weekDailyData.map(day => {
       let status: 'none' | 'partial' | 'full' = 'none';
       let icon = '';
@@ -301,28 +328,34 @@ const AchievementPage: React.FC<{ sentences: Sentence[] }> = ({ sentences }) => 
     });
 
     return { weekDailyData, weekCompleteRate, monthDailyData, monthAvgRate, heatmapData };
-  }, [sentences]);
+  }, [sentences, dailyTarget]);
 
-  // 掌握程度统计
   const masteryStats = useMemo(() => calculateMasteryStats(sentences), [sentences]);
 
-  // 成就数据
   const achievementData = useMemo(() => {
-    const valueMap = {
-      streak: stats.streak, maxStreak: stats.maxStreak, totalDaysLearned: stats.totalDaysLearned,
-      sentenceCount: coreData.sentenceCount, masteredLv4: coreData.masteredLv4, masteredLv7: coreData.masteredLv7,
-      totalReviewTimes: coreData.totalReviewTimes, correctDictationCount: stats.dictationCount,
-      dictationAccuracy: coreData.dictationAccuracy, totalPoints: stats.totalPoints, monthAvgRate: cycleData.monthAvgRate,
+    const valueMap: Record<string, number> = {
+      streak: stats.streak,
+      maxStreak: stats.maxStreak,
+      totalDaysLearned: stats.totalDaysLearned,
+      sentenceCount: coreData.sentenceCount,
+      masteredLv4: coreData.masteredLv4,
+      masteredLv7: coreData.masteredLv7,
+      totalReviewTimes: coreData.totalReviewTimes,
+      correctDictationCount: stats.dictationCount,
+      dictationAccuracy: coreData.dictationAccuracy,
+      totalPoints: stats.totalPoints,
+      monthAvgRate: cycleData.monthAvgRate,
+      avgStability: fsrsStats.avgStability,
+      batchSyncCount: stats.batchSyncCount,
     };
 
     return ACHIEVEMENT_MILESTONES.map(achievement => ({
       ...achievement,
-      currentValue: valueMap[achievement.currentKey as keyof typeof valueMap] || 0,
-      isUnlocked: (valueMap[achievement.currentKey as keyof typeof valueMap] || 0) >= achievement.target,
+      currentValue: valueMap[achievement.currentKey] || 0,
+      isUnlocked: (valueMap[achievement.currentKey] || 0) >= achievement.target,
     }));
-  }, [stats, coreData, cycleData.monthAvgRate]);
+  }, [stats, coreData, cycleData.monthAvgRate, fsrsStats]);
 
-  // 成就筛选
   const filteredAchievements = useMemo(() => {
     switch (filterType) {
       case 'unlocked': return achievementData.filter(ach => ach.isUnlocked);
@@ -339,7 +372,6 @@ const AchievementPage: React.FC<{ sentences: Sentence[] }> = ({ sentences }) => 
     return groups;
   }, [filteredAchievements]);
 
-  // 空状态
   if (sentences.length === 0 && stats.totalPoints === 0) {
     return (
       <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500 px-2">
@@ -348,117 +380,163 @@ const AchievementPage: React.FC<{ sentences: Sentence[] }> = ({ sentences }) => 
     );
   }
 
-  // 主渲染（优化后的布局）
   return (
-    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500 px-2">
-      {/* 1. 等级卡片（置顶，突出核心身份） */}
-      <div className={`apple-card bg-gradient-to-br ${levelInfo.color} p-5 text-white relative overflow-hidden shadow-lg shadow-blue-200/30 rounded-2xl`}>
-        <div className="absolute -right-6 -top-6 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
-        <div className="absolute -left-6 -bottom-6 w-24 h-24 bg-black/10 rounded-full blur-2xl" />
+    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500 px-2 md:grid md:grid-cols-2 md:gap-6 md:space-y-0">
+      {/* 1. 等级卡片 */}
+      <div className="md:col-span-2 apple-card bg-gradient-to-br from-blue-500 to-indigo-400 p-6 text-white relative overflow-hidden shadow-lg shadow-blue-200/30 rounded-2xl">
+        <div className="absolute -right-6 -top-6 w-32 h-32 bg-white/10 rounded-full blur-3xl" />
+        <div className="absolute -left-6 -bottom-6 w-32 h-32 bg-black/10 rounded-full blur-3xl" />
         
-        <div className="relative z-10 flex items-center gap-4 mb-4 flex-wrap">
-          <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-2xl border border-white/40 shadow-inner group transition-transform duration-300 hover:scale-105">
-            <span className="text-3xl group-hover:rotate-12 transition-transform">🦁</span>
+        <div className="relative z-10 flex items-center gap-6 mb-6 flex-wrap">
+          <div className="w-20 h-20 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-2xl border border-white/40 shadow-inner group transition-transform duration-300 hover:scale-105 hover:rotate-3">
+            <span className="text-4xl group-hover:scale-110 transition-transform">🦁</span>
           </div>
-          <div className="space-y-1 flex-1">
-            <h2 className="text-xl font-black tracking-tighter uppercase">English Master</h2>
+          <div className="space-y-2 flex-1">
+            <h2 className="text-2xl font-black tracking-tighter uppercase">English Master</h2>
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="bg-white/20 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest backdrop-blur-md">Level {levelInfo.lv}</span>
-              <span className="text-white/80 text-xs font-bold">{levelInfo.title}</span>
+              <span className="bg-white/20 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest backdrop-blur-md border border-white/20">Level {levelInfo.lv}</span>
+              <span className="text-white/90 text-sm font-bold">{levelInfo.title}</span>
             </div>
           </div>
         </div>
 
-        <div className="relative z-10 space-y-1.5">
-          <div className="flex justify-between items-end text-[8px] font-black uppercase tracking-[0.2em] opacity-80 flex-wrap gap-1">
+        <div className="relative z-10 space-y-2">
+          <div className="flex justify-between items-end text-[9px] font-black uppercase tracking-[0.2em] opacity-80 flex-wrap gap-1">
             <span>升级进度</span>
             <span>{stats.totalPoints} / {levelInfo.nextPoints} XP</span>
           </div>
-          <div className="w-full bg-black/20 h-2.5 rounded-full overflow-hidden border border-white/20 backdrop-blur-lg p-0.5">
+          <div className="w-full bg-black/20 rounded-full h-3 overflow-hidden backdrop-blur-sm p-0.5">
             <div 
-              className="h-full bg-white rounded-full transition-all duration-800 shadow-[0_0_10px_rgba(255,255,255,0.8)]"
+              className="h-full bg-white rounded-full transition-all duration-1000 ease-out shadow-sm"
               style={{ width: `${levelInfo.progress}%` }}
             />
           </div>
         </div>
       </div>
 
-      {/* 2. 核心统计卡片（8个关键指标，分两行4列，最常用数据置顶） */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <StatCard icon="🔥" value={stats.streak} label="天连续学习" bgColor="orange" tip="连续学习天数越多，记忆效果越好" />
-        <StatCard icon="📚" value={coreData.sentenceCount} label="个句子收藏" bgColor="blue" tip="收藏的句子总数" />
-        <StatCard icon="🔄" value={coreData.totalReviewTimes} label="次累计复习" bgColor="purple" tip="艾宾浩斯复习总次数" />
-        <StatCard icon="✍️" value={stats.dictationCount} label="个正确默写" bgColor="green" tip="正确默写的句子数量" />
-        <StatCard icon="📆" value={stats.totalDaysLearned} label="天累计学习" bgColor="indigo" tip="总共学习的天数" />
-        <StatCard icon="🏆" value={stats.maxStreak} label="天最高连胜" bgColor="red" tip="历史最长连续学习记录" />
-        <StatCard icon="🌟" value={coreData.masteredLv4} label="个掌握句子" bgColor="pink" tip="达到进阶以上掌握程度的句子" />
-        <StatCard icon="🗓️" value={`${coreData.currentMonthCompleteRate}%`} label="本月完成率" bgColor="teal" tip="本月学习目标完成百分比" />
+      {/* 2. 核心统计卡片 */}
+      <div className="md:col-span-2 grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <StatCard icon="🔥" value={stats.streak} label="连续天数" bgColor="orange" tip="连续完成每日目标的天数" />
+        <StatCard icon="💎" value={stats.totalPoints} label="总积分" bgColor="amber" tip="累计获得的总积分" />
+        <StatCard icon="📚" value={coreData.sentenceCount} label="句子总数" bgColor="blue" tip="词库中的句子总数" />
+        <StatCard icon="✅" value={coreData.learnedTotal} label="已学习" bgColor="green" tip="已学习的句子数量" />
       </div>
 
-      {/* 3. 周/月学习概览（合并展示，减少冗余） */}
-      <div className="apple-card rounded-xl p-4 space-y-4">
+      {/* 3. 每日目标进度 */}
+      <div className="apple-card rounded-2xl p-5 space-y-4 hover:shadow-lg transition-shadow">
+        <div className="flex justify-between items-center flex-wrap gap-1">
+          <h3 className="text-sm font-black text-gray-900 tracking-tight flex items-center gap-2">
+            <span className="text-lg">🎯</span> 每日目标
+          </h3>
+          <span className="text-[9px] font-bold text-gray-400 bg-gray-50 px-2 py-1 rounded-lg">
+            {dailyLearnTarget} 学 / {dailyReviewTarget} 复
+          </span>
+        </div>
+        <div className="space-y-3">
+          <div className="bg-blue-50/50 rounded-xl p-3 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-500 font-black text-xs">
+              {Math.round(Math.min(100, ((stats.mobileLearnCount || 0) / dailyLearnTarget) * 100))}%
+            </div>
+            <div className="flex-1 space-y-1">
+               <div className="flex justify-between text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+                 <span>今日学习</span>
+                 <span className="text-blue-600">{stats.mobileLearnCount}/{dailyLearnTarget}</span>
+               </div>
+               <div className="w-full bg-blue-100 rounded-full h-1.5">
+                  <div className="h-full bg-blue-500 rounded-full transition-all duration-500" style={{ width: `${Math.min(100, ((stats.mobileLearnCount || 0) / dailyLearnTarget) * 100)}%` }} />
+               </div>
+            </div>
+          </div>
+          
+          <div className="bg-green-50/50 rounded-xl p-3 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-green-500 font-black text-xs">
+              {Math.round(Math.min(100, ((stats.mobileReviewCount || 0) / dailyReviewTarget) * 100))}%
+            </div>
+            <div className="flex-1 space-y-1">
+               <div className="flex justify-between text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+                 <span>今日复习</span>
+                 <span className="text-green-600">{stats.mobileReviewCount}/{dailyReviewTarget}</span>
+               </div>
+               <div className="w-full bg-green-100 rounded-full h-1.5">
+                  <div className="h-full bg-green-500 rounded-full transition-all duration-500" style={{ width: `${Math.min(100, ((stats.mobileReviewCount || 0) / dailyReviewTarget) * 100)}%` }} />
+               </div>
+            </div>
+          </div>
+        </div>
+        {!isMobile && (
+          <div className="text-[10px] text-amber-600 bg-amber-50 rounded-lg p-2 text-center font-medium">
+            ⚠️ 电脑端学习/复习暂不计入统计
+          </div>
+        )}
+      </div>
+
+      {/* 4. FSRS 记忆指标 */}
+      {coreData.learnedTotal > 0 && (
+        <div className="apple-card rounded-2xl p-5 space-y-4 hover:shadow-lg transition-shadow">
+          <div className="flex justify-between items-center flex-wrap gap-1">
+            <h3 className="text-sm font-black text-gray-900 tracking-tight flex items-center gap-2">
+              <span className="text-lg">🧠</span> 记忆指标
+            </h3>
+            <span className="text-[8px] font-black text-indigo-500 bg-indigo-50 px-2 py-1 rounded-lg uppercase tracking-widest">
+              FSRS Model
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 h-full">
+            <div className="p-3 bg-indigo-50/50 rounded-xl flex flex-col justify-center">
+              <p className="text-[9px] text-indigo-400 font-black uppercase tracking-widest mb-1">平均稳定性</p>
+              <div className="flex items-baseline gap-1">
+                <span className="text-2xl font-black text-gray-900">{fsrsStats.avgStability}</span>
+                <span className="text-[10px] text-gray-400 font-bold">天</span>
+              </div>
+            </div>
+            <div className="p-3 bg-purple-50/50 rounded-xl flex flex-col justify-center">
+              <p className="text-[9px] text-purple-400 font-black uppercase tracking-widest mb-1">平均难度</p>
+              <div className="flex items-baseline gap-1">
+                <span className="text-2xl font-black text-gray-900">{fsrsStats.avgDifficulty}</span>
+                <span className="text-[10px] text-gray-400 font-bold">/10</span>
+              </div>
+            </div>
+            <div className="p-3 bg-blue-50/50 rounded-xl flex flex-col justify-center">
+              <p className="text-[9px] text-blue-400 font-black uppercase tracking-widest mb-1">平均间隔</p>
+              <div className="flex items-baseline gap-1">
+                <span className="text-2xl font-black text-gray-900">{fsrsStats.avgInterval}</span>
+                <span className="text-[10px] text-gray-400 font-bold">天</span>
+              </div>
+            </div>
+            <div className="p-3 bg-red-50/50 rounded-xl flex flex-col justify-center">
+              <p className="text-[9px] text-red-400 font-black uppercase tracking-widest mb-1">遗忘率</p>
+              <div className="flex items-baseline gap-1">
+                <span className="text-2xl font-black text-gray-900">{fsrsStats.lapseRate}%</span>
+                <span className="text-[10px] text-gray-400 font-bold">Lapse</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. 周/月数据概览 */}
+      <div className="apple-card rounded-xl p-4 space-y-3">
         <div className="flex justify-between items-center flex-wrap gap-1">
           <h3 className="text-xs font-black text-gray-900 tracking-tight flex items-center gap-1.5">
-            <span>📈</span> 学习进度概览
+            <span>📊</span> 周/月数据概览
           </h3>
-          <div className="flex gap-1">
-            <span className="text-[7px] font-black text-green-500 bg-green-50 px-1.5 py-0.5 rounded-full uppercase tracking-widest">
-              周完成率 {cycleData.weekCompleteRate}%
-            </span>
-            <span className="text-[7px] font-black text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded-full uppercase tracking-widest">
-              月完成率 {cycleData.monthAvgRate}%
-            </span>
-          </div>
+          <span className="text-[7px] font-black text-gray-400">基于自定义目标计算</span>
         </div>
-
-        {/* 周度数据 */}
-        <div className="space-y-2">
-          <p className="text-[8px] font-black text-gray-500 uppercase tracking-widest">本周学习（目标21个）</p>
-          <div className="flex gap-1 overflow-x-auto pb-2">
-            {cycleData.weekDailyData.map((day, idx) => (
-              <div 
-                key={idx} 
-                className="flex-shrink-0 w-12 flex flex-col items-center justify-center gap-1 p-1.5 rounded-xl border transition-all min-h-[60px]"
-                style={{
-                  borderColor: day.complete >= day.target ? '#22c55e' : '#e5e7eb',
-                  backgroundColor: day.complete >= day.target ? 'rgba(34, 197, 94, 0.05)' : 'white'
-                }}
-              >
-                <span className={`text-[8px] font-black uppercase tracking-widest ${day.complete >= day.target ? 'text-green-600' : 'text-gray-400'}`}>
-                  {day.day}
-                </span>
-                <span className="text-base font-black text-gray-900">{day.complete}</span>
-                <span className="text-[7px] text-gray-300 font-bold">/ {day.target}</span>
-              </div>
-            ))}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="bg-blue-50 rounded-xl p-3 text-center">
+            <p className="text-[8px] text-blue-500 font-black uppercase tracking-widest mb-1">本周完成率</p>
+            <p className="text-2xl font-black text-gray-900">{cycleData.weekCompleteRate}%</p>
+            <p className="text-[7px] text-gray-400">最近 7 天</p>
           </div>
-        </div>
-
-        {/* 月度数据 */}
-        <div className="space-y-2">
-          <p className="text-[8px] font-black text-gray-500 uppercase tracking-widest">近6个月学习</p>
-          <div className="flex gap-1 overflow-x-auto pb-2">
-            {cycleData.monthDailyData.map((month, idx) => (
-              <div 
-                key={idx} 
-                className="flex-shrink-0 w-14 flex flex-col items-center justify-center gap-1 p-1.5 rounded-xl border transition-all min-h-[60px]"
-                style={{
-                  borderColor: month.completeRate >= 80 ? '#3b82f6' : '#e5e7eb',
-                  backgroundColor: month.completeRate >= 80 ? 'rgba(59, 130, 246, 0.05)' : 'white'
-                }}
-              >
-                <span className={`text-[8px] font-black uppercase tracking-widest ${month.completeRate >= 80 ? 'text-blue-600' : 'text-gray-400'}`}>
-                  {month.monthName}
-                </span>
-                <span className="text-sm font-black text-gray-900">{month.complete}</span>
-                <span className="text-[7px] text-gray-300 font-bold">/{month.target}</span>
-              </div>
-            ))}
+          <div className="bg-green-50 rounded-xl p-3 text-center">
+            <p className="text-[8px] text-green-500 font-black uppercase tracking-widest mb-1">本月完成率</p>
+            <p className="text-2xl font-black text-gray-900">{coreData.currentMonthCompleteRate}%</p>
+            <p className="text-[7px] text-gray-400">当月进度</p>
           </div>
         </div>
       </div>
 
-      {/* 4. 学习热力图（直观展示学习规律） */}
+      {/* 6. 学习热力图 */}
       {cycleData.heatmapData.some(day => day.complete > 0) ? (
         <div className="apple-card rounded-xl p-4 space-y-4">
           <div className="flex justify-between items-center flex-wrap gap-1">
@@ -493,7 +571,7 @@ const AchievementPage: React.FC<{ sentences: Sentence[] }> = ({ sentences }) => 
         </div>
       ) : null}
 
-      {/* 5. 默写专项统计（核心输出能力） */}
+      {/* 7. 默写专项统计 */}
       <div className="apple-card rounded-xl p-4 space-y-4">
         <div className="flex justify-between items-center flex-wrap gap-1">
           <h3 className="text-xs font-black text-gray-900 tracking-tight flex items-center gap-1.5">
@@ -517,7 +595,7 @@ const AchievementPage: React.FC<{ sentences: Sentence[] }> = ({ sentences }) => 
         </div>
       </div>
 
-      {/* 6. 掌握程度统计（学习效果核心指标） */}
+      {/* 8. 掌握程度统计 */}
       {masteryStats.levelCounts.length > 0 ? (
         <div className="apple-card rounded-xl p-4 space-y-4">
           <div className="flex justify-between items-center flex-wrap gap-1">
@@ -553,7 +631,7 @@ const AchievementPage: React.FC<{ sentences: Sentence[] }> = ({ sentences }) => 
         </div>
       ) : null}
 
-      {/* 7. 学习习惯总结（精简版，突出关键信息） */}
+      {/* 9. 学习习惯总结 */}
       <div className="apple-card rounded-xl p-4 space-y-3">
         <h3 className="text-xs font-black text-gray-900 tracking-tight flex items-center gap-1.5">
           <span>⚡</span> 学习习惯总结
@@ -576,13 +654,13 @@ const AchievementPage: React.FC<{ sentences: Sentence[] }> = ({ sentences }) => 
           </div>
         </div>
         <div className="p-2 bg-gray-50 rounded-lg text-xs text-gray-600">
-          {coreData.avgDailyLearn >= 3 
-            ? '✅ 日均学习量达标，保持当前节奏，继续加油！' 
-            : '💡 建议每天固定学习3个句子，提升效率，早日达标！'}
+          {coreData.avgDailyLearn >= dailyLearnTarget 
+            ? `✅ 日均学习量达标，保持当前节奏，继续加油！` 
+            : `💡 建议每天固定学习${dailyLearnTarget}个句子，提升效率，早日达标！`}
         </div>
       </div>
 
-      {/* 8. 荣誉勋章墙（底部，激励作用） */}
+      {/* 10. 荣誉勋章墙 */}
       <div className="space-y-3">
         <div className="flex justify-between items-center flex-wrap gap-2">
           <h3 className="text-[9px] font-black text-gray-400 uppercase tracking-[0.3em] ml-1">荣誉勋章墙</h3>

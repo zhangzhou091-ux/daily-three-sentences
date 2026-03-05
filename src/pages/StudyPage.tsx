@@ -1,17 +1,13 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Sentence, StudyStep, DictationRecord } from '../types';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Sentence, StudyStep, DictationRecord, ReviewRating } from '../types';
 import { geminiService } from '../services/geminiService';
-import { storageService } from '../services/storageService';
-import { offlineQueueService, OfflineOperation } from '../services/offlineQueueService';
+import { storageService } from '../services/storage';
 import { supabaseService } from '../services/supabaseService';
+import { deviceService } from '../services/deviceService';
+import { syncQueueService } from '../services/syncQueueService';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 
-// 常量抽离
-const LEARN_XP = 15;
-const DICTATION_XP = 20;
-const LEARNED_ANIMATION_DELAY = 800;
-const MAX_REVIEW_LEVEL = 10;
-const DAILY_LEARN_TARGET = 3; // 学习数量硬约束：固定3个【不可修改】
-const DAILY_REVIEW_TARGET = 3; // 复习数量硬约束：固定3个
+import { LEARN_XP, DICTATION_XP, LEARNED_ANIMATION_DELAY, MAX_REVIEW_LEVEL, REVIEW_XP } from '../constants';
 
 interface StudyPageProps {
   sentences: Sentence[];
@@ -36,19 +32,102 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   // ★★★ 核心修改1：将dailySelection改为useState，异步生成，解决Promise获取ID的BUG ★★★
   const [dailySelection, setDailySelection] = useState<Sentence[]>([]);
   
+  // 防止循环刷新标志
+  const isGeneratingRef = useRef(false);
+  
+  // ========== 核心修复3：添加学习反馈提交状态锁，防止重复提交 ==========
+  const isMarkLearnedSubmittingRef = useRef(false);
+  const isReviewFeedbackSubmittingRef = useRef(false);
+  const [isReviewSubmitting, setIsReviewSubmitting] = useState(false);
+  
+
+  
   // 定时器ref
-  const animationTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const dictationRefreshTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const animationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dictationRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settings = useMemo(() => storageService.getSettings(), []);
   const todayStr = useMemo(() => {
     const d = new Date();
     return d.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
   }, []);
-
-  // ★★★ 核心修改2：新增useEffect，异步生成当日学习列表，全程硬锁3个数量 ★★★
+  
+  // 🔴 修复：学习进度保存错误处理
   useEffect(() => {
-    // 生成当日学习列表的核心函数（异步）
-    const generateDailySelection = async () => {
+    const saveProgress = () => {
+      try {
+        localStorage.setItem('d3s_learn_index', currentIndex.toString());
+        // 同时保存到sessionStorage作为备份
+        sessionStorage.setItem('d3s_learn_index', currentIndex.toString());
+        if (import.meta.env.DEV) {
+          console.log(`💾 学习进度保存成功: 索引 ${currentIndex}`);
+        }
+      } catch (err) {
+        console.warn('学习进度保存失败:', err);
+        // 尝试使用降级方案：sessionStorage
+        try {
+          sessionStorage.setItem('d3s_learn_index', currentIndex.toString());
+        } catch (fallbackErr) {
+          console.error('学习进度降级保存也失败:', fallbackErr);
+        }
+      }
+    };
+    
+    // 当切换到学习标签或进度变化时保存
+    if (activeTab === 'learn') {
+      saveProgress();
+    }
+    
+    // 定期保存（每5次翻页）
+    if (activeTab === 'learn' && currentIndex > 0 && currentIndex % 5 === 0) {
+      saveProgress();
+    }
+    
+    // 页面卸载时保存
+    const handleBeforeUnload = () => {
+      if (activeTab === 'learn') {
+        saveProgress();
+      }
+    };
+    
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [currentIndex, activeTab]);
+  
+  // 恢复学习进度
+  useEffect(() => {
+    if (activeTab === 'learn' && currentIndex === 0) {
+      // 优先从localStorage读取
+      let savedIndex = 0;
+      try {
+        const saved = localStorage.getItem('d3s_learn_index');
+        if (saved) {
+          savedIndex = parseInt(saved, 10);
+        } else {
+          // 降级到sessionStorage
+          const sessionSaved = sessionStorage.getItem('d3s_learn_index');
+          if (sessionSaved) {
+            savedIndex = parseInt(sessionSaved, 10);
+          }
+        }
+      } catch (err) {
+        console.warn('读取学习进度失败:', err);
+      }
+      
+      if (savedIndex > 0) {
+        const maxIndex = Math.max(0, dailySelection.length - 1);
+        setCurrentIndex(Math.min(savedIndex, maxIndex));
+      }
+    }
+  }, [activeTab, dailySelection.length]);
+
+  const generateDailySelection = useCallback(async () => {
+    // 防止循环调用
+    if (isGeneratingRef.current) return;
+    isGeneratingRef.current = true;
+    
+    try {
       if (!sentences.length) {
         setDailySelection([]);
         return;
@@ -58,9 +137,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
       const todayDateStr = now.toISOString().split('T')[0];
       const retainedSentences: Sentence[] = [];
 
-      // 1. 异步获取云端/本地保存的当日ID（解决核心Promise BUG）
       const savedIds = await storageService.getTodaySelection() || [];
-      // 过滤有效ID，仅保留存在的、未学完/今日学过的句子
       if (savedIds.length > 0) {
         savedIds.forEach(id => {
           const sentence = sentences.find(s => s.id === id);
@@ -74,69 +151,131 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         });
       }
 
-      // 2. 计算需要补充的数量，严格限制：最多补到3个，负数直接置0
-      let needSupplementCount = DAILY_LEARN_TARGET - retainedSentences.length;
+      const learnTarget = settings.dailyLearnTarget === 999 ? Infinity : settings.dailyLearnTarget;
+      let needSupplementCount = learnTarget - retainedSentences.length;
       needSupplementCount = needSupplementCount < 0 ? 0 : needSupplementCount;
 
-      // 3. 补充新句子：仅筛选符合条件的未学句子，且只补需要的数量
       if (needSupplementCount > 0) {
         const available = sentences.filter(s => {
           const isInRetained = retainedSentences.some(rs => rs.id === s.id);
           const isManualAddedToday = s.isManual && s.addedAt >= todayStart;
-          // 排除：已学过、今日手动添加、已在保留列表的句子
           if (s.intervalIndex > 0 || isManualAddedToday || isInRetained) {
             return false;
           }
           return true;
         });
 
-        // 按规则排序：手动添加优先，再按导入时间排序
         const manualSentences = available.filter(s => s.isManual === true);
         const importedSentences = available.filter(s => s.isManual === false || s.isManual === undefined);
         const sortedManual = manualSentences.sort((a, b) => b.addedAt - a.addedAt);
         const sortedImported = importedSentences.sort((a, b) => a.addedAt - b.addedAt);
         const sortedAll = [...sortedManual, ...sortedImported];
 
-        // 仅补充需要的数量，绝不超额
         const supplementSentences = sortedAll.slice(0, needSupplementCount);
         retainedSentences.push(...supplementSentences);
       }
 
-      // 4. 最后一道防线：强制截取前3个，彻底锁死数量，无任何例外
-      const finalSelection = retainedSentences.slice(0, DAILY_LEARN_TARGET);
-      // 5. 保存到本地+云端，确保跨设备同步的也是3个
+      const finalSelection = settings.dailyLearnTarget === 999 
+        ? retainedSentences 
+        : retainedSentences.slice(0, settings.dailyLearnTarget);
       if (finalSelection.length > 0) {
         await storageService.saveTodaySelection(finalSelection.map(s => s.id));
       }
-      // 6. 更新学习列表
       setDailySelection(finalSelection);
-    };
+    } finally {
+      isGeneratingRef.current = false;
+    }
+  }, [sentences, settings.dailyLearnTarget]);
 
-    // 执行生成逻辑
-    generateDailySelection();
-  }, [sentences]); // 句子列表变化时重新生成
+  // 使用 ref 避免循环依赖：只在 sentences 真正变化时重新生成
+  const sentencesRef = useRef(sentences);
+  const hasGeneratedTodayRef = useRef(false);
+  
+  useEffect(() => {
+    // 检查 sentences 是否真正发生变化（长度或ID集合变化）
+    const prevSentences = sentencesRef.current;
+    const hasChanged = prevSentences.length !== sentences.length ||
+      prevSentences.some((s, i) => sentences[i]?.id !== s.id);
+    
+    if (hasChanged || !hasGeneratedTodayRef.current) {
+      sentencesRef.current = sentences;
+      hasGeneratedTodayRef.current = true;
+      generateDailySelection();
+    }
+  }, [sentences, generateDailySelection]);
 
-  // 复习队列【保持不变，已默认限制3个】
-  const reviewQueue = useMemo(() => 
-    sentences.filter(s => s.nextReviewDate && s.nextReviewDate <= Date.now())
-             .slice(0, DAILY_REVIEW_TARGET)
-  , [sentences]);
+  // ✅ 修复：使用更稳定的复习队列索引管理
+  const [currentReviewIndex, setCurrentReviewIndex] = useState(0);
+  const currentReviewIdRef = useRef<string | null>(null);
+  const prevReviewQueueLength = useRef(0);
+  
+  const reviewQueue = useMemo(() => {
+    const todayDateStr = new Date().toISOString().split('T')[0];
+    const reviewTarget = settings.dailyReviewTarget;
+    
+    const dueForReview = sentences.filter(s => 
+      s.nextReviewDate && s.nextReviewDate <= Date.now()
+    );
+    
+    const reviewedToday = sentences.filter(s => {
+      if (s.intervalIndex === 0) return false;
+      if (!s.lastReviewedAt) return false;
+      return new Date(s.lastReviewedAt).toISOString().split('T')[0] === todayDateStr;
+    });
+    
+    const combinedMap = new Map<string, Sentence>();
+    [...dueForReview, ...reviewedToday].forEach(s => {
+      if (!combinedMap.has(s.id)) {
+        combinedMap.set(s.id, s);
+      }
+    });
+    
+    const allReviewSentences = Array.from(combinedMap.values());
+    const result = reviewTarget === 999 ? allReviewSentences : allReviewSentences.slice(0, reviewTarget);
+    
+    return result;
+  }, [sentences, settings.dailyReviewTarget]);
+  
+  // ✅ 修复：复习队列变化时验证并修正索引
+  useEffect(() => {
+    // 队列长度变化时检查索引有效性
+    if (reviewQueue.length !== prevReviewQueueLength.current) {
+      prevReviewQueueLength.current = reviewQueue.length;
+      
+      // 如果当前索引超出范围，重置到最后一个有效位置
+      if (currentReviewIndex >= reviewQueue.length) {
+        setCurrentReviewIndex(Math.max(0, reviewQueue.length - 1));
+        currentReviewIdRef.current = reviewQueue.length > 0 ? reviewQueue[reviewQueue.length - 1]?.id || null : null;
+      }
+    }
+    
+    // 更新当前复习句子ID
+    if (reviewQueue[currentReviewIndex]) {
+      currentReviewIdRef.current = reviewQueue[currentReviewIndex].id;
+    }
+  }, [reviewQueue, currentReviewIndex]);
+  
+  // ✅ 修复：切换到复习标签时重置索引和反馈状态
+  useEffect(() => {
+    if (activeTab === 'review') {
+      setCurrentReviewIndex(0);
+      setReviewFeedbackStatus({});
+      currentReviewIdRef.current = reviewQueue[0]?.id || null;
+    }
+  }, [activeTab, reviewQueue]);
   
   const dictationPool = useMemo(() => 
     sentences.filter(s => s.intervalIndex > 0)
   , [sentences]);
 
-  // 切换句子/标签时重置翻转
+  // 切换句子/标签时设置翻转状态
+  // 学习模式：默认展示正面（英文）
+  // 复习模式：默认展示背面（中文）
   useEffect(() => {
-    setIsFlipped(false);
+    setIsFlipped(activeTab === 'review');
   }, [currentIndex, activeTab]);
 
-  // 切换到复习标签时重置反馈状态
-  useEffect(() => {
-    if (activeTab === 'review') {
-      setReviewFeedbackStatus({});
-    }
-  }, [activeTab]);
+  // ✅ 已合并到上面的复习队列索引管理 useEffect 中
 
   // 初始化今日默写记录
   useEffect(() => {
@@ -159,10 +298,14 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   }, []);
 
   // ★★★ 新增核心优化：监听PWA缓存更新、全量句子加载、当日列表云端更新 ★★★
+  // 使用 ref 存储 onUpdate，避免依赖变化导致重复绑定事件
+  const onUpdateRef = useRef(onUpdate);
+  onUpdateRef.current = onUpdate;
+  
   useEffect(() => {
     // 监听全量句子加载完成（配合storageService的分片加载）
     const handleSentencesFullLoaded = async (e: CustomEvent) => {
-      await onUpdate();
+      await onUpdateRef.current();
       if (import.meta.env.DEV) {
         console.log('📥 全量句子加载完成，页面已刷新');
       }
@@ -170,6 +313,13 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
 
     // 监听当日列表云端更新（配合storageService的本地优先）
     const handleDailySelectionUpdated = async (e: CustomEvent) => {
+      // 避免循环刷新：如果正在生成中，则跳过
+      if (isGeneratingRef.current) {
+        if (import.meta.env.DEV) {
+          console.log('⏭️ 跳过云端更新事件，正在生成中');
+        }
+        return;
+      }
       await generateDailySelection(); // 重新生成当日列表
       if (import.meta.env.DEV) {
         console.log('☁️ 当日列表云端更新，页面已刷新');
@@ -182,7 +332,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         console.log('🔄 PWA有新版本更新，正在刷新缓存');
       }
       // 触发页面全量刷新，加载最新资源
-      await onUpdate();
+      await onUpdateRef.current();
       window.location.reload();
     };
 
@@ -197,7 +347,8 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
       window.removeEventListener('dailySelectionUpdated', handleDailySelectionUpdated as EventListener);
       navigator.serviceWorker?.removeEventListener('controllerchange', handleSwUpdate);
     };
-  }, [onUpdate]);
+  // 空依赖数组，只在组件挂载时绑定一次
+  }, []);
 
   // 网络状态监听 + 离线同步
   useEffect(() => {
@@ -223,11 +374,10 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     };
   }, []);
 
-  // 离线操作同步核心函数
   const syncOfflineOperations = async () => {
     if (isSyncingRef.current || !isOnline) return;
     
-    const pendingOps = offlineQueueService.getPendingOperations();
+    const pendingOps = syncQueueService.getPendingOperations();
     if (pendingOps.length === 0) {
       setSyncStatus('idle');
       return;
@@ -235,53 +385,18 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     isSyncingRef.current = true;
     setSyncStatus('syncing');
     console.log(`📤 开始同步${pendingOps.length}个离线操作`);
-    for (const op of pendingOps) {
-      try {
-        offlineQueueService.updateOperationStatus(op.id, 'syncing');
-        
-        let syncSuccess = false;
-        switch (op.type) {
-          case 'markLearned':
-            syncSuccess = await supabaseService.updateSentence(op.payload.updatedSentence!);
-            break;
-          case 'reviewFeedback':
-            syncSuccess = await supabaseService.updateSentence(op.payload.updatedSentence!);
-            break;
-          case 'addSentence':
-            syncSuccess = await supabaseService.addSentence(op.payload.sentence!);
-            break;
-          case 'dictationRecord':
-            syncSuccess = await supabaseService.syncDictationRecord(op.payload.record!);
-            break;
-          default:
-            console.warn('⚠️ 未知操作类型，跳过同步:', op.type);
-            syncSuccess = false;
-        }
-        if (syncSuccess) {
-          offlineQueueService.removeOperation(op.id);
-        } else {
-          offlineQueueService.updateOperationStatus(op.id, 'failed');
-          throw new Error(`操作${op.id}同步失败`);
-        }
-      } catch (err) {
-        console.error(`❌ 同步操作失败: ${op.id}`, err);
-        offlineQueueService.updateOperationStatus(op.id, 'failed');
-        if (op.retryCount < 3) {
-          setTimeout(() => syncOfflineOperations(), 1000 * (op.retryCount + 1));
-        }
-      }
-    }
+    
+    const result = await syncQueueService.syncNow();
+    
     await onUpdate();
     isSyncingRef.current = false;
     
-    const remainingOps = offlineQueueService.getPendingOperations().length;
-    setSyncStatus(remainingOps > 0 ? 'failed' : 'idle');
-    console.log(`✅ 离线操作同步完成，剩余${remainingOps}个失败操作`);
+    setSyncStatus(result.success ? 'idle' : 'failed');
+    console.log(`✅ 离线操作同步完成: ${result.message}`);
   };
 
-  // 离线队列数量
   const offlineQueueCount = useMemo(() => {
-    return offlineQueueService.getPendingOperations().length;
+    return syncQueueService.getPendingOperations().length;
   }, [syncStatus]);
 
   // 选择新的默写目标
@@ -327,138 +442,161 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
 
   // 标记掌握
   const handleMarkLearned = async (id: string) => {
-    const sentence = sentences.find(s => s.id === id);
-    if (!sentence || sentence.intervalIndex > 0) return;
-    setAnimatingLearnedId(id);
+    // 防止重复提交
+    if (isMarkLearnedSubmittingRef.current) return;
+    isMarkLearnedSubmittingRef.current = true;
+    
     try {
-      const { nextIndex, nextDate } = storageService.calculateNextReview(0, 'easy');
-      const updatedSentence: Sentence = { 
-        ...sentence, 
-        intervalIndex: nextIndex, 
-        nextReviewDate: nextDate,
-        lastReviewedAt: Date.now(),
-        updatedAt: Date.now()
-      };
+      const sentence = sentences.find(s => s.id === id);
+      if (!sentence || sentence.intervalIndex > 0) return;
+      setAnimatingLearnedId(id);
       
-      await storageService.addSentence(updatedSentence);
+      const canSubmit = deviceService.canSubmitFeedback();
+      const stats = storageService.getStats();
       
-      if (!isOnline) {
-        offlineQueueService.addOperation({
-          type: 'markLearned',
-          payload: { id, updatedSentence }
-        });
+      try {
+        const { nextIndex, nextDate, fsrsData } = storageService.calculateNextReview(0, 4, 0, sentence);
+        const updatedSentence: Sentence = { 
+          ...sentence, 
+          intervalIndex: nextIndex, 
+          nextReviewDate: nextDate,
+          lastReviewedAt: Date.now(),
+          updatedAt: Date.now(),
+          ...fsrsData
+        };
+        
+        await storageService.addSentence(updatedSentence, false);
+        
+        if (!canSubmit) {
+          if (import.meta.env.DEV) {
+            console.log('🖥️ 电脑端：仅本地保存，不同步学习反馈到云端');
+          }
+          animationTimerRef.current = setTimeout(async () => {
+            await onUpdate();
+            setAnimatingLearnedId(null);
+          }, LEARNED_ANIMATION_DELAY);
+          return;
+        }
+        
+        stats.totalPoints += LEARN_XP;
+        stats.mobileLearnCount = (stats.mobileLearnCount || 0) + 1;
+        const today = new Date().toISOString().split('T')[0];
+        if (stats.lastLearnDate !== today) {
+          stats.streak += 1;
+          stats.lastLearnDate = today;
+        }
+        storageService.saveStats(stats, false);
+        
+        if (!isOnline) {
+          syncQueueService.addMarkLearned(id, updatedSentence);
+          
+          animationTimerRef.current = setTimeout(async () => {
+            await onUpdate();
+            setAnimatingLearnedId(null);
+          }, LEARNED_ANIMATION_DELAY);
+          return;
+        }
+        
+        syncQueueService.addMarkLearned(id, updatedSentence);
         
         animationTimerRef.current = setTimeout(async () => {
           await onUpdate();
           setAnimatingLearnedId(null);
-          
-          const stats = storageService.getStats();
-          stats.totalPoints += LEARN_XP;
-          const today = new Date().toISOString().split('T')[0];
-          if (stats.lastLearnDate !== today) {
-            stats.streak += 1;
-            stats.lastLearnDate = today;
-          }
-          storageService.saveStats(stats);
         }, LEARNED_ANIMATION_DELAY);
-        return;
+      } catch (err) {
+        console.warn('标记掌握保存失败', err);
       }
-      animationTimerRef.current = setTimeout(async () => {
-        try {
-          const syncSuccess = await supabaseService.updateSentence(updatedSentence);
-          if (!syncSuccess) {
-            offlineQueueService.addOperation({
-              type: 'markLearned',
-              payload: { id, updatedSentence }
-            });
-          }
-          
-          await onUpdate();
-          setAnimatingLearnedId(null);
-          
-          const stats = storageService.getStats();
-          stats.totalPoints += LEARN_XP;
-          const today = new Date().toISOString().split('T')[0];
-          if (stats.lastLearnDate !== today) {
-            stats.streak += 1;
-            stats.lastLearnDate = today;
-          }
-          storageService.saveStats(stats);
-        } catch (err) {
-          console.warn('标记掌握-云端同步失败，已加入离线队列', err);
-          offlineQueueService.addOperation({
-            type: 'markLearned',
-            payload: { id, updatedSentence }
-          });
-          setAnimatingLearnedId(null);
-        }
-      }, LEARNED_ANIMATION_DELAY);
-    } catch (err) {
-      console.warn('标记掌握失败', err);
-      setAnimatingLearnedId(null);
+    } finally {
+      isMarkLearnedSubmittingRef.current = false;
     }
   };
 
   // 复习反馈
-  const handleReviewFeedback = async (id: string, feedback: 'easy' | 'hard' | 'forgot') => {
+  const handleReviewFeedback = async (id: string, rating: ReviewRating) => {
+    // 防止重复提交
+    if (isReviewFeedbackSubmittingRef.current) return;
     if (reviewFeedbackStatus[id]) return;
     
-    const sentence = sentences.find(s => s.id === id);
-    if (!sentence) return;
+    isReviewFeedbackSubmittingRef.current = true;
+    setIsReviewSubmitting(true);
+    
     try {
-      const { nextIndex, nextDate } = storageService.calculateNextReview(
-        sentence.intervalIndex, 
-        feedback,
-        sentence.timesReviewed
-      );
-      const updated: Sentence = { 
-        ...sentence, 
-        intervalIndex: nextIndex, 
-        nextReviewDate: nextDate,
-        lastReviewedAt: Date.now(),
-        timesReviewed: (sentence.timesReviewed || 0) + 1,
-        updatedAt: Date.now()
-      };
+      const sentence = sentences.find(s => s.id === id);
+      if (!sentence) return;
       
-      await storageService.addSentence(updated);
+      const canSubmit = deviceService.canSubmitFeedback();
       
-      if (!isOnline) {
-        offlineQueueService.addOperation({
-          type: 'reviewFeedback',
-          payload: { id, updatedSentence: updated, feedback }
-        });
-        
-        setReviewFeedbackStatus(prev => ({ ...prev, [id]: true }));
-        setCurrentIndex(prev => (prev + 1) % reviewQueue.length);
-        setIsFlipped(false);
-        await onUpdate();
-        return;
-      }
       try {
-        const syncSuccess = await supabaseService.updateSentence(updated);
-        if (!syncSuccess) {
-          offlineQueueService.addOperation({
-            type: 'reviewFeedback',
-            payload: { id, updatedSentence: updated, feedback }
+        const { nextIndex, nextDate, fsrsData } = storageService.calculateNextReview(
+          sentence.intervalIndex, 
+          rating,
+          sentence.timesReviewed,
+          sentence
+        );
+        const updated: Sentence = { 
+          ...sentence, 
+          intervalIndex: nextIndex, 
+          nextReviewDate: nextDate,
+          lastReviewedAt: Date.now(),
+          timesReviewed: (sentence.timesReviewed || 0) + 1,
+          updatedAt: Date.now(),
+          ...fsrsData
+        };
+        
+        await storageService.addSentence(updated, false);
+        
+        if (!canSubmit) {
+          if (import.meta.env.DEV) {
+            console.log('🖥️ 电脑端：仅本地保存，不同步复习反馈到云端');
+          }
+          setReviewFeedbackStatus(prev => ({ ...prev, [id]: true }));
+          setCurrentIndex(prev => {
+            const nextIndex = prev + 1;
+            return reviewQueue.length > 0 ? Math.min(nextIndex, reviewQueue.length - 1) : 0;
           });
+          setIsFlipped(true);
+          await onUpdate();
+          return;
         }
         
-        setReviewFeedbackStatus(prev => ({
-          ...prev,
-          [id]: true
-        }));
-        setCurrentIndex(prev => (prev + 1) % reviewQueue.length);
-        setIsFlipped(false);
+        const stats = storageService.getStats();
+        stats.mobileReviewCount = (stats.mobileReviewCount || 0) + 1;
+        stats.totalPoints += REVIEW_XP[rating];
+        storageService.saveStats(stats, false);
+        
+        if (!isOnline) {
+          syncQueueService.addReviewFeedback(id, updated, rating);
+          
+          setReviewFeedbackStatus(prev => ({ ...prev, [id]: true }));
+          setCurrentIndex(prev => {
+            const nextIndex = prev + 1;
+            return reviewQueue.length > 0 ? Math.min(nextIndex, reviewQueue.length - 1) : 0;
+          });
+          setIsFlipped(true);
+          await onUpdate();
+          return;
+        }
+        
+        syncQueueService.addReviewFeedback(id, updated, rating);
+        
+        setReviewFeedbackStatus(prev => ({ ...prev, [id]: true }));
+        setCurrentIndex(prev => {
+          const nextIndex = prev + 1;
+          const newIndex = reviewQueue.length > 0 ? Math.min(nextIndex, reviewQueue.length - 1) : 0;
+          // 更新当前复习句子ID
+          if (reviewQueue[newIndex]) {
+            currentReviewIdRef.current = reviewQueue[newIndex].id;
+          }
+          return newIndex;
+        });
+        setIsFlipped(true);
         await onUpdate();
       } catch (err) {
-        console.warn('复习反馈-云端同步失败，已加入离线队列', err);
-        offlineQueueService.addOperation({
-          type: 'reviewFeedback',
-          payload: { id, updatedSentence: updated, feedback }
-        });
+        console.warn('复习保存失败', err);
       }
-    } catch (err) {
-      console.warn('复习保存失败', err);
+    } finally {
+      isReviewFeedbackSubmittingRef.current = false;
+      setIsReviewSubmitting(false);
     }
   };
 
@@ -480,22 +618,47 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         isFinished: false
       };
       
+      // ✅ 修复：增强去重检查，延长时间窗口并添加完成状态检查
+      const DUPLICATE_TIME_WINDOW = 5000; // 5秒去重窗口
+      
+      const existingRecord = dictationList.find(
+        r => r.sentenceId === target.id && 
+             r.timestamp > Date.now() - DUPLICATE_TIME_WINDOW && 
+             !r.isFinished
+      );
+      
+      // 检查是否已有该句子的正确完成记录
+      const hasCompletedCorrectly = dictationList.some(
+        r => r.sentenceId === target.id && 
+             r.status === 'correct' && 
+             r.timestamp > Date.now() - 24 * 60 * 60 * 1000 // 24小时内
+      );
+      
+      if (existingRecord) {
+        console.log('该句子正在处理中，请稍后再试');
+        alert('该句子正在处理中，请稍后再试');
+        return;
+      }
+      
+      if (hasCompletedCorrectly) {
+        console.log('该句子今日已完成默写');
+        alert('该句子今日已完成默写，将为您切换到下一句');
+        setUserInput('');
+        setTargetDictationId(null);
+        pickNewDictationTarget();
+        return;
+      }
+      
       const newList = [newRecord, ...dictationList];
       setDictationList(newList);
       storageService.saveTodayDictations(newList);
       
       if (!isOnline) {
-        offlineQueueService.addOperation({
-          type: 'dictationRecord',
-          payload: { record: newRecord }
-        });
+        syncQueueService.addDictationRecord(newRecord);
       } else {
         supabaseService.syncDictationRecord(newRecord).catch(err => {
           console.warn('默写记录-云端同步失败，已加入离线队列', err);
-          offlineQueueService.addOperation({
-            type: 'dictationRecord',
-            payload: { record: newRecord }
-          });
+          syncQueueService.addDictationRecord(newRecord);
         });
       }
       
@@ -503,6 +666,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         const stats = storageService.getStats();
         stats.dictationCount = (stats.dictationCount || 0) + 1;
         stats.totalPoints += DICTATION_XP;
+        if (deviceService.canSubmitFeedback()) {
+          stats.mobileDictationCount = (stats.mobileDictationCount || 0) + 1;
+        }
         storageService.saveStats(stats);
         setUserInput('');
         setTargetDictationId(null);
@@ -520,7 +686,10 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   , [sentences, targetDictationId]);
   
   const currentSentence = dailySelection[currentIndex] || null;
-  const isCurrentlyLearned = currentSentence?.intervalIndex > 0;
+  const currentSentenceLatest = currentSentence 
+    ? sentences.find(s => s.id === currentSentence.id) || currentSentence 
+    : null;
+  const isCurrentlyLearned = currentSentenceLatest?.intervalIndex > 0;
   const isAnimating = currentSentence && animatingLearnedId === currentSentence.id;
   
   const currentReviewSentence = reviewQueue[currentIndex] || null;
@@ -529,7 +698,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     : false;
 
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-700 pb-20">
+    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-700 pb-20 max-w-2xl mx-auto">
       {/* 网络和同步状态提示 */}
       {!isOnline && (
         <div className="bg-orange-50 text-orange-600 text-sm font-bold px-4 py-2 rounded-lg flex items-center gap-2">
@@ -565,11 +734,11 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
             你好, {settings.userName}
           </h2>
         </div>
-        <div className="flex bg-gray-200/50 p-1.5 rounded-[1.5rem] self-start sm:self-auto backdrop-blur-md">
+        <div className="flex bg-gray-200/50 p-1.5 rounded-[1.5rem] self-end sm:self-auto backdrop-blur-md">
             {(['learn', 'review', 'dictation'] as StudyStep[]).map(tab => (
               <button
                 key={tab}
-                onClick={() => { setActiveTab(tab); setCurrentIndex(0); setIsFlipped(false); }}
+                onClick={() => { setActiveTab(tab); setCurrentIndex(0); setIsFlipped(tab === 'review'); }}
                 className={`px-4 py-2 text-[11px] font-black uppercase tracking-wider rounded-[1.2rem] transition-all duration-300 ${
                   activeTab === tab ? 'bg-white shadow-sm text-blue-600' : 'text-gray-400 hover:text-gray-600'
                 }`}
@@ -603,7 +772,8 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       minHeight: '340px',
                       textAlign: 'left',
                       paddingTop: '20px',
-                      paddingBottom: '20px'
+                      paddingBottom: '20px',
+                      overflow: 'hidden'
                     }}
                   >
                     {(isCurrentlyLearned || isAnimating) && (
@@ -613,24 +783,24 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       </div>
                     )}
                     
+                    <h3 className="text-lg font-normal text-gray-900 leading-normal w-full" style={{ wordBreak: 'break-word', overflowWrap: 'break-word', textAlign: 'left', margin: 0, padding: 0, overflow: 'hidden' }}>
+                      {currentSentence?.english || ''}
+                    </h3>
+                    
                     <button 
                       onClick={(e) => { 
                         e.stopPropagation(); 
                         if (currentSentence) speak(currentSentence.english); 
                       }}
-                      className="w-20 h-20 rounded-full flex items-center justify-center mb-6 shadow-inner transition-all relative bg-blue-50 text-blue-600 hover:scale-110 active:scale-95 z-20 self-center"
+                      className="mt-6 w-16 h-16 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-2xl hover:scale-110 active:scale-95 transition-all z-20 self-center"
                     >
-                      <span className="text-3xl">🔊</span>
-                      <div className="absolute -inset-1 border-2 border-blue-200/50 rounded-full animate-pulse pointer-events-none"></div>
+                      🔊
                     </button>
-                    <h3 className="text-lg font-normal text-gray-900 leading-normal mt-0 max-w-full px-0" style={{ wordBreak: 'break-word', textAlign: 'left', margin: 0, padding: 0 }}>
-                      {currentSentence?.english || ''}
-                    </h3>
-                    <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mt-auto animate-bounce self-center">点击卡片翻转显示中文</p>
+                    
+                    <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mt-6 animate-pulse self-center">点击卡片翻转显示中文</p>
                   </div>
-                  {/* ========== 修改1：学习卡片反面样式调整 - 对齐文字起始行 ========== */}
                   <div 
-                    className="card-back p-6 flex flex-col items-start justify-start"  // 关键：将justify-center改为justify-start
+                    className="card-back p-6 flex flex-col items-start justify-start"
                     style={{ 
                       backfaceVisibility: 'hidden', 
                       position: 'absolute', 
@@ -639,20 +809,20 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       minHeight: '340px',
                       textAlign: 'left',
                       paddingTop: '20px',
-                      paddingBottom: '20px'
+                      paddingBottom: '20px',
+                      overflow: 'hidden'
                     }}
                   >
-                    {/* 占位：和正面的"已进入计划"标签对齐 */}
                     {(isCurrentlyLearned || isAnimating) && (
                       <div className="opacity-0 mb-4 pointer-events-none">占位</div>
                     )}
                     
-                    {/* 占位：和正面的播放按钮对齐 */}
-                    <div className="w-20 h-20 mb-6 opacity-0 pointer-events-none self-center"></div>
-                    
-                    <p className="text-lg text-gray-800 font-normal leading-normal px-0" style={{ wordBreak: 'break-word', textAlign: 'left', margin: 0, padding: 0 }}>
+                    <p className="text-lg text-gray-800 font-normal leading-normal w-full" style={{ wordBreak: 'break-word', overflowWrap: 'break-word', textAlign: 'left', margin: 0, padding: 0, overflow: 'hidden' }}>
                       {currentSentence?.chinese || ''}
                     </p>
+                    
+                    <div className="w-16 h-16 mt-6 opacity-0 pointer-events-none self-center"></div>
+                    
                     <div className="mt-10 px-6 py-2 bg-gray-100 rounded-full text-[10px] font-black text-gray-400 uppercase tracking-widest self-center">
                       CHINESE MEANING
                     </div>
@@ -675,6 +845,8 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                             setCurrentIndex(currentIndex + 1);
                         } else {
                             setActiveTab('review');
+                            setCurrentIndex(0);
+                            setIsFlipped(true);
                         }
                     }}
                     className="w-full bg-green-500 text-white py-5 rounded-[2rem] font-black text-xl shadow-xl shadow-green-200 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
@@ -738,17 +910,18 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       minHeight: '380px',
                       textAlign: 'left',
                       paddingTop: '20px',
-                      paddingBottom: '20px'
+                      paddingBottom: '20px',
+                      overflow: 'hidden'
                     }}
                   >
-                    <div className="absolute top-8 right-10 flex flex-col items-end">
-                      <span className="text-[10px] font-black text-blue-500 uppercase tracking-widest mb-1">Level</span>
-                      <div className="flex gap-1">
+                    <div className="absolute top-3 right-3 flex flex-col items-end bg-white/80 backdrop-blur-sm px-2 py-1 rounded-lg shadow-sm">
+                      <span className="text-[8px] font-black text-blue-500 uppercase tracking-widest mb-0.5">Level</span>
+                      <div className="flex gap-0.5">
                         {[...Array(MAX_REVIEW_LEVEL)].map((_, i) => (
                           <div 
                             key={i} 
-                            className={`w-1.5 h-3 rounded-full ${
-                              i < (reviewQueue[currentIndex]?.intervalIndex || 0) 
+                            className={`w-1 h-2 rounded-full ${
+                              i < storageService.calculateLevelFromStability(reviewQueue[currentIndex]?.stability) 
                                 ? 'bg-blue-500 shadow-[0_0_5px_rgba(59,130,246,0.3)]' 
                                 : 'bg-gray-100'
                             }`} 
@@ -756,8 +929,8 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                         ))}
                       </div>
                     </div>
-                    <p className="text-[10px] font-black text-gray-300 uppercase tracking-[0.2em] mb-4">科学复习卡片</p>
-                    <h3 className="text-lg font-normal text-gray-800 max-w-full leading-normal mt-0" style={{ wordBreak: 'break-word', textAlign: 'left', margin: 0, padding: 0 }}>
+                    <p className="text-[10px] font-black text-gray-300 uppercase tracking-[0.2em] mb-4 pr-16">科学复习卡片</p>
+                    <h3 className="text-lg font-normal text-gray-800 w-full leading-normal mt-0 pr-16" style={{ wordBreak: 'break-word', overflowWrap: 'break-word', textAlign: 'left', margin: 0, padding: 0, overflow: 'hidden' }}>
                       {reviewQueue[currentIndex]?.english || ''}
                     </h3>
                     
@@ -774,9 +947,8 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     
                     <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mt-6 animate-pulse self-center">点击翻转查看翻译</p>
                   </div>
-                  {/* ========== 修改2：复习卡片反面样式调整 - 对齐文字起始行 ========== */}
                   <div 
-                    className="card-back p-6 flex flex-col items-start justify-start"  // 关键：将justify-center改为justify-start
+                    className="card-back p-6 flex flex-col items-start justify-start"
                     style={{ 
                       backfaceVisibility: 'hidden', 
                       position: 'absolute', 
@@ -785,21 +957,18 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       minHeight: '380px',
                       textAlign: 'left',
                       paddingTop: '20px',
-                      paddingBottom: '20px'
+                      paddingBottom: '20px',
+                      overflow: 'hidden'
                     }}
                   >
-                    {/* 占位：和正面的Level标签对齐 */}
-                    <div className="absolute top-8 right-10 opacity-0 pointer-events-none">占位</div>
+                    <div className="absolute top-3 right-3 opacity-0 pointer-events-none">占位</div>
                     
-                    {/* 占位：和正面的"科学复习卡片"文字对齐 */}
-                    <p className="text-[10px] opacity-0 mb-4 pointer-events-none">占位</p>
+                    <p className="text-[10px] opacity-0 mb-4 pointer-events-none pr-16">占位</p>
                     
-                    {/* 核心文字 - 现在和正面文字起始行完全对齐 */}
-                    <h4 className="text-lg font-normal text-gray-900 leading-normal" style={{ wordBreak: 'break-word', textAlign: 'left', margin: 0, padding: 0 }}>
+                    <h4 className="text-lg font-normal text-gray-900 leading-normal w-full pr-16" style={{ wordBreak: 'break-word', overflowWrap: 'break-word', textAlign: 'left', margin: 0, padding: 0, overflow: 'hidden' }}>
                       {reviewQueue[currentIndex]?.chinese || ''}
                     </h4>
                     
-                    {/* 占位：和正面的播放按钮对齐 */}
                     <div className="w-16 h-16 mt-6 opacity-0 pointer-events-none self-center"></div>
                     
                     <div className="mt-10 px-6 py-2 bg-blue-50 text-blue-500 px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-[0.2em] self-center">
@@ -808,58 +977,82 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                   </div>
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-4">
+              <div className={`grid grid-cols-4 gap-3 transition-opacity duration-300 ${isReviewSubmitting ? 'opacity-50 pointer-events-none grayscale' : ''}`}>
                 <button 
-                  onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 'forgot')} 
-                  disabled={isCurrentReviewSentenceFeedbacked}
-                  className={`bg-white py-5 rounded-[1.8rem] font-bold shadow-sm border transition-all ${
-                    isCurrentReviewSentenceFeedbacked 
-                      ? 'text-gray-300 border-gray-100 cursor-not-allowed' 
-                      : 'text-red-400 border-red-50 hover:bg-red-50'
+                  onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 1)} 
+                  disabled={isReviewSubmitting || isCurrentReviewSentenceFeedbacked}
+                  className={`bg-white py-4 rounded-[1.5rem] font-bold shadow-sm border transition-all ${
+                    (isReviewSubmitting || isCurrentReviewSentenceFeedbacked)
+                      ? 'text-gray-300 border-gray-100 cursor-not-allowed bg-gray-50' 
+                      : 'text-red-400 border-red-50 hover:bg-red-50 active:scale-95'
                   }`}
                 >
-                  不记得
+                  <div className="text-lg">忘记</div>
+                  <div className="text-[10px] opacity-60">Again</div>
                 </button>
                 <button 
-                  onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 'hard')} 
-                  disabled={isCurrentReviewSentenceFeedbacked}
-                  className={`bg-white py-5 rounded-[1.8rem] font-bold shadow-sm border transition-all ${
-                    isCurrentReviewSentenceFeedbacked 
-                      ? 'text-gray-300 border-gray-100 cursor-not-allowed' 
-                      : 'text-orange-400 border-orange-50 hover:bg-orange-50'
+                  onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 2)} 
+                  disabled={isReviewSubmitting || isCurrentReviewSentenceFeedbacked}
+                  className={`bg-white py-4 rounded-[1.5rem] font-bold shadow-sm border transition-all ${
+                    (isReviewSubmitting || isCurrentReviewSentenceFeedbacked)
+                      ? 'text-gray-300 border-gray-100 cursor-not-allowed bg-gray-50' 
+                      : 'text-orange-400 border-orange-50 hover:bg-orange-50 active:scale-95'
                   }`}
                 >
-                  有模糊
+                  <div className="text-lg">困难</div>
+                  <div className="text-[10px] opacity-60">Hard</div>
                 </button>
                 <button 
-                  onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 'easy')} 
-                  disabled={isCurrentReviewSentenceFeedbacked}
-                  className={`py-5 rounded-[1.8rem] font-black shadow-xl active:scale-95 transition-all ${
-                    isCurrentReviewSentenceFeedbacked 
+                  onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 3)} 
+                  disabled={isReviewSubmitting || isCurrentReviewSentenceFeedbacked}
+                  className={`bg-white py-4 rounded-[1.5rem] font-bold shadow-sm border transition-all ${
+                    (isReviewSubmitting || isCurrentReviewSentenceFeedbacked)
+                      ? 'text-gray-300 border-gray-100 cursor-not-allowed bg-gray-50' 
+                      : 'text-blue-500 border-blue-50 hover:bg-blue-50 active:scale-95'
+                  }`}
+                >
+                  <div className="text-lg">一般</div>
+                  <div className="text-[10px] opacity-60">Good</div>
+                </button>
+                <button 
+                  onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 4)} 
+                  disabled={isReviewSubmitting || isCurrentReviewSentenceFeedbacked}
+                  className={`py-4 rounded-[1.5rem] font-black shadow-xl transition-all ${
+                    (isReviewSubmitting || isCurrentReviewSentenceFeedbacked)
                       ? 'bg-gray-200 text-gray-400 shadow-none cursor-not-allowed' 
-                      : 'bg-blue-600 text-white shadow-blue-200'
+                      : 'bg-green-500 text-white shadow-green-200 active:scale-95'
                   }`}
                 >
-                  很简单
+                  <div className="text-lg">简单</div>
+                  <div className="text-[10px] opacity-80">Easy</div>
                 </button>
               </div>
-              <div className="flex justify-between items-center px-6 mt-4">
+              
+              <div className="flex justify-between items-center px-4 mt-8 pt-6 border-t border-gray-100/50">
                 <button 
                   onClick={() => setCurrentIndex(prev => (prev - 1 + reviewQueue.length) % reviewQueue.length)}
-                  className="text-[11px] font-bold uppercase tracking-widest text-gray-400 hover:text-blue-500 transition-colors"
+                  className="group flex items-center gap-2 px-4 py-3 rounded-2xl text-gray-400 hover:bg-white hover:text-blue-600 hover:shadow-md transition-all active:scale-95"
                 >
-                  ← 上一句
+                  <span className="text-xl group-hover:-translate-x-1 transition-transform">←</span>
+                  <span className="text-[10px] font-black uppercase tracking-widest">Prev</span>
                 </button>
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] text-gray-900 font-black">{currentIndex + 1}</span>
-                  <span className="text-[11px] text-gray-300 font-black">/</span>
-                  <span className="text-[11px] text-gray-400 font-black">{reviewQueue.length}</span>
+                
+                <div className="flex flex-col items-center gap-1">
+                  <span className="text-2xl font-black text-gray-900 leading-none">{currentIndex + 1}</span>
+                  <div className="h-0.5 w-8 bg-gray-100 rounded-full">
+                    <div 
+                      className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                      style={{ width: `${((currentIndex + 1) / reviewQueue.length) * 100}%` }}
+                    />
+                  </div>
                 </div>
+
                 <button 
                   onClick={() => setCurrentIndex(prev => (prev + 1) % reviewQueue.length)}
-                  className="text-[11px] font-bold uppercase tracking-widest text-gray-400 hover:text-blue-500 transition-colors"
+                  className="group flex items-center gap-2 px-4 py-3 rounded-2xl text-gray-400 hover:bg-white hover:text-blue-600 hover:shadow-md transition-all active:scale-95"
                 >
-                  下一句 →
+                  <span className="text-[10px] font-black uppercase tracking-widest">Next</span>
+                  <span className="text-xl group-hover:translate-x-1 transition-transform">→</span>
                 </button>
               </div>
             </div>
@@ -987,4 +1180,30 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   );
 };
 
-export default StudyPage;
+const StudyPageWithErrorBoundary: React.FC<StudyPageProps> = (props) => {
+  const fallback = (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+      <div className="max-w-md w-full bg-white rounded-2xl shadow-lg p-8 text-center space-y-6">
+        <div className="text-6xl">😵</div>
+        <h1 className="text-2xl font-bold text-gray-900">学习页面出错了</h1>
+        <p className="text-gray-500 text-sm">
+          学习页面遇到了意外错误，请尝试刷新页面。
+        </p>
+        <button
+          onClick={() => window.location.reload()}
+          className="px-6 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors"
+        >
+          刷新页面
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <ErrorBoundary fallback={fallback}>
+      <StudyPage {...props} />
+    </ErrorBoundary>
+  );
+};
+
+export default StudyPageWithErrorBoundary;
