@@ -21,31 +21,22 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20.x'
-          cache: 'npm' # 缓存 npm 依赖，加速构建
+          cache: 'npm'
 
       # 3. 安装项目依赖
       - name: Install dependencies
         run: npm install
 
-      # 4. 从 GitHub Secrets 生成 .env.local 文件（使用 Node.js 脚本）
-      - name: Create .env.local
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-        run: node scripts/create-env.js
-
-      # 5. 构建生产版本（直接在环境变量中注入 Supabase 配置）
+      # 4. 构建生产版本 - 直接从 GitHub Secrets 注入环境变量
       - name: Build project
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: npm run build
 
-      # 6. 部署到 gh-pages 分支
+      # 5. 部署到 gh-pages 分支
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
-          # GitHub 自动生成的 Token，用于推送 gh-pages 分支
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          # 部署的源目录（Vite 构建后生成的 dist 目录）
           publish_dir: ./dist
