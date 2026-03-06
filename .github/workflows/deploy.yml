@@ -27,14 +27,20 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # 4. 构建生产版本（直接在环境变量中注入 Supabase 配置）
+      # 4. 从 GitHub Secrets 生成 .env.local 文件
+      - name: Create .env.local
+        run: |
+          echo "VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}" > .env.local
+          echo "VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}" >> .env.local
+
+      # 5. 构建生产版本（同时直接在环境变量中注入 Supabase 配置作为备份）
       - name: Build project
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: npm run build
 
-      # 5. 部署到 gh-pages 分支
+      # 6. 部署到 gh-pages 分支
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
