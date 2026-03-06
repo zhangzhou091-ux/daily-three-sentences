@@ -16,11 +16,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. 安装 Node.js（匹配你本地的 Node 版本，比如 20.x）
+      # 2. 安装 Node.js（使用兼容的 Node 版本）
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20.x
+          node-version: '20.x'
           cache: 'npm' # 缓存 npm 依赖，加速构建
 
       # 3. 安装项目依赖
