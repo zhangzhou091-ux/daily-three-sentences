@@ -27,40 +27,27 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # 4. 调试：检查环境变量是否已设置（只显示长度，不显示完整值）
-      - name: Debug - Check environment variables
-        run: |
-          echo "VITE_SUPABASE_URL length: ${#VITE_SUPABASE_URL}"
-          echo "VITE_SUPABASE_ANON_KEY length: ${#VITE_SUPABASE_ANON_KEY}"
-          if [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
-            echo "ERROR: Environment variables are NOT set!"
-            exit 1
-          else
-            echo "Environment variables are set successfully"
-          fi
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-
-      # 5. 从 GitHub Secrets 生成 .env.local 文件
+      # 4. 从 GitHub Secrets 生成 .env.local 文件（使用 printf 避免 shell 扩展问题）
       - name: Create .env.local
         run: |
-          echo "VITE_SUPABASE_URL=${VITE_SUPABASE_URL}" > .env.local
-          echo "VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}" >> .env.local
+          printf 'VITE_SUPABASE_URL=%s\n' "$VITE_SUPABASE_URL" > .env.local
+          printf 'VITE_SUPABASE_ANON_KEY=%s\n' "$VITE_SUPABASE_ANON_KEY" >> .env.local
           echo ".env.local created"
           ls -la .env.local
+          echo "File content (first 20 chars of each line):"
+          head -n 2 .env.local | cut -c1-20
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 
-      # 6. 构建生产版本（同时直接在环境变量中注入 Supabase 配置）
+      # 5. 构建生产版本（直接在环境变量中注入 Supabase 配置）
       - name: Build project
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: npm run build
 
-      # 7. 部署到 gh-pages 分支
+      # 6. 部署到 gh-pages 分支
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
