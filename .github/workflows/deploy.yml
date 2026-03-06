@@ -27,18 +27,17 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # 4. 从 GitHub Secrets 生成 .env.local 文件（使用 printf 避免 shell 扩展问题）
+      # 4. 从 GitHub Secrets 生成 .env.local 文件（使用 EOF 让 GitHub Actions 正确解析变量）
       - name: Create .env.local
         run: |
-          printf 'VITE_SUPABASE_URL=%s\n' "$VITE_SUPABASE_URL" > .env.local
-          printf 'VITE_SUPABASE_ANON_KEY=%s\n' "$VITE_SUPABASE_ANON_KEY" >> .env.local
+          cat > .env.local << EOF
+VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}
+VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}
+EOF
           echo ".env.local created"
           ls -la .env.local
-          echo "File content (first 20 chars of each line):"
-          head -n 2 .env.local | cut -c1-20
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          echo "File content (first 30 chars of each line):"
+          head -n 2 .env.local | cut -c1-30
 
       # 5. 构建生产版本（直接在环境变量中注入 Supabase 配置）
       - name: Build project
