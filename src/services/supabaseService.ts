@@ -1,7 +1,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Sentence, UserStats, UserSettings } from '../types';
 import { generateUUID, isValidUUID } from '../utils/uuid';
-import { SUPABASE_CONFIG } from '../constants';
+import { getSupabaseConfig } from '../constants';
+import { localStorageService } from './storage/localStorageService';
 
 // 统一的同步结果类型
 export interface SyncResult {
@@ -14,7 +15,7 @@ export interface SyncResult {
 async function fetchWithTimeout(
   url: string,
   options: RequestInit,
-  timeout: number = SUPABASE_CONFIG.TIMEOUT
+  timeout: number = getSupabaseConfig().TIMEOUT
 ): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -44,10 +45,13 @@ class SupabaseService {
   private _client: SupabaseClient | null = null;
   private isConfigured: boolean = false;
   private _userName: string = '';
+  private _url: string = '';
+  private _key: string = '';
   private isInitializing: boolean = false;
   private syncQueue: Promise<any>[] = [];
   private isSyncing: boolean = false;
   private readonly MAX_CONCURRENT_SYNC = 3;
+  private readonly STORAGE_KEY = 'supabase_config';
 
   get client(): SupabaseClient | null {
     return this._client;
@@ -101,20 +105,56 @@ class SupabaseService {
   }
 
   constructor() {
-    if (SUPABASE_CONFIG.URL && SUPABASE_CONFIG.KEY) {
-      try {
-        this._client = createClient(SUPABASE_CONFIG.URL, SUPABASE_CONFIG.KEY);
-        this.isConfigured = true;
-        console.log('✅ Supabase 客户端初始化成功');
-      } catch (e) {
-        console.error('❌ Supabase 初始化失败:', e);
-        console.error('   URL:', SUPABASE_CONFIG.URL);
-        console.error('   KEY:', SUPABASE_CONFIG.KEY ? '已设置' : '未设置');
-      }
+    // 只从本地存储加载配置（用户手动填写的）
+    this.loadConfigFromStorage();
+    
+    // 如果配置完整，初始化客户端
+    if (this._url && this._key) {
+      this.initializeClient();
     } else {
-      console.warn('⚠️ Supabase 配置缺失');
-      console.warn('   URL:', SUPABASE_CONFIG.URL || '未设置');
-      console.warn('   KEY:', SUPABASE_CONFIG.KEY ? '已设置' : '未设置');
+      console.warn('⚠️ Supabase 配置缺失，请在登录页面配置');
+    }
+  }
+
+  // 配置Supabase连接
+  async configure(url: string, key: string, userName: string): Promise<SyncResult> {
+    if (!url || !key) {
+      return { 
+        success: false, 
+        message: '❌ 请填写完整的Supabase配置（URL和API Key）',
+        errorType: 'missing_config' 
+      };
+    }
+    
+    try {
+      // 保存配置到本地存储
+      this._url = url;
+      this._key = key;
+      this._userName = this.cleanUserName(userName);
+      this.saveConfigToStorage();
+      
+      // 重新初始化客户端
+      this.initializeClient();
+      
+      if (this._client) {
+        return { 
+          success: true, 
+          message: `✅ Supabase配置成功！已连接用户：${this._userName}` 
+        };
+      } else {
+        return { 
+          success: false, 
+          message: '❌ Supabase客户端初始化失败',
+          errorType: 'client_init_failed' 
+        };
+      }
+    } catch (error) {
+      console.error('Supabase配置失败:', error);
+      return { 
+        success: false, 
+        message: '❌ Supabase配置失败，请检查URL和API Key是否正确',
+        errorType: 'configuration_error' 
+      };
     }
   }
 
@@ -122,12 +162,13 @@ class SupabaseService {
     if (!this._client) {
       return { 
         success: false, 
-        message: '❌ 云端服务未配置，请检查环境变量（.env.local）并重启开发服务器',
+        message: '❌ 云端服务未配置，请先配置Supabase连接',
         errorType: 'missing_config' 
       };
     }
     const cleanName = this.cleanUserName(userName);
     this._userName = cleanName;
+    this.saveConfigToStorage();
     return { success: true, message: `✅ 已连接用户：${cleanName}` };
   }
 
@@ -138,9 +179,73 @@ class SupabaseService {
     return this.setUserName(userName);
   }
 
+  // 从本地存储加载配置
+  private loadConfigFromStorage(): void {
+    try {
+      const config = localStorageService.get(this.STORAGE_KEY);
+      if (config) {
+        this._url = config.url || '';
+        this._key = config.key || '';
+        this._userName = config.userName || '';
+      }
+    } catch (error) {
+      console.warn('加载Supabase配置失败:', error);
+    }
+  }
+
+  // 保存配置到本地存储
+  private saveConfigToStorage(): void {
+    try {
+      localStorageService.save(this.STORAGE_KEY, {
+        url: this._url,
+        key: this._key,
+        userName: this._userName
+      });
+    } catch (error) {
+      console.warn('保存Supabase配置失败:', error);
+    }
+  }
+
+  // 初始化Supabase客户端
+  private initializeClient(): void {
+    try {
+      this._client = createClient(this._url, this._key);
+      this.isConfigured = true;
+      console.log('✅ Supabase 客户端初始化成功');
+      console.log('   URL:', this._url);
+      console.log('   Key:', this._key ? '已设置' : '未设置');
+      console.log('   用户:', this._userName || '未设置');
+    } catch (e) {
+      console.error('❌ Supabase 初始化失败:', e);
+      console.error('   URL:', this._url);
+      console.error('   KEY:', this._key ? '已设置' : '未设置');
+    }
+  }
+
+  // 获取当前配置状态
+  getConfig(): { url: string; key: string; userName: string; isConfigured: boolean } {
+    return {
+      url: this._url,
+      key: this._key,
+      userName: this._userName,
+      isConfigured: this.isConfigured
+    };
+  }
+
   clearConfig(): void {
-    // Client is persistent, just clear user session
+    // 清除所有配置
+    this._client = null;
+    this._url = '';
+    this._key = '';
     this._userName = '';
+    this.isConfigured = false;
+    
+    // 从本地存储删除配置
+    try {
+      localStorage.removeItem(this.STORAGE_KEY);
+    } catch (error) {
+      console.warn('清除Supabase配置失败:', error);
+    }
   }
 
   /**

@@ -8,21 +8,25 @@ const SettingsPage = lazy(() => import('../pages/SettingsPage'));
 
 import { useAppContext } from '../context/AppContext';
 import { useSentenceContext } from '../context/SentenceContext';
-import { syncQueueService } from '../services/syncQueueService';
+import { syncQueueService, SyncStatus } from '../services/syncQueueService';
 import { supabaseService } from '../services/supabaseService';
-import EnvCheckPanel from './EnvCheckPanel';
 
 // const SYNC_MESSAGE_DURATION = 3000; // Unused
 
 const MainLayout: React.FC = () => {
   const { 
     currentView, setView, settings, isOnline, isConfigured, isLoading, 
-    syncMessage, isSyncing, configError, updateSettings, setSyncMessage 
+    syncMessage, isSyncing, configError, updateSettings, setSyncMessage,
+    refreshConfig
   } = useAppContext();
   const { sentences, refreshSentences } = useSentenceContext();
   
   const [isNavVisible, setIsNavVisible] = useState(true); // Default to true
   const [userNameInput, setUserNameInput] = useState('');
+  const [urlInput, setUrlInput] = useState('');
+  const [keyInput, setKeyInput] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
   const [syncQueueStatus, setSyncQueueStatus] = useState(syncQueueService.getQueueStatus());
   const [syncToast, setSyncToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' | 'info' }>({ 
     show: false, 
@@ -52,7 +56,7 @@ const MainLayout: React.FC = () => {
       toastTimeouts.push(timeout);
     };
     
-    const handleQueueChanged = (status: { pendingCount: number; isProcessing: boolean }) => {
+    const handleQueueChanged = (status: SyncStatus) => {
       setSyncQueueStatus(status);
     };
     
@@ -72,9 +76,33 @@ const MainLayout: React.FC = () => {
     };
   }, []);
 
-  const handleSaveUser = () => {
-    if (!userNameInput.trim()) return;
-    updateSettings({ ...settings, userName: userNameInput.trim() });
+  const handleSaveUser = async () => {
+    if (!urlInput.trim() || !keyInput.trim() || !userNameInput.trim()) {
+      setLoginError('请填写完整的配置信息');
+      return;
+    }
+    
+    setLoginLoading(true);
+    setLoginError('');
+    
+    try {
+      const result = await supabaseService.configure(
+        urlInput.trim(),
+        keyInput.trim(),
+        userNameInput.trim()
+      );
+      
+      if (result.success) {
+        updateSettings({ ...settings, userName: userNameInput.trim() });
+        await refreshConfig();
+      } else {
+        setLoginError(result.message);
+      }
+    } catch (error: any) {
+      setLoginError(error.message || '配置失败，请检查网络连接');
+    } finally {
+      setLoginLoading(false);
+    }
   };
 
   const resetDatabase = async () => {
@@ -100,25 +128,51 @@ const MainLayout: React.FC = () => {
       <div className="w-full space-y-6">
         <div className="text-center">
           <h2 className="text-2xl font-bold mb-2">欢迎使用每日三句</h2>
-          <p className="text-gray-500 text-sm">请输入用户名以同步您的专属数据</p>
+          <p className="text-gray-500 text-sm">请配置云端连接以同步您的专属数据</p>
         </div>
         
-        {/* 🔴 新增：环境诊断面板 */}
-        <EnvCheckPanel />
-        
-        {configError && (
+        {(configError || loginError) && (
           <div className="p-3 bg-red-50 text-red-600 rounded-lg text-sm animate-fade-in border border-red-100">
             <div className="flex items-start gap-2">
               <span className="text-lg">⚠️</span>
               <div>
                 <p className="font-bold">配置错误</p>
-                <p className="text-xs mt-1">{configError}</p>
+                <p className="text-xs mt-1">{configError || loginError}</p>
               </div>
             </div>
           </div>
         )}
         
         <div className="space-y-4">
+          {/* Supabase URL */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Supabase Project URL
+            </label>
+            <input
+              type="text"
+              value={urlInput}
+              onChange={(e) => setUrlInput(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+              placeholder="https://your-project.supabase.co"
+            />
+          </div>
+          
+          {/* API Key */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Supabase Anonymous Key
+            </label>
+            <input
+              type="password"
+              value={keyInput}
+              onChange={(e) => setKeyInput(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+              placeholder="sb_publishable_..."
+            />
+          </div>
+          
+          {/* 用户名 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">用户名</label>
             <input
@@ -132,12 +186,24 @@ const MainLayout: React.FC = () => {
               用于在云端隔离您的学习数据
             </p>
           </div>
+          
           <button
             onClick={handleSaveUser}
-            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold shadow-lg hover:shadow-xl transition-all active:scale-95"
+            disabled={loginLoading || !urlInput.trim() || !keyInput.trim() || !userNameInput.trim()}
+            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold shadow-lg hover:shadow-xl transition-all active:scale-95 disabled:bg-gray-300 disabled:cursor-not-allowed"
           >
-            开始使用
+            {loginLoading ? '连接中...' : '登录'}
           </button>
+        </div>
+        
+        {/* 配置说明 */}
+        <div className="p-3 bg-blue-50 rounded-lg text-sm text-blue-700">
+          <p className="font-medium">配置说明：</p>
+          <ul className="mt-1 space-y-1 text-xs">
+            <li>• 从 <a href="https://supabase.com" target="_blank" rel="noreferrer" className="underline">Supabase</a> 获取项目URL和API Key</li>
+            <li>• 用户名用于区分不同用户的数据</li>
+            <li>• 配置成功后即可使用云端同步功能</li>
+          </ul>
         </div>
         
         <div className="text-center pt-4">

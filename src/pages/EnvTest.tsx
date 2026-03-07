@@ -1,5 +1,5 @@
 import React from 'react';
-import { SUPABASE_CONFIG } from '../constants';
+import { getSupabaseConfig } from '../constants';
 
 const EnvTest: React.FC = () => {
   return (
@@ -10,9 +10,9 @@ const EnvTest: React.FC = () => {
         <div className="p-4 bg-blue-50 rounded-lg">
           <h2 className="font-bold text-blue-700">Supabase 配置</h2>
           <div className="mt-2 space-y-2 text-sm">
-            <p><strong>URL:</strong> <code className="bg-white px-2 py-1 rounded">{SUPABASE_CONFIG.URL || '❌ 未设置'}</code></p>
-            <p><strong>KEY:</strong> <code className="bg-white px-2 py-1 rounded">{SUPABASE_CONFIG.KEY ? '✅ 已设置' : '❌ 未设置'}</code></p>
-            <p><strong>长度:</strong> {SUPABASE_CONFIG.KEY ? `${SUPABASE_CONFIG.KEY.length} 字符` : 'N/A'}</p>
+            <p><strong>URL:</strong> <code className="bg-white px-2 py-1 rounded">{getSupabaseConfig().URL || '❌ 未设置'}</code></p>
+            <p><strong>KEY:</strong> <code className="bg-white px-2 py-1 rounded">{getSupabaseConfig().KEY ? '✅ 已设置' : '❌ 未设置'}</code></p>
+            <p><strong>长度:</strong> {getSupabaseConfig().KEY ? `${getSupabaseConfig().KEY.length} 字符` : 'N/A'}</p>
           </div>
         </div>
         

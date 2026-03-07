@@ -92,14 +92,17 @@ export const NETWORK_CONFIG = {
   CHECK_INTERVAL: 60000        // 延长检测间隔，减少不必要的请求
 };
 
-// Supabase 配置
-export const SUPABASE_CONFIG = {
+// Supabase 配置 - 使用函数动态获取环境变量
+export const getSupabaseConfig = () => ({
   TIMEOUT: 30000,
   MAX_RETRIES: 3,
   RETRY_DELAY: 1000,
   URL: import.meta.env.VITE_SUPABASE_URL || '',
   KEY: import.meta.env.VITE_SUPABASE_ANON_KEY || ''
-};
+});
+
+// 兼容性导出（保持现有代码不变）
+export const SUPABASE_CONFIG = getSupabaseConfig();
 
 // 每日目标默认值
 export const DEFAULT_DAILY_TARGETS = {

@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { storageService } from '../services/storage';
-import { supabaseService, SyncResult } from '../services/supabaseService';
+import { supabaseService } from '../services/supabaseService';
 import { syncQueueService } from '../services/syncQueueService';
 import { UserSettings } from '../types';
 import EnvCheckPanel from '../components/EnvCheckPanel';
+import SupabaseConfigPanel from '../components/SupabaseConfigPanel';
 
 // 🔴 统一配置KEY（和App.tsx保持一致）
 const STORAGE_CONFIG_KEY = 'supabase_config_with_username';
@@ -17,25 +18,6 @@ interface SettingsPageProps {
 
 const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpdate }) => {
   const [settings, setSettings] = useState<UserSettings>(storageService.getSettings());
-  // 🔴 读取统一的配置KEY，兼容旧配置
-  const [syncConfig, setSyncConfig] = useState(() => {
-    // 优先读取新配置，兼容旧配置
-    const newConfig = localStorage.getItem(STORAGE_CONFIG_KEY);
-    const oldConfig = localStorage.getItem('d3s_sync_config');
-    
-    if (newConfig) {
-      const { url, key } = JSON.parse(newConfig);
-      return { url, key };
-    } else if (oldConfig) {
-      return JSON.parse(oldConfig);
-    }
-    // 如果没有本地配置，尝试使用环境变量
-    return { 
-      url: import.meta.env.VITE_SUPABASE_URL || '', 
-      key: import.meta.env.VITE_SUPABASE_ANON_KEY || '' 
-    };
-  });
-
   const [isSyncReady, setIsSyncReady] = useState(supabaseService.isReady);
   const [loading, setLoading] = useState<boolean>(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -61,20 +43,13 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
     };
   }, [updateSyncStatus]);
 
-  // 🔴 优化：用户昵称修改后，同步更新本地配置的用户名
+  // 更新设置
   const handleUpdate = <K extends keyof UserSettings>(key: K, value: UserSettings[K]) => {
     setSettings(prev => {
       const newSettings = { ...prev, [key]: value };
-      // 如果修改的是用户名，同步更新本地存储的配置
+      // 如果修改的是用户名，同步更新Supabase配置
       if (key === 'userName' && isSyncReady) {
-        const savedConfig = localStorage.getItem(STORAGE_CONFIG_KEY);
-        if (savedConfig) {
-          const config = JSON.parse(savedConfig);
-          localStorage.setItem(STORAGE_CONFIG_KEY, JSON.stringify({
-            ...config,
-            name: value as string
-          }));
-        }
+        supabaseService.setUserName(value as string);
       }
       return newSettings;
     });
@@ -94,81 +69,19 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
     }
   }, [message]);
 
-  // 🔴 优化：保存同步配置（统一KEY+完善错误处理+内联提示+配置验证）
-  const handleSaveSyncConfig = async () => {
-    // 前置校验
-    if (!settings.userName) {
-      setMessage({ text: '请先填写用户昵称后再配置同步！', type: 'error' });
-      return;
-    }
-    if (!syncConfig.url || !syncConfig.key) {
-      setMessage({ text: '请填写完整的Supabase URL和Anon Key！', type: 'error' });
-      return;
-    }
-    
-    // 验证 URL 格式
-    let parsedUrl;
-    try {
-      parsedUrl = new URL(syncConfig.url);
-      if (parsedUrl.protocol !== 'https:') {
-        setMessage({ text: '❌ Supabase URL 必须使用 HTTPS 协议', type: 'error' });
-        return;
-      }
-    } catch {
-      setMessage({ text: '❌ Supabase URL 格式无效', type: 'error' });
-      return;
-    }
-    
-    // 验证 Key 格式（基本检查）
-    if (syncConfig.key.length < 20) {
-      setMessage({ text: '❌ Supabase Key 长度无效（应 ≥ 20 字符）', type: 'error' });
-      return;
-    }
-    
-    if (isSyncReady) {
-      setMessage({ text: '✅ 云同步已激活，无需重复配置！', type: 'info' });
-      return;
-    }
-    if (loading) return;
-
-    setLoading(true);
-    try {
-      // 保存到统一的配置KEY
-      localStorage.setItem(STORAGE_CONFIG_KEY, JSON.stringify({
-        url: syncConfig.url,
-        key: syncConfig.key,
-        name: settings.userName
-      }));
-      // 移除旧配置，避免冲突
-      localStorage.removeItem('d3s_sync_config');
-      
-      const initResult: SyncResult = await supabaseService.init(
-        syncConfig.url, 
-        syncConfig.key, 
-        settings.userName
-      );
-
-      if (initResult.success) {
-        setMessage({ text: initResult.message, type: 'success' });
-        updateSyncStatus();
-        if (onConfigUpdate) {
-          onConfigUpdate();
-        }
-      } else {
-        setMessage({ text: `配置失败：${initResult.message}`, type: 'error' });
-      }
-    } catch (err: any) {
-      console.error('初始化异常:', err);
-      setMessage({ 
-        text: `配置异常：${err.message || '请检查网络或Supabase配置'}`, 
-        type: 'error' 
-      });
-    } finally {
-      setLoading(false);
-    }
+  // 配置成功回调
+  const handleConfigSuccess = () => {
+    setMessage({ text: '✅ Supabase配置成功！', type: 'success' });
+    updateSyncStatus();
+    onConfigUpdate?.();
   };
 
-  // 🔴 优化：清空数据（更安全的错误处理+状态重置）
+  // 配置错误回调
+  const handleConfigError = (errorMessage: string) => {
+    setMessage({ text: errorMessage, type: 'error' });
+  };
+
+  // 清空数据
   const handleClearAllData = async () => {
     const confirmed = window.confirm(
       '⚠️ 警告：这将永久删除本地所有句子、学习进度和账号配置。此操作无法撤销，确定要继续吗？'
@@ -179,10 +92,6 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
     try {
       await storageService.clearAllData();
       supabaseService.clearConfig();
-      // 清空配置状态
-      setSyncConfig({ url: '', key: '' });
-      localStorage.removeItem(STORAGE_CONFIG_KEY);
-      localStorage.removeItem('d3s_sync_config');
       // 重置本地设置
       setSettings(storageService.getSettings());
       updateSyncStatus(); // 更新同步状态
@@ -195,13 +104,12 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
     }
   };
 
-  // 🔴 优化：断开同步（更安全的状态处理）
+  // 断开同步
   const handleDisconnectSync = () => {
     if (loading) return;
     
     try {
       supabaseService.clearConfig();
-      setSyncConfig({ url: '', key: '' });
       updateSyncStatus();
       setMessage({ text: '已断开云同步，仅使用本地数据', type: 'info' });
     } catch (err: any) {
@@ -240,53 +148,13 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
             连接 Supabase 实现手机与电脑间的数据即时同步。支持离线优先，网络恢复后自动补登。
           </p>
 
-          {!isSyncReady ? (
-            <div className="space-y-4">
-              <input 
-                type="text" 
-                placeholder="Supabase Project URL" 
-                value={syncConfig.url} 
-                onChange={e => setSyncConfig({ ...syncConfig, url: e.target.value })}
-                className="w-full bg-white/10 border border-white/20 rounded-2xl px-6 py-4 outline-none placeholder:text-white/30 text-sm font-bold"
-                disabled={loading}
-              />
-              <input 
-                type="password" 
-                placeholder="Anon Key" 
-                value={syncConfig.key} 
-                onChange={e => setSyncConfig({ ...syncConfig, key: e.target.value })}
-                className="w-full bg-white/10 border border-white/20 rounded-2xl px-6 py-4 outline-none placeholder:text-white/30 text-sm font-bold"
-                disabled={loading}
-              />
-              <button 
-                onClick={handleSaveSyncConfig}
-                disabled={loading}
-                className="w-full bg-white text-blue-600 py-4 rounded-2xl font-black text-sm shadow-xl active:scale-95 transition-all"
-                style={{ opacity: loading ? 0.7 : 1, cursor: loading ? 'not-allowed' : 'pointer' }}
-              >
-                {loading ? '配置中...' : '连接数据库'}
-              </button>
-              <p className="text-[10px] text-white/50 text-center uppercase tracking-widest">
-                请在 Supabase 控制台获取 API 信息 | 数据将按【用户昵称】隔离
-              </p>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center gap-6 py-4">
-              <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center text-2xl backdrop-blur-xl">☁️</div>
-              <div className="text-center">
-                <p className="font-black">云同步已激活</p>
-                <p className="text-white/80 font-bold mt-1">当前同步用户：{settings.userName}</p>
-                <p className="text-[10px] text-white/60 uppercase tracking-widest mt-1">Data is safe and up to date</p>
-              </div>
-              <button 
-                onClick={handleDisconnectSync}
-                disabled={loading}
-                className="text-xs font-black text-white/50 uppercase tracking-widest hover:text-white transition-colors"
-              >
-                断开云同步
-              </button>
-            </div>
-          )}
+          {/* 新的Supabase配置面板 */}
+          <div className="bg-white/10 rounded-2xl p-6 backdrop-blur-sm">
+            <SupabaseConfigPanel 
+              onConfigSuccess={handleConfigSuccess}
+              onConfigError={handleConfigError}
+            />
+          </div>
         </div>
       </div>
 
@@ -433,6 +301,31 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
               </div>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Logout Section */}
+      <div className="space-y-2">
+        <h3 className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">账户</h3>
+        <div className="apple-card p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h4 className="text-sm font-black text-gray-700 uppercase tracking-tight">退出登录</h4>
+              <p className="text-[10px] text-gray-400 font-medium mt-1 leading-relaxed max-w-md">
+                断开云端连接，返回登录界面。本地数据将保留。
+              </p>
+            </div>
+            <button 
+              onClick={() => {
+                if (window.confirm('确定要退出登录吗？您需要重新输入配置信息才能继续使用云同步。')) {
+                  supabaseService.clearConfig();
+                  window.location.reload();
+                }
+              }}
+              disabled={loading}
+              className="bg-gray-500 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest shadow-lg shadow-gray-200 active:scale-95 transition-all whitespace-nowrap hover:bg-gray-600"
+            >
+              退出登录
+            </button>
         </div>
       </div>
 

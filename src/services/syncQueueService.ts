@@ -36,7 +36,7 @@ interface StatsSyncOperation {
 
 type OfflineOperation = MarkLearnedOperation | ReviewFeedbackOperation | AddSentenceOperation | DictationRecordOperation | StatsSyncOperation;
 
-interface SyncStatus {
+export interface SyncStatus {
   pendingCount: number;
   markLearnedCount: number;
   reviewFeedbackCount: number;

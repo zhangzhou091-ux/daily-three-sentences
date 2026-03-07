@@ -43,14 +43,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         localStorageService.startPeriodicCleanup();
         performanceMonitor.startPeriodicReporting();
         
-        // 尝试初始化 Supabase (如果 settings.userName 存在)
-        if (settings.userName) {
-          const result = await supabaseService.setUserName(settings.userName);
-          if (result.success) {
-            setIsConfigured(true);
-          } else {
-            setConfigError(result.message);
-          }
+        // 检查 Supabase 是否已完整配置（URL、KEY、用户名）
+        const config = supabaseService.getConfig();
+        if (config.isConfigured && config.userName) {
+          setIsConfigured(true);
+        } else {
+          setIsConfigured(false);
         }
       } catch (err) {
         console.error('App init failed:', err);
@@ -71,34 +69,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
   }, []);
 
-  // 更新设置并重新初始化 Supabase
+  // 更新设置
   const updateSettings = useCallback(async (newSettings: UserSettings) => {
     storageService.saveSettings(newSettings);
     setSettings(newSettings);
-    
-    if (newSettings.userName !== settings.userName) {
-      if (newSettings.userName) {
-        const result = await supabaseService.setUserName(newSettings.userName);
-        if (result.success) {
-          setIsConfigured(true);
-          setSyncMessage(`已切换用户: ${newSettings.userName}`);
-          setTimeout(() => setSyncMessage(''), 3000);
-        } else {
-          setConfigError(result.message);
-          setIsConfigured(false);
-        }
-      } else {
-        setIsConfigured(false);
-      }
-    }
-  }, [settings.userName]);
+  }, []);
 
   const refreshConfig = useCallback(async () => {
     const currentSettings = storageService.getSettings();
     setSettings(currentSettings);
-    if (currentSettings.userName) {
-      await supabaseService.setUserName(currentSettings.userName);
+    
+    // 检查 Supabase 是否已完整配置
+    const config = supabaseService.getConfig();
+    if (config.isConfigured && config.userName) {
       setIsConfigured(true);
+      setConfigError('');
+    } else {
+      setIsConfigured(false);
     }
   }, []);
 

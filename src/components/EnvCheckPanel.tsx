@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { SUPABASE_CONFIG } from '../constants';
+import { getSupabaseConfig } from '../constants';
 
 const EnvCheckPanel: React.FC = () => {
   const [envInfo, setEnvInfo] = useState<{
@@ -12,10 +12,11 @@ const EnvCheckPanel: React.FC = () => {
   } | null>(null);
 
   useEffect(() => {
+    const config = getSupabaseConfig();
     setEnvInfo({
-      url: SUPABASE_CONFIG.URL || '❌ 未设置',
-      keySet: !!SUPABASE_CONFIG.KEY,
-      keyLength: SUPABASE_CONFIG.KEY ? SUPABASE_CONFIG.KEY.length : null,
+      url: config.URL || '❌ 未设置',
+      keySet: !!config.KEY,
+      keyLength: config.KEY ? config.KEY.length : null,
       mode: import.meta.env.MODE || 'default',
       dev: import.meta.env.DEV,
       prod: import.meta.env.PROD

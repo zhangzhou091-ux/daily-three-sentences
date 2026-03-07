@@ -1,5 +1,5 @@
 import React from 'react';
-import { SUPABASE_CONFIG } from '../constants';
+import { getSupabaseConfig } from '../constants';
 
 const EnvTestPage: React.FC = () => {
   return (
@@ -15,19 +15,19 @@ const EnvTestPage: React.FC = () => {
             <div className="space-y-3 text-sm">
               <div>
                 <p className="text-blue-200 text-xs uppercase tracking-widest mb-1">Project URL</p>
-                <p className={`font-mono break-all ${SUPABASE_CONFIG.URL?.includes('enaovozvdpivbhjoetkp') ? 'text-white' : 'text-blue-200/50'}`}>
-                  {SUPABASE_CONFIG.URL || '❌ 未设置'}
+                <p className={`font-mono break-all ${getSupabaseConfig().URL?.includes('enaovozvdpivbhjoetkp') ? 'text-white' : 'text-blue-200/50'}`}>
+                  {getSupabaseConfig().URL || '❌ 未设置'}
                 </p>
               </div>
               <div>
                 <p className="text-blue-200 text-xs uppercase tracking-widest mb-1">API Key</p>
                 <div className="flex items-center gap-2">
-                  <span className={`font-bold ${SUPABASE_CONFIG.KEY ? 'text-white' : 'text-blue-200/50'}`}>
-                    {SUPABASE_CONFIG.KEY ? '✅ 已配置' : '❌ 未配置'}
+                  <span className={`font-bold ${getSupabaseConfig().KEY ? 'text-white' : 'text-blue-200/50'}`}>
+                    {getSupabaseConfig().KEY ? '✅ 已配置' : '❌ 未配置'}
                   </span>
-                  {SUPABASE_CONFIG.KEY && (
+                  {getSupabaseConfig().KEY && (
                     <span className="text-xs bg-white/20 px-2 py-0.5 rounded">
-                      {SUPABASE_CONFIG.KEY.length} 字符
+                      {getSupabaseConfig().KEY.length} 字符
                     </span>
                   )}
                 </div>
@@ -35,8 +35,8 @@ const EnvTestPage: React.FC = () => {
               <div>
                 <p className="text-blue-200 text-xs uppercase tracking-widest mb-1">配置状态</p>
                 <div className="flex gap-2">
-                  <span className={`px-3 py-1 rounded-full text-xs font-bold ${SUPABASE_CONFIG.URL && SUPABASE_CONFIG.KEY ? 'bg-green-500 text-white' : 'bg-red-500 text-white'}`}>
-                    {SUPABASE_CONFIG.URL && SUPABASE_CONFIG.KEY ? '✅ 完整' : '❌ 不完整'}
+                  <span className={`px-3 py-1 rounded-full text-xs font-bold ${getSupabaseConfig().URL && getSupabaseConfig().KEY ? 'bg-green-500 text-white' : 'bg-red-500 text-white'}`}>
+                    {getSupabaseConfig().URL && getSupabaseConfig().KEY ? '✅ 完整' : '❌ 不完整'}
                   </span>
                 </div>
               </div>

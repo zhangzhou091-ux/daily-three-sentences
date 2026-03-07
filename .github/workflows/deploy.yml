@@ -32,7 +32,11 @@ jobs:
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-        run: npm run build
+        run: |
+          echo "检查环境变量注入:"
+          echo "VITE_SUPABASE_URL 长度: ${#VITE_SUPABASE_URL}"
+          echo "VITE_SUPABASE_ANON_KEY 长度: ${#VITE_SUPABASE_ANON_KEY}"
+          npm run build
 
       # 5. 部署到 gh-pages 分支
       - name: Deploy to GitHub Pages
