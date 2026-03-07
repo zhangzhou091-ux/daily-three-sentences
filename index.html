@@ -13,17 +13,17 @@
   <!-- 新增：禁止iOS自动为图标添加圆角/高光，强制使用自定义样式 -->
   <meta name="apple-touch-icon-precomposed" content="true">
 
-  <!-- ✅ 修复：使用绝对路径避免子路径问题，添加错误处理 -->
+  <!-- ✅ 修复：使用相对路径避免子路径问题，添加错误处理 -->
   <!-- iPhone/iPod Touch (180x180) - 核心尺寸 -->
-  <link rel="apple-touch-icon" sizes="180x180" href="/daily-three-sentences/icons/apple-touch-icon-180x180.png" onerror="console.warn('Icon load failed:', this.href)">
+  <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon-180x180.png" onerror="console.warn('Icon load failed:', this.href)">
   <!-- iPad (167x167) -->
-  <link rel="apple-touch-icon" sizes="167x167" href="/daily-three-sentences/icons/apple-touch-icon-167x167.png" onerror="console.warn('Icon load failed:', this.href)">
+  <link rel="apple-touch-icon" sizes="167x167" href="./icons/apple-touch-icon-167x167.png" onerror="console.warn('Icon load failed:', this.href)">
   <!-- iPad Pro (152x152) -->
-  <link rel="apple-touch-icon" sizes="152x152" href="/daily-three-sentences/icons/apple-touch-icon-152x152.png" onerror="console.warn('Icon load failed:', this.href)">
+  <link rel="apple-touch-icon" sizes="152x152" href="./icons/apple-touch-icon-152x152.png" onerror="console.warn('Icon load failed:', this.href)">
   <!-- 备用基础尺寸 (120x120) -->
-  <link rel="apple-touch-icon" sizes="120x120" href="/daily-three-sentences/icons/apple-touch-icon-120x120.png" onerror="console.warn('Icon load failed:', this.href)">
+  <link rel="apple-touch-icon" sizes="120x120" href="./icons/apple-touch-icon-120x120.png" onerror="console.warn('Icon load failed:', this.href)">
   <!-- 兜底图标（无尺寸指定，兼容旧设备） -->
-  <link rel="apple-touch-icon" href="/daily-three-sentences/icons/apple-touch-icon.png" onerror="console.warn('Icon load failed:', this.href)">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" onerror="console.warn('Icon load failed:', this.href)">
 
   <!-- 优化：增加manifest.json存在性判断，避免404（改为相对路径） -->
   <link rel="manifest" href="/daily-three-sentences/assets/manifest-2bGunATJ.json" onerror="this.remove()">
@@ -33,18 +33,20 @@
 
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <script type="module" crossorigin src="/daily-three-sentences/assets/index-_rStkZKw.js"></script>
+  <script type="module" crossorigin src="/daily-three-sentences/assets/index-cPHULrI3.js"></script>
   <link rel="modulepreload" crossorigin href="/daily-three-sentences/assets/vendor-react-Bn46YZPJ.js">
-  <link rel="modulepreload" crossorigin href="/daily-three-sentences/assets/fsrs-D8Zv-EW4.js">
+  <link rel="modulepreload" crossorigin href="/daily-three-sentences/assets/fsrs-CY52gH4U.js">
   <link rel="modulepreload" crossorigin href="/daily-three-sentences/assets/vendor-supabase-CDGuCRB-.js">
-  <link rel="stylesheet" crossorigin href="/daily-three-sentences/assets/index-D2oI3XHD.css">
+  <link rel="stylesheet" crossorigin href="/daily-three-sentences/assets/index-Mf07chd8.css">
 <link rel="manifest" href="/daily-three-sentences/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/daily-three-sentences/registerSW.js"></script></head>
 <body>
   <div id="root"></div>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js');
+        // 使用相对路径注册Service Worker，适配GitHub Pages子路径
+        const basePath = import.meta.env.BASE_URL || '/daily-three-sentences/';
+        navigator.serviceWorker.register(basePath + 'sw.js');
       });
     }
   </script>
