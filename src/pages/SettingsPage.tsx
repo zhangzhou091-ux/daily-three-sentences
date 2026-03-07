@@ -3,6 +3,7 @@ import { storageService } from '../services/storage';
 import { supabaseService, SyncResult } from '../services/supabaseService';
 import { syncQueueService } from '../services/syncQueueService';
 import { UserSettings } from '../types';
+import EnvCheckPanel from '../components/EnvCheckPanel';
 
 // 🔴 统一配置KEY（和App.tsx保持一致）
 const STORAGE_CONFIG_KEY = 'supabase_config_with_username';
@@ -28,7 +29,11 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
     } else if (oldConfig) {
       return JSON.parse(oldConfig);
     }
-    return { url: '', key: '' };
+    // 如果没有本地配置，尝试使用环境变量
+    return { 
+      url: import.meta.env.VITE_SUPABASE_URL || '', 
+      key: import.meta.env.VITE_SUPABASE_ANON_KEY || '' 
+    };
   });
 
   const [isSyncReady, setIsSyncReady] = useState(supabaseService.isReady);
@@ -305,6 +310,12 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                   />
               </div>
             </div>
+          </div>
+
+          {/* 环境诊断面板 - 在设置页面显示更详细的信息 */}
+          <div className="space-y-2">
+            <h3 className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">环境诊断</h3>
+            <EnvCheckPanel />
           </div>
 
           {/* Daily Target Settings */}

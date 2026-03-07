@@ -105,15 +105,26 @@ class SupabaseService {
       try {
         this._client = createClient(SUPABASE_CONFIG.URL, SUPABASE_CONFIG.KEY);
         this.isConfigured = true;
+        console.log('✅ Supabase 客户端初始化成功');
       } catch (e) {
-        console.error('Supabase initialization failed:', e);
+        console.error('❌ Supabase 初始化失败:', e);
+        console.error('   URL:', SUPABASE_CONFIG.URL);
+        console.error('   KEY:', SUPABASE_CONFIG.KEY ? '已设置' : '未设置');
       }
+    } else {
+      console.warn('⚠️ Supabase 配置缺失');
+      console.warn('   URL:', SUPABASE_CONFIG.URL || '未设置');
+      console.warn('   KEY:', SUPABASE_CONFIG.KEY ? '已设置' : '未设置');
     }
   }
 
   async setUserName(userName: string): Promise<SyncResult> {
     if (!this._client) {
-      return { success: false, message: '云端服务未配置（请检查 .env）', errorType: 'missing_config' };
+      return { 
+        success: false, 
+        message: '❌ 云端服务未配置，请检查环境变量（.env.local）并重启开发服务器',
+        errorType: 'missing_config' 
+      };
     }
     const cleanName = this.cleanUserName(userName);
     this._userName = cleanName;
@@ -174,7 +185,7 @@ class SupabaseService {
 
   async syncSentences(localSentences: Sentence[]): Promise<{ sentences: Sentence[], message: string }> {
     if (!this._client || !this.isReady) {
-      return { sentences: localSentences, message: '未配置云同步，使用本地数据' };
+      return { sentences: localSentences, message: '☁️ 云同步未配置，使用本地数据' };
     }
     
     return this.enqueueSync(async () => {
@@ -332,7 +343,7 @@ class SupabaseService {
 
   async pushStats(stats: UserStats): Promise<SyncResult> {
     if (!this._client || !this.isReady) {
-      return { success: false, message: '未配置云同步，跳过统计推送' };
+      return { success: false, message: '☁️ 云同步未配置，跳过统计推送' };
     }
     try {
       const cleanUserName = this._userName;
@@ -423,7 +434,7 @@ class SupabaseService {
 
   async pullStats(): Promise<{ stats: UserStats | null, message: string }> {
     if (!this._client || !this.isReady) {
-      return { stats: null, message: '未配置云同步' };
+      return { stats: null, message: '☁️ 云同步未配置' };
     }
     try {
       const { data, error } = await this._client
@@ -562,7 +573,7 @@ class SupabaseService {
 
   async pushDailySelection(date: string, sentenceIds: string[]): Promise<SyncResult> {
     if (!this._client || !this.isReady) {
-      return { success: false, message: '未配置云同步，跳过当日列表推送' };
+      return { success: false, message: '☁️ 云同步未配置，跳过当日列表推送' };
     }
     try {
       const cleanUserName = this._userName;
@@ -589,7 +600,7 @@ class SupabaseService {
 
   async pullDailySelection(date: string): Promise<{ ids: string[] | null, message: string }> {
     if (!this._client || !this.isReady) {
-      return { ids: null, message: '未配置云同步，跳过当日列表拉取' };
+      return { ids: null, message: '☁️ 云同步未配置，跳过当日列表拉取' };
     }
     try {
       const cleanUserName = this._userName;

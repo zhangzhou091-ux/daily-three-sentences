@@ -10,6 +10,7 @@ import { useAppContext } from '../context/AppContext';
 import { useSentenceContext } from '../context/SentenceContext';
 import { syncQueueService } from '../services/syncQueueService';
 import { supabaseService } from '../services/supabaseService';
+import EnvCheckPanel from './EnvCheckPanel';
 
 // const SYNC_MESSAGE_DURATION = 3000; // Unused
 
@@ -101,11 +102,22 @@ const MainLayout: React.FC = () => {
           <h2 className="text-2xl font-bold mb-2">欢迎使用每日三句</h2>
           <p className="text-gray-500 text-sm">请输入用户名以同步您的专属数据</p>
         </div>
+        
+        {/* 🔴 新增：环境诊断面板 */}
+        <EnvCheckPanel />
+        
         {configError && (
-          <div className="p-2 bg-red-50 text-red-500 rounded text-sm animate-fade-in">
-            {configError}
+          <div className="p-3 bg-red-50 text-red-600 rounded-lg text-sm animate-fade-in border border-red-100">
+            <div className="flex items-start gap-2">
+              <span className="text-lg">⚠️</span>
+              <div>
+                <p className="font-bold">配置错误</p>
+                <p className="text-xs mt-1">{configError}</p>
+              </div>
+            </div>
           </div>
         )}
+        
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">用户名</label>
@@ -113,16 +125,25 @@ const MainLayout: React.FC = () => {
               type="text"
               value={userNameInput}
               onChange={(e) => setUserNameInput(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
               placeholder="请输入您的用户名"
             />
+            <p className="text-[10px] text-gray-500 mt-1">
+              用于在云端隔离您的学习数据
+            </p>
           </div>
           <button
             onClick={handleSaveUser}
-            className="w-full py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md"
+            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold shadow-lg hover:shadow-xl transition-all active:scale-95"
           >
             开始使用
           </button>
+        </div>
+        
+        <div className="text-center pt-4">
+          <p className="text-[10px] text-gray-400">
+            数据将加密存储在云端 · 支持多设备同步
+          </p>
         </div>
       </div>
     </div>

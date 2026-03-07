@@ -1,18 +1,21 @@
-
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import './index.css'; // Import Tailwind CSS
+import './index.css';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
-
 import { performanceMonitor } from './utils/performanceMonitor';
+import { checkEnv } from './services/envCheck';
 
 const rootElement = document.getElementById('root');
+
 if (!rootElement) {
   throw new Error("Could not find root element to mount to");
 }
 
-// ✅ 性能监控：标记应用开始渲染
+if (import.meta.env.DEV) {
+  checkEnv();
+}
+
 performanceMonitor.mark('appStart');
 
 const root = ReactDOM.createRoot(rootElement);
@@ -24,7 +27,6 @@ root.render(
   </React.StrictMode>
 );
 
-// ✅ 性能监控：标记应用渲染完成
 performanceMonitor.mark('appRendered');
 performanceMonitor.measure('appInitialization', 'appStart', 'appRendered');
 
