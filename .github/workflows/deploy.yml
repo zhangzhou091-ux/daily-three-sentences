@@ -1,0 +1,122 @@
+# 工作流名称
+name: Deploy to GitHub Pages
+
+# 触发条件：推送到 main 分支时自动运行
+on:
+  push:
+    branches: [ main ]
+
+# 工作流任务
+jobs:
+  deploy:
+    # 运行环境
+    runs-on: ubuntu-latest
+    steps:
+      # 1. 拉取仓库代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. 安装 Node.js（使用兼容的 Node 版本）
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      # 3. 安装项目依赖
+      - name: Install dependencies
+        run: npm install
+
+      # 4. 验证环境变量配置
+      - name: Validate environment variables
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          echo "🔍 验证环境变量配置..."
+          
+          if [ -z "$VITE_SUPABASE_URL" ]; then
+            echo "❌ 错误: VITE_SUPABASE_URL 未配置"
+            echo "请在 GitHub 仓库 Settings > Secrets and variables > Actions 中添加 VITE_SUPABASE_URL"
+            exit 1
+          fi
+          
+          if [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
+            echo "❌ 错误: VITE_SUPABASE_ANON_KEY 未配置"
+            echo "请在 GitHub 仓库 Settings > Secrets and variables > Actions 中添加 VITE_SUPABASE_ANON_KEY"
+            exit 1
+          fi
+          
+          if [[ ! "$VITE_SUPABASE_URL" =~ ^https:// ]]; then
+            echo "❌ 错误: VITE_SUPABASE_URL 必须以 https:// 开头"
+            exit 1
+          fi
+          
+          if [[ ! "$VITE_SUPABASE_URL" =~ supabase\.co$ ]] && [[ ! "$VITE_SUPABASE_URL" =~ supabase\.in$ ]]; then
+            echo "⚠️ 警告: VITE_SUPABASE_URL 可能不是有效的 Supabase 地址"
+          fi
+          
+          echo "✅ 环境变量验证通过"
+          echo "   VITE_SUPABASE_URL 长度: ${#VITE_SUPABASE_URL}"
+          echo "   VITE_SUPABASE_ANON_KEY 长度: ${#VITE_SUPABASE_ANON_KEY}"
+
+      # 5. 构建生产版本
+      - name: Build project
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          echo "🚀 开始构建..."
+          npm run build
+          echo "✅ 构建完成"
+
+      # 6. 验证构建产物（双重保险）
+      - name: Verify build output
+        run: |
+          echo "🔍 验证构建产物..."
+          
+          # 检查 dist 目录是否存在
+          if [ ! -d "./dist" ]; then
+            echo "❌ 错误: dist 目录不存在，构建可能失败"
+            exit 1
+          fi
+          
+          # 检查 index.html 是否存在
+          if [ ! -f "./dist/index.html" ]; then
+            echo "❌ 错误: dist/index.html 不存在"
+            exit 1
+          fi
+          
+          # 检查 JS 文件中是否包含 Supabase 配置
+          if grep -r "supabase" ./dist/assets/*.js > /dev/null 2>&1; then
+            echo "✅ Supabase 配置已正确注入到构建产物"
+          else
+            echo "❌ 错误: 构建产物中未找到 Supabase 配置"
+            echo "请检查环境变量是否正确传递到构建过程"
+            exit 1
+          fi
+          
+          # 检查是否存在明显的错误标记
+          if grep -r "VITE_SUPABASE_URL" ./dist/assets/*.js > /dev/null 2>&1; then
+            echo "⚠️ 警告: 构建产物中包含未替换的环境变量名"
+            echo "这可能意味着环境变量未正确注入"
+          fi
+          
+          # 统计构建产物大小
+          TOTAL_SIZE=$(du -sh ./dist | cut -f1)
+          JS_COUNT=$(find ./dist/assets -name "*.js" | wc -l)
+          CSS_COUNT=$(find ./dist/assets -name "*.css" | wc -l)
+          
+          echo "📊 构建产物统计:"
+          echo "   总大小: ${TOTAL_SIZE}"
+          echo "   JS 文件数: ${JS_COUNT}"
+          echo "   CSS 文件数: ${CSS_COUNT}"
+          
+          echo "✅ 构建产物验证通过"
+
+      # 7. 部署到 gh-pages 分支
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
