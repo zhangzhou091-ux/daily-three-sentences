@@ -1,54 +1,51 @@
 <!DOCTYPE html>
-<html lang="zh-CN"> <!-- 优化：改为中文语言标识，更贴合“每日三句”场景 -->
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>每日三句 | Daily Three Sentences</title>
   
-  <!-- PWA & Mobile Meta（修复弃用标签） -->
+  <!-- PWA & Mobile Meta -->
   <meta name="theme-color" content="#f5f5f7">
-  <!-- 移除弃用的apple-mobile-web-app-capable标签 -->
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="每日三句">
-  <!-- 新增：禁止iOS自动为图标添加圆角/高光，强制使用自定义样式 -->
   <meta name="apple-touch-icon-precomposed" content="true">
 
-  <!-- ✅ 修复：使用相对路径避免子路径问题，添加错误处理 -->
-  <!-- iPhone/iPod Touch (180x180) - 核心尺寸 -->
-  <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon-180x180.png" onerror="console.warn('Icon load failed:', this.href)">
-  <!-- iPad (167x167) -->
-  <link rel="apple-touch-icon" sizes="167x167" href="./icons/apple-touch-icon-167x167.png" onerror="console.warn('Icon load failed:', this.href)">
-  <!-- iPad Pro (152x152) -->
-  <link rel="apple-touch-icon" sizes="152x152" href="./icons/apple-touch-icon-152x152.png" onerror="console.warn('Icon load failed:', this.href)">
-  <!-- 备用基础尺寸 (120x120) -->
-  <link rel="apple-touch-icon" sizes="120x120" href="./icons/apple-touch-icon-120x120.png" onerror="console.warn('Icon load failed:', this.href)">
-  <!-- 兜底图标（无尺寸指定，兼容旧设备） -->
-  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" onerror="console.warn('Icon load failed:', this.href)">
+  <!-- 关键资源预加载：加速首屏渲染 -->
+  <link rel="preload" href="data:application/octet-stream;base64,aW1wb3J0IFJlYWN0IGZyb20gJ3JlYWN0JzsKaW1wb3J0IFJlYWN0RE9NIGZyb20gJ3JlYWN0LWRvbS9jbGllbnQnOwppbXBvcnQgJy4vaW5kZXguY3NzJzsKaW1wb3J0IEFwcCBmcm9tICcuL0FwcCc7CmltcG9ydCB7IEVycm9yQm91bmRhcnkgfSBmcm9tICcuL2NvbXBvbmVudHMvRXJyb3JCb3VuZGFyeSc7CmltcG9ydCB7IHBlcmZvcm1hbmNlTW9uaXRvciB9IGZyb20gJy4vdXRpbHMvcGVyZm9ybWFuY2VNb25pdG9yJzsKaW1wb3J0IHsgY2hlY2tFbnYgfSBmcm9tICcuL3NlcnZpY2VzL2VudkNoZWNrJzsKaW1wb3J0IHsgaW5pdEVycm9yUmVwb3J0ZXIgfSBmcm9tICcuL3V0aWxzL2Vycm9yUmVwb3J0ZXInOwoKY29uc3Qgcm9vdEVsZW1lbnQgPSBkb2N1bWVudC5nZXRFbGVtZW50QnlJZCgncm9vdCcpOwoKaWYgKCFyb290RWxlbWVudCkgewogIHRocm93IG5ldyBFcnJvcigiQ291bGQgbm90IGZpbmQgcm9vdCBlbGVtZW50IHRvIG1vdW50IHRvIik7Cn0KCmlmIChpbXBvcnQubWV0YS5lbnYuREVWKSB7CiAgY2hlY2tFbnYoKTsKfQoKaWYgKGltcG9ydC5tZXRhLmVudi5QUk9EKSB7CiAgaW5pdEVycm9yUmVwb3J0ZXIoKTsKfQoKcGVyZm9ybWFuY2VNb25pdG9yLm1hcmsoJ2FwcFN0YXJ0Jyk7Cgpjb25zdCByb290ID0gUmVhY3RET00uY3JlYXRlUm9vdChyb290RWxlbWVudCk7CnJvb3QucmVuZGVyKAogIDxSZWFjdC5TdHJpY3RNb2RlPgogICAgPEVycm9yQm91bmRhcnk+CiAgICAgIDxBcHAgLz4KICAgIDwvRXJyb3JCb3VuZGFyeT4KICA8L1JlYWN0LlN0cmljdE1vZGU+Cik7CgpwZXJmb3JtYW5jZU1vbml0b3IubWFyaygnYXBwUmVuZGVyZWQnKTsKcGVyZm9ybWFuY2VNb25pdG9yLm1lYXN1cmUoJ2FwcEluaXRpYWxpemF0aW9uJywgJ2FwcFN0YXJ0JywgJ2FwcFJlbmRlcmVkJyk7CgppZiAoaW1wb3J0Lm1ldGEuZW52LkRFVikgewogIGNvbnN0IG1ldHJpY3MgPSBwZXJmb3JtYW5jZU1vbml0b3IuZ2V0U3VtbWFyeSgpOwogIGNvbnNvbGUubG9nKCfwn5OKIOaAp+iDveebkeaOp+aRmOimgTonLCBtZXRyaWNzKTsKfQo=" as="script" crossorigin>
+  
+  <!-- DNS预解析：减少连接时间 -->
+  <link rel="dns-prefetch" href="https://fonts.loli.net">
+  <link rel="dns-prefetch" href="https://gstatic.loli.net">
 
-  <!-- 优化：增加manifest.json存在性判断，避免404（改为相对路径） -->
-  <link rel="manifest" href="/daily-three-sentences/assets/manifest-2bGunATJ.json" onerror="this.remove()">
+  <!-- Apple Touch Icons -->
+  <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon-180x180.png">
+  <link rel="apple-touch-icon" sizes="167x167" href="./icons/apple-touch-icon-167x167.png">
+  <link rel="apple-touch-icon" sizes="152x152" href="./icons/apple-touch-icon-152x152.png">
+  <link rel="apple-touch-icon" sizes="120x120" href="./icons/apple-touch-icon-120x120.png">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
 
+  <!-- 字体优化：系统字体优先 -->
+  <style>
+    /* 系统字体栈：优先使用系统字体，零加载时间 */
+    :root {
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    
+    /* 首屏关键CSS：立即渲染，避免FOIT */
+    body {
+      font-family: var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+  </style>
 
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <script type="module" crossorigin src="/daily-three-sentences/assets/index-cPHULrI3.js"></script>
-  <link rel="modulepreload" crossorigin href="/daily-three-sentences/assets/vendor-react-Bn46YZPJ.js">
-  <link rel="modulepreload" crossorigin href="/daily-three-sentences/assets/fsrs-CY52gH4U.js">
-  <link rel="modulepreload" crossorigin href="/daily-three-sentences/assets/vendor-supabase-CDGuCRB-.js">
-  <link rel="stylesheet" crossorigin href="/daily-three-sentences/assets/index-Mf07chd8.css">
+  <script type="module" crossorigin src="/daily-three-sentences/assets/index-CjFQBcwZ.js"></script>
+  <link rel="modulepreload" crossorigin href="/daily-three-sentences/assets/vendor-react-DEL-Qz5N.js">
+  <link rel="modulepreload" crossorigin href="/daily-three-sentences/assets/fsrs-DRZX52AP.js">
+  <link rel="stylesheet" crossorigin href="/daily-three-sentences/assets/index-jrmrT2QU.css">
 <link rel="manifest" href="/daily-three-sentences/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/daily-three-sentences/registerSW.js"></script></head>
 <body>
   <div id="root"></div>
-  <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        // 使用相对路径注册Service Worker，适配GitHub Pages子路径
-        const basePath = import.meta.env.BASE_URL || '/daily-three-sentences/';
-        navigator.serviceWorker.register(basePath + 'sw.js');
-      });
-    }
-  </script>
 </body>
 </html>
