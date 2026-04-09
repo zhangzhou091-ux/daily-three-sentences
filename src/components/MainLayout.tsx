@@ -16,13 +16,15 @@ import { supabaseService } from '../services/supabaseService';
 
 const MainLayout: React.FC = () => {
   const { 
-    currentView, setView, settings, isOnline, isConfigured, isLoading, 
+    currentView, setView, settings, isOnline, isLoading, 
     syncMessage, isSyncing, configError, updateSettings, setSyncMessage,
     refreshConfig
   } = useAppContext();
   const { sentences, refreshSentences } = useSentenceContext();
   
-  const [isNavVisible, setIsNavVisible] = useState(true); // Default to true
+  const [localIsConfigured, setLocalIsConfigured] = useState(supabaseService.isReady);
+  const [isReadingConfig, setIsReadingConfig] = useState(true);
+  const [isNavVisible, setIsNavVisible] = useState(true);
   const [userNameInput, setUserNameInput] = useState('');
   const [urlInput, setUrlInput] = useState('');
   const [keyInput, setKeyInput] = useState('');
@@ -36,6 +38,30 @@ const MainLayout: React.FC = () => {
     type: 'info' 
   });
   const [dbError, setDbError] = useState<string | null>(null);
+
+  useEffect(() => {
+    console.log('[MainLayout] 订阅 supabaseService.onStatusChange');
+    return supabaseService.onStatusChange((isReady) => {
+      console.log('[MainLayout] onStatusChange 回调, isReady:', isReady);
+      setLocalIsConfigured(isReady);
+    });
+  }, []);
+
+  useEffect(() => {
+    console.log('[MainLayout] 预填充 useEffect 执行');
+    const config = supabaseService.getConfig();
+    console.log('[MainLayout] getConfig 返回:', {
+      hasUrl: !!config.url,
+      hasKey: !!config.key,
+      userName: config.userName,
+      isConfigured: config.isConfigured
+    });
+    if (config.url) setUrlInput(config.url);
+    if (config.key) setKeyInput(config.key);
+    if (config.userName) setUserNameInput(config.userName);
+    setIsReadingConfig(false);
+    console.log('[MainLayout] 配置读取完成, isReadingConfig 设为 false');
+  }, []);
 
   useEffect(() => {
     if (!syncToast.show) return;
@@ -255,7 +281,7 @@ const MainLayout: React.FC = () => {
   );
 
   const renderView = () => {
-    if (isLoading) return (
+    if (isLoading || isReadingConfig) return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
         <div className="w-12 h-12 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin"></div>
         <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Loading Data...</p>
@@ -275,7 +301,7 @@ const MainLayout: React.FC = () => {
       </div>
     );
 
-    if (!isConfigured) return renderConfigView();
+    if (!localIsConfigured) return renderConfigView();
 
     return (
       <Suspense fallback={
@@ -349,7 +375,7 @@ const MainLayout: React.FC = () => {
       )}
 
       {/* Header */}
-      {isConfigured && (
+      {localIsConfigured && (
         <header className="fixed top-0 left-0 right-0 h-16 sm:h-20 bg-white/80 backdrop-blur-2xl z-40 border-b border-black/[0.03] px-4 sm:px-8 flex items-center justify-between transition-all duration-300 safe-area-top">
           <div className="flex flex-col">
             <span className="text-[9px] sm:text-[11px] font-black text-blue-600 uppercase tracking-[0.2em] leading-none mb-1">D3S Platform</span>
@@ -383,7 +409,7 @@ const MainLayout: React.FC = () => {
       </main>
 
       {/* Mobile Bottom Nav */}
-      {isConfigured && (
+      {localIsConfigured && (
         <div className="md:hidden fixed bottom-6 left-4 right-4 z-50 safe-area-bottom">
           <Navbar currentView={currentView} setView={setView} />
         </div>

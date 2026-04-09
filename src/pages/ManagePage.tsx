@@ -119,6 +119,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
   const englishInputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
       if (abortControllerRef.current) {
@@ -626,7 +627,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
       <input 
         type="file" 
         ref={fileInputRef} 
-        className="hidden" 
+        className="absolute opacity-0 pointer-events-none w-0 h-0" 
         accept=".xlsx, .xls" 
         onChange={handleExcelImport}
       />

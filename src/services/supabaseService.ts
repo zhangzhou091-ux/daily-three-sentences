@@ -2,7 +2,6 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Sentence, UserStats, UserSettings, DictationRecord, QueueTask } from '../types';
 import { generateUUID, isValidUUID } from '../utils/uuid';
 import { getSupabaseConfig } from '../constants';
-import { localStorageService } from './storage/localStorageService';
 
 export interface SyncResult {
   success: boolean;
@@ -319,15 +318,25 @@ class SupabaseService {
   }
 
   constructor() {
+    console.log('[SupabaseService] 构造函数开始执行');
     this.loadConfigFromStorage();
     this.startQueueCleanup();
     this.setupAuthSync();
     
+    console.log('[SupabaseService] 配置加载结果:', {
+      hasUrl: !!this._url,
+      hasKey: !!this._key,
+      hasUserName: !!this._userName,
+      urlLength: this._url?.length || 0,
+      keyLength: this._key?.length || 0
+    });
+    
     if (this._url && this._key) {
       this.initializeClient();
     } else {
-      console.warn('⚠️ Supabase 配置缺失，请在登录页面配置');
+      console.warn('[SupabaseService] 配置缺失，isReady 将为 false');
     }
+    console.log('[SupabaseService] 构造函数执行完成, isReady:', this.isReady);
   }
 
   private setupAuthSync(): void {
@@ -400,13 +409,19 @@ class SupabaseService {
     }
     
     try {
-      // 保存配置到本地存储
       this._url = url;
       this._key = key;
       this._userName = this.cleanUserName(userName);
-      this.saveConfigToStorage();
       
-      // 重新初始化客户端
+      const saveResult = this.saveConfigToStorage();
+      if (!saveResult) {
+        return { 
+          success: false, 
+          message: '❌ 配置保存失败，请检查浏览器存储空间或隐私设置',
+          errorType: 'save_failed' 
+        };
+      }
+      
       this.initializeClient();
       
       if (this._client) {
@@ -422,7 +437,7 @@ class SupabaseService {
         };
       }
     } catch (error) {
-      console.error('Supabase配置失败:', error);
+      console.error('[SupabaseService] 配置失败:', error);
       return { 
         success: false, 
         message: '❌ Supabase配置失败，请检查URL和API Key是否正确',
@@ -441,7 +456,10 @@ class SupabaseService {
     }
     const cleanName = this.cleanUserName(userName);
     this._userName = cleanName;
-    this.saveConfigToStorage();
+    const saveResult = this.saveConfigToStorage();
+    if (!saveResult) {
+      console.error('[SupabaseService] setUserName: 配置保存失败');
+    }
     this.emitStatusChange();
     return { success: true, message: `✅ 已连接用户：${cleanName}` };
   }
@@ -461,28 +479,44 @@ class SupabaseService {
 
   // 从本地存储加载配置
   private loadConfigFromStorage(): void {
+    console.log('[SupabaseService] loadConfigFromStorage 开始, STORAGE_KEY:', this.STORAGE_KEY);
     try {
-      const config = localStorageService.get<StoredConfig>(this.STORAGE_KEY);
-      if (config) {
-        this._url = config.url || '';
-        this._key = config.key || '';
-        this._userName = config.userName || '';
+      const rawData = localStorage.getItem(this.STORAGE_KEY);
+      console.log('[SupabaseService] 从存储读取的原始数据:', rawData ? '存在' : '不存在');
+      if (rawData) {
+        const config = JSON.parse(rawData) as StoredConfig;
+        console.log('[SupabaseService] 解析后的配置:', {
+          hasUrl: !!config?.url,
+          hasKey: !!config?.key,
+          userName: config?.userName
+        });
+        if (config) {
+          this._url = config.url || '';
+          this._key = config.key || '';
+          this._userName = config.userName || '';
+          console.log('[SupabaseService] 配置加载成功');
+        }
+      } else {
+        console.log('[SupabaseService] 存储中无配置数据');
       }
     } catch (error) {
-      console.warn('加载Supabase配置失败:', error);
+      console.error('[SupabaseService] 加载配置异常:', error);
     }
   }
 
-  // 保存配置到本地存储
-  private saveConfigToStorage(): void {
+  private saveConfigToStorage(): boolean {
     try {
-      localStorageService.save(this.STORAGE_KEY, {
+      const data = JSON.stringify({
         url: this._url,
         key: this._key,
         userName: this._userName
       });
+      localStorage.setItem(this.STORAGE_KEY, data);
+      console.log('[SupabaseService] 配置保存成功');
+      return true;
     } catch (error) {
-      console.warn('保存Supabase配置失败:', error);
+      console.error('[SupabaseService] 保存配置失败:', error);
+      return false;
     }
   }
 
@@ -526,7 +560,8 @@ class SupabaseService {
     this._userName = '';
     this.isConfigured = false;
 
-    localStorageService.remove(this.STORAGE_KEY);
+    localStorage.removeItem(this.STORAGE_KEY);
+    console.log('[SupabaseService] 配置已清除');
     
     this.broadcastLogout();
 
@@ -1261,7 +1296,18 @@ export const initializeSupabase = async (userName?: string) => {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     return { success: false, message: "环境变量缺失" };
   }
-  const name = userName || localStorageService.get<UserSettings>('d3s_settings_v3')?.userName || '';
+  let name = userName;
+  if (!name) {
+    try {
+      const settingsData = localStorage.getItem('d3s_settings_v3');
+      if (settingsData) {
+        const settings = JSON.parse(settingsData);
+        name = settings?.userName || '';
+      }
+    } catch {
+      // ignore
+    }
+  }
   if (!name) {
     return { success: false, message: "用户名未设置" };
   }
