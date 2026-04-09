@@ -27,40 +27,7 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # 4. 验证环境变量配置
-      - name: Validate environment variables
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-        run: |
-          echo "🔍 验证环境变量配置..."
-          
-          if [ -z "$VITE_SUPABASE_URL" ]; then
-            echo "❌ 错误: VITE_SUPABASE_URL 未配置"
-            echo "请在 GitHub 仓库 Settings > Secrets and variables > Actions 中添加 VITE_SUPABASE_URL"
-            exit 1
-          fi
-          
-          if [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
-            echo "❌ 错误: VITE_SUPABASE_ANON_KEY 未配置"
-            echo "请在 GitHub 仓库 Settings > Secrets and variables > Actions 中添加 VITE_SUPABASE_ANON_KEY"
-            exit 1
-          fi
-          
-          if [[ ! "$VITE_SUPABASE_URL" =~ ^https:// ]]; then
-            echo "❌ 错误: VITE_SUPABASE_URL 必须以 https:// 开头"
-            exit 1
-          fi
-          
-          if [[ ! "$VITE_SUPABASE_URL" =~ supabase\.co$ ]] && [[ ! "$VITE_SUPABASE_URL" =~ supabase\.in$ ]]; then
-            echo "⚠️ 警告: VITE_SUPABASE_URL 可能不是有效的 Supabase 地址"
-          fi
-          
-          echo "✅ 环境变量验证通过"
-          echo "   VITE_SUPABASE_URL 长度: ${#VITE_SUPABASE_URL}"
-          echo "   VITE_SUPABASE_ANON_KEY 长度: ${#VITE_SUPABASE_ANON_KEY}"
-
-      # 5. 构建生产版本
+      # 4. 构建生产版本
       - name: Build project
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
@@ -70,7 +37,7 @@ jobs:
           npm run build
           echo "✅ 构建完成"
 
-      # 6. 验证构建产物（双重保险）
+      # 5. 验证构建产物（双重保险）
       - name: Verify build output
         run: |
           echo "🔍 验证构建产物..."
@@ -114,7 +81,7 @@ jobs:
           
           echo "✅ 构建产物验证通过"
 
-      # 7. 部署到 gh-pages 分支
+      # 6. 部署到 gh-pages 分支
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
