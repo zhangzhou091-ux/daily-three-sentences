@@ -174,7 +174,6 @@ export default defineConfig({
   // 保留：开发服务器配置（手机同网预览）
   server: {
     host: '0.0.0.0',
-    port: 5173,
     open: true
   }
 })

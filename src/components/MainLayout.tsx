@@ -24,7 +24,7 @@ const MainLayout: React.FC = () => {
   
   const [localIsConfigured, setLocalIsConfigured] = useState(supabaseService.isReady);
   const [isReadingConfig, setIsReadingConfig] = useState(true);
-  const [isNavVisible, setIsNavVisible] = useState(true);
+  const [isNavVisible, setIsNavVisible] = useState(false);
   const [userNameInput, setUserNameInput] = useState('');
   const [urlInput, setUrlInput] = useState('');
   const [keyInput, setKeyInput] = useState('');
@@ -383,11 +383,21 @@ const MainLayout: React.FC = () => {
           </div>
           
           {/* Desktop Navigation */}
-          <div className="hidden md:flex absolute left-1/2 -translate-x-1/2">
-             <Navbar currentView={currentView} setView={setView} />
-          </div>
+          {isNavVisible && (
+            <div className="hidden md:flex absolute left-1/2 -translate-x-1/2">
+               <Navbar currentView={currentView} setView={setView} />
+            </div>
+          )}
 
           <div className="flex items-center gap-3">
+             <button 
+               onClick={() => setIsNavVisible(prev => !prev)} 
+               className="w-8 h-8 sm:w-10 sm:h-10 bg-gray-100 hover:bg-gray-200 rounded-full flex items-center justify-center transition-colors shadow-sm border border-white"
+               title={isNavVisible ? '隐藏导航' : '显示导航'}
+             > 
+               <span className="text-sm">{isNavVisible ? '🙈' : '👁️'}</span> 
+             </button>
+             
              <div className="flex flex-col items-end mr-1">
                 <span className="text-[9px] font-black text-gray-600 uppercase tracking-widest">{settings.userName}</span>
                 <span className={`text-[8px] font-bold ${supabaseService.isReady ? 'text-green-500' : 'text-gray-600'}`}>
@@ -409,7 +419,7 @@ const MainLayout: React.FC = () => {
       </main>
 
       {/* Mobile Bottom Nav */}
-      {localIsConfigured && (
+      {localIsConfigured && isNavVisible && (
         <div className="md:hidden fixed bottom-6 left-4 right-4 z-50 safe-area-bottom">
           <Navbar currentView={currentView} setView={setView} />
         </div>
