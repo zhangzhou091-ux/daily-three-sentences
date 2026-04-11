@@ -345,14 +345,12 @@ class SyncQueueService {
         const expectedChecksum = calculateChecksum(dataWithoutChecksum);
         
         if (parsed.checksum !== expectedChecksum) {
-          logger.error('存储数据校验失败，尝试恢复数据');
+          logger.error('存储数据校验失败，尝试逐字段恢复数据');
           
-          // 尝试恢复部分数据
           try {
             const queues = parsed.queues;
             if (queues) {
-              // 尝试恢复有效的队列数据
-              const recoverQueues = <T>(queueData: [string, T][] | undefined): [string, T][] => {
+              const filterValidEntries = <T>(queueData: [string, T][] | undefined): [string, T][] => {
                 if (!Array.isArray(queueData)) return [];
                 return queueData.filter((item): item is [string, T] => {
                   try {
@@ -363,28 +361,39 @@ class SyncQueueService {
                 });
               };
               
-              this.markLearnedQueue = new Map<string, MarkLearnedOperation>(recoverQueues(queues.markLearned));
-              this.reviewFeedbackQueue = new Map<string, ReviewFeedbackOperation>(recoverQueues(queues.reviewFeedback));
-              this.addSentenceQueue = new Map<string, AddSentenceOperation>(recoverQueues(queues.addSentence));
-              this.dictationRecordQueue = new Map<string, DictationRecordOperation>(recoverQueues(queues.dictationRecord));
-              this.statsSyncQueue = new Map<string, StatsSyncOperation>(recoverQueues(queues.statsSync));
+              this.markLearnedQueue = new Map<string, MarkLearnedOperation>(filterValidEntries(queues.markLearned));
+              this.reviewFeedbackQueue = new Map<string, ReviewFeedbackOperation>(filterValidEntries(queues.reviewFeedback));
+              this.addSentenceQueue = new Map<string, AddSentenceOperation>(filterValidEntries(queues.addSentence));
+              this.dictationRecordQueue = new Map<string, DictationRecordOperation>(filterValidEntries(queues.dictationRecord));
+              this.statsSyncQueue = new Map<string, StatsSyncOperation>(filterValidEntries(queues.statsSync));
               this.lastSyncTime = parsed.lastSyncTime;
               
-              logger.info('成功恢复部分队列数据', {
-                markLearned: this.markLearnedQueue.size,
-                reviewFeedback: this.reviewFeedbackQueue.size,
-                addSentence: this.addSentenceQueue.size,
-                dictationRecord: this.dictationRecordQueue.size,
-                statsSync: this.statsSyncQueue.size
-              });
-              return;
+              const hasRecoveredData = 
+                this.markLearnedQueue.size > 0 ||
+                this.reviewFeedbackQueue.size > 0 ||
+                this.addSentenceQueue.size > 0 ||
+                this.dictationRecordQueue.size > 0 ||
+                this.statsSyncQueue.size > 0;
+              
+              if (hasRecoveredData) {
+                this.saveToStorageImmediate();
+                logger.info('已修复并重新保存队列数据', {
+                  markLearned: this.markLearnedQueue.size,
+                  reviewFeedback: this.reviewFeedbackQueue.size,
+                  addSentence: this.addSentenceQueue.size,
+                  dictationRecord: this.dictationRecordQueue.size,
+                  statsSync: this.statsSyncQueue.size
+                });
+                return;
+              }
             }
           } catch (recoverErr) {
             logger.error('数据恢复失败', { error: String(recoverErr) });
           }
           
-          // 最后才尝试迁移旧数据
-          this.migrateFromOldStorage();
+          localStorage.removeItem(STORAGE_KEY_ALL_QUEUES);
+          this.emit('queueWarning', { level: 'critical', message: '存储数据损坏已自动清空' });
+          logger.warn('存储数据损坏已自动清空');
           return;
         }
         
@@ -2025,6 +2034,22 @@ class SyncQueueService {
     this.retryCount.clear();
     this.saveToStorageImmediate();
     this.emit('queueChanged', this.getQueueStatus());
+  }
+
+  async clearCorruptedStorage(): Promise<void> {
+    localStorage.removeItem(STORAGE_KEY_ALL_QUEUES);
+    localStorage.removeItem(EMERGENCY_STORE_KEY);
+    
+    this.markLearnedQueue.clear();
+    this.reviewFeedbackQueue.clear();
+    this.addSentenceQueue.clear();
+    this.dictationRecordQueue.clear();
+    this.statsSyncQueue.clear();
+    this.retryCount.clear();
+    this.lastSyncTime = 0;
+    
+    this.emit('queueChanged', this.getQueueStatus());
+    logger.info('已清除损坏的存储数据');
   }
 }
 

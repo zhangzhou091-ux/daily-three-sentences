@@ -26,8 +26,8 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ sentence, onFlip, isFlip
               <span className="text-xs text-gray-400">{sentence.id.slice(-8)}</span>
             </div>
 
-            <div className="flex-1 flex items-center justify-start py-4">
-              <p className="text-2xl md:text-3xl font-bold text-gray-800 leading-relaxed tracking-wide break-words text-left">
+            <div className="flex-1 flex items-center justify-start overflow-y-auto min-h-0 py-4">
+              <p className="text-2xl md:text-3xl font-bold text-gray-800 leading-relaxed tracking-wide break-words whitespace-pre-wrap text-left w-full">
                 {sentence.english}
               </p>
             </div>
@@ -39,21 +39,21 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ sentence, onFlip, isFlip
         </div>
 
         <div className="absolute w-full h-full backface-hidden rotate-y-180">
-          <div className="apple-card p-8 h-full flex flex-col justify-between bg-gradient-to-br from-blue-50 to-white">
-            <div className="flex justify-between items-center">
+          <div className="apple-card p-8 h-full flex flex-col bg-gradient-to-br from-blue-50 to-white">
+            <div className="flex-shrink-0 flex justify-between items-center">
               <span className="text-xs font-bold text-blue-600 bg-blue-100 px-3 py-1 rounded-full">
                 中文
               </span>
               <span className="text-xs text-gray-400">{sentence.id.slice(-8)}</span>
             </div>
 
-            <div className="flex-1 flex items-center justify-start py-4">
-              <p className="text-2xl md:text-3xl font-bold text-gray-800 leading-relaxed tracking-wide break-words text-left">
+            <div className="flex-1 flex items-start justify-start overflow-y-auto pr-2 min-h-0 py-4">
+              <p className="text-2xl md:text-3xl font-bold text-gray-800 leading-relaxed tracking-wide break-words whitespace-pre-wrap text-left w-full">
                 {sentence.chinese}
               </p>
             </div>
 
-            <div className="space-y-3">
+            <div className="flex-shrink-0 space-y-3 mt-2">
               <div className="grid grid-cols-4 gap-2">
                 {[1, 2, 3, 4].map((rating) => (
                   <button

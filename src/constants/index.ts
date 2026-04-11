@@ -96,7 +96,8 @@ export const getNetworkCheckUrls = (): string[] => {
   }
   
   urls.push(
-    'https://cdn.jsdelivr.net/npm/@vue/core/dist/vue.global.js',
+    'https://cdn.bootcdn.net/ajax/libs/vue/3.3.4/vue.global.prod.min.js',
+    'https://registry.npmmirror.com/@vue/core',
     'https://cdn.staticfile.org/jquery/3.6.0/jquery.min.js'
   );
   
@@ -107,7 +108,7 @@ export const NETWORK_CONFIG = {
   get CONNECTIVITY_CHECK_URLS() {
     return getNetworkCheckUrls();
   },
-  CONNECTIVITY_TIMEOUT: 3000,
+  CONNECTIVITY_TIMEOUT: 5000,
   CHECK_INTERVAL: 60000
 };
 

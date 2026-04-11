@@ -37,8 +37,8 @@ export const LearnCard: React.FC<LearnCardProps> = ({
               <span className="text-xs text-gray-400">{sentence.id.slice(-8)}</span>
             </div>
 
-            <div className="flex-1 flex items-start justify-start mt-[6rem]">
-              <p className="text-2xl md:text-3xl font-bold text-gray-800 text-left leading-[3rem] tracking-wide break-words w-full">
+            <div className="flex-1 flex items-start justify-start overflow-y-auto min-h-0 mt-[6rem]">
+              <p className="text-2xl md:text-3xl font-bold text-gray-800 text-left leading-[3rem] tracking-wide break-words whitespace-pre-wrap w-full">
                 {sentence.english}
               </p>
             </div>
@@ -51,24 +51,24 @@ export const LearnCard: React.FC<LearnCardProps> = ({
 
         <div className="absolute w-full h-full backface-hidden rotate-y-180">
           <div
-            className={`apple-card p-8 h-full flex flex-col justify-between bg-gradient-to-br from-green-50 to-white ${
+            className={`apple-card p-8 h-full flex flex-col bg-gradient-to-br from-green-50 to-white ${
               isAnimatingLearned && animatingLearnedId === sentence.id ? 'animate-bounce' : ''
             }`}
           >
-            <div className="flex justify-between items-center">
+            <div className="flex-shrink-0 flex justify-between items-center">
               <span className="text-xs font-bold text-green-600 bg-green-100 px-3 py-1 rounded-full">
                 中文
               </span>
               <span className="text-xs text-gray-400">{sentence.id.slice(-8)}</span>
             </div>
 
-            <div className="flex-1 flex items-start justify-start mt-6">
-              <p className="text-2xl md:text-3xl font-bold text-gray-800 text-left leading-[3rem] tracking-wide break-words w-full">
+            <div className="flex-1 flex items-start justify-start overflow-y-auto pr-2 min-h-0 mt-4">
+              <p className="text-2xl md:text-3xl font-bold text-gray-800 text-left leading-[3rem] tracking-wide break-words whitespace-pre-wrap w-full">
                 {sentence.chinese}
               </p>
             </div>
 
-            <div className="space-y-3">
+            <div className="flex-shrink-0 space-y-3 mt-4">
               <button
                 onClick={(e) => {
                   e.stopPropagation();

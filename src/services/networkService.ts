@@ -60,17 +60,17 @@ class NetworkService {
       
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), NETWORK_CONFIG.CONNECTIVITY_TIMEOUT);
-
-          const response = await fetch(url, {
+          const fetchPromise = fetch(url, {
             method: 'HEAD',
             mode: 'no-cors',
-            cache: 'no-store',
-            signal: controller.signal
+            cache: 'no-store'
           });
-
-          clearTimeout(timeoutId);
+          
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error('timeout')), NETWORK_CONFIG.CONNECTIVITY_TIMEOUT);
+          });
+          
+          await Promise.race([fetchPromise, timeoutPromise]);
           result = true;
           break;
         } catch (err) {
@@ -88,11 +88,44 @@ class NetworkService {
       if (result) break;
     }
     
-    // 更新缓存
+    if (!result) {
+      result = await this.pingWithImage('https://www.baidu.com/favicon.ico');
+    }
+    
+    if (!result) {
+      result = navigator.onLine;
+      if (import.meta.env.DEV) {
+        console.log(`🌐 所有检测失败，降级使用 navigator.onLine: ${result}`);
+      }
+    }
+    
     this.lastCheckTime = now;
     this.lastCheckResult = result;
     
     return result;
+  }
+
+  private async pingWithImage(url: string, timeout: number = 5000): Promise<boolean> {
+    return new Promise((resolve) => {
+      const img = new Image();
+      const timer = setTimeout(() => {
+        img.onload = null;
+        img.onerror = null;
+        resolve(false);
+      }, timeout);
+      
+      img.onload = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      
+      img.onerror = () => {
+        clearTimeout(timer);
+        resolve(false);
+      };
+      
+      img.src = url + '?t=' + Date.now();
+    });
   }
 
   /**

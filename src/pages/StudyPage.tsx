@@ -250,10 +250,10 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   }, [reviewQueue, activeTab, currentReviewIdRef, setCurrentReviewId]);
   
   useEffect(() => {
-    if (activeTab === 'review' && reviewQueue.length > 0) {
+    if (activeTab === 'review' && currentReviewId) {
       setIsFlipped(true);
     }
-  }, [activeTab, reviewQueue.length]);
+  }, [activeTab, currentReviewId]);
 
   const currentIndexRef = useRef(currentIndex);
   currentIndexRef.current = currentIndex;
@@ -417,8 +417,8 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       </div>
                     )}
                     
-                    <div className="mt-[2em] flex flex-col items-center w-full flex-1">
-                      <h3 className="text-lg font-normal text-gray-900 leading-normal w-full break-words text-left m-0 p-0 overflow-hidden">
+                    <div className="mt-[2em] flex flex-col items-center w-full flex-1 overflow-y-auto min-h-0">
+                      <h3 className="text-lg font-normal text-gray-900 leading-normal w-full break-words whitespace-pre-wrap text-left m-0 p-0">
                         {currentSentenceLatest?.english || ''}
                       </h3>
                       
@@ -438,31 +438,33 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     </div>
                   </div>
                   <div 
-                    className="card-back p-6 flex flex-col items-start justify-start"
+                    className="card-back p-6 flex flex-col"
                     style={{ 
                       backfaceVisibility: 'hidden', 
                       position: 'absolute', 
                       inset: 0,
                       transform: 'rotateY(180deg)',
-                      minHeight: '340px',
                       textAlign: 'left',
                       paddingTop: '20px',
-                      paddingBottom: '20px',
-                      overflow: 'hidden'
+                      paddingBottom: '20px'
                     }}
                   >
-                    {(isCurrentlyLearned || isAnimating) && (
-                      <div className="opacity-0 mb-4 pointer-events-none">占位</div>
-                    )}
+                    <div className="flex-shrink-0">
+                      {(isCurrentlyLearned || isAnimating) && (
+                        <div className="opacity-0 mb-4 pointer-events-none">占位</div>
+                      )}
+                    </div>
                     
-                    <p className="text-lg text-gray-800 font-normal leading-normal w-full break-words text-left m-0 p-0 overflow-hidden -mt-[0.5em]">
-                      {currentSentenceLatest?.chinese || ''}
-                    </p>
+                    <div className="flex-1 flex items-start justify-start overflow-y-auto pr-2 min-h-0">
+                      <p className="text-lg text-gray-800 font-normal leading-normal w-full break-words whitespace-pre-wrap text-left m-0 p-0">
+                        {currentSentenceLatest?.chinese || ''}
+                      </p>
+                    </div>
                     
-                    <div className="w-16 h-16 mt-6 opacity-0 pointer-events-none self-center"></div>
-                    
-                    <div className="mt-10 px-6 py-2 bg-gray-100 rounded-full text-xs font-black text-gray-600 uppercase tracking-widest self-center">
-                      可理解输入，举一反三，场景运用
+                    <div className="flex-shrink-0 flex justify-center mt-4">
+                      <div className="px-6 py-2 bg-gray-100 rounded-full text-xs font-black text-gray-600 uppercase tracking-widest">
+                        可理解输入，举一反三，场景运用
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -608,8 +610,8 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     </div>
                     <p className="text-xs font-black text-gray-600 uppercase tracking-[0.2em] mb-4 pr-16">已复习 {reviewQueue[currentReviewIndex]?.reps || 0} 次</p>
                     
-                    <div className="mt-[2em] flex flex-col items-center w-full flex-1">
-                      <h3 className="text-lg font-normal text-gray-800 w-full leading-normal mt-0 pr-16 break-words text-left m-0 p-0 overflow-hidden">
+                    <div className="mt-[2em] flex flex-col items-center w-full flex-1 overflow-y-auto min-h-0">
+                      <h3 className="text-lg font-normal text-gray-800 w-full leading-normal mt-0 pr-16 break-words whitespace-pre-wrap text-left m-0 p-0">
                         {reviewQueue[currentReviewIndex]?.english || ''}
                       </h3>
                       
@@ -630,31 +632,32 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     </div>
                   </div>
                   <div 
-                    className="card-back p-6 flex flex-col items-start justify-start"
+                    className="card-back p-6 flex flex-col"
                     style={{ 
                       backfaceVisibility: 'hidden', 
                       position: 'absolute', 
                       inset: 0,
                       transform: 'rotateY(180deg)',
-                      minHeight: '380px',
                       textAlign: 'left',
                       paddingTop: '20px',
-                      paddingBottom: '20px',
-                      overflow: 'hidden'
+                      paddingBottom: '20px'
                     }}
                   >
-                    <div className="absolute top-3 right-3 opacity-0 pointer-events-none">占位</div>
+                    <div className="flex-shrink-0">
+                      <div className="absolute top-3 right-3 opacity-0 pointer-events-none">占位</div>
+                      <p className="text-xs opacity-0 mb-4 pointer-events-none pr-16">占位</p>
+                    </div>
                     
-                    <p className="text-xs opacity-0 mb-4 pointer-events-none pr-16">占位</p>
+                    <div className="flex-1 flex items-start justify-start overflow-y-auto pr-2 min-h-0">
+                      <h4 className="text-lg font-normal text-gray-900 leading-normal w-full px-4 break-words whitespace-pre-wrap text-left m-0 p-0">
+                        {reviewQueue[currentReviewIndex]?.chinese || ''}
+                      </h4>
+                    </div>
                     
-                    <h4 className="text-lg font-normal text-gray-900 leading-normal w-full px-4 break-words text-left m-0 p-0 overflow-hidden -mt-[0.5em]">
-                      {reviewQueue[currentReviewIndex]?.chinese || ''}
-                    </h4>
-                    
-                    <div className="w-16 h-16 mt-6 opacity-0 pointer-events-none self-center"></div>
-                    
-                    <div className="mt-10 bg-blue-50 text-blue-500 px-6 py-2 rounded-full text-xs font-black uppercase tracking-[0.2em] self-center">
-                      可理解输入，举一反三，场景运用
+                    <div className="flex-shrink-0 flex justify-center mt-4">
+                      <div className="bg-blue-50 text-blue-500 px-6 py-2 rounded-full text-xs font-black uppercase tracking-[0.2em]">
+                        可理解输入，举一反三，场景运用
+                      </div>
                     </div>
                   </div>
                 </div>

@@ -1,14 +1,25 @@
-
-import { storageService } from "./storage";
-
 /**
  * Mock Gemini Service
- * Currently uses Web Speech API for TTS and local bank for suggestions.
- * TODO: Integrate real Google Gemini API.
+ * Uses Web Speech API for TTS with iOS bug fixes (queue + delay)
  */
 
 const SPEAK_TIMEOUT = 10000;
 const SUGGEST_TIMEOUT = 5000;
+
+const isIOS = (): boolean => {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+};
+
+interface SpeakTask {
+  text: string;
+  resolve: (result: { success: boolean; error?: string }) => void;
+  reject: (error: Error) => void;
+}
+
+let taskQueue: SpeakTask[] = [];
+let isProcessing = false;
+let currentUtterance: SpeechSynthesisUtterance | null = null;
 
 const LOCAL_SENTENCE_BANK = [
   { english: "Could you please clarify that point?", chinese: "能请你澄清一下那一点吗？", tags: ["work", "meeting"] },
@@ -33,67 +44,165 @@ export interface SpeakResult {
   error?: string;
 }
 
+const getVoices = (): Promise<SpeechSynthesisVoice[]> => {
+  return new Promise((resolve) => {
+    let voices = window.speechSynthesis.getVoices();
+    if (voices.length) {
+      resolve(voices);
+      return;
+    }
+
+    let resolved = false;
+    const timer = setInterval(() => {
+      voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) {
+        clearInterval(timer);
+        resolved = true;
+        resolve(voices);
+      }
+    }, 100);
+
+    setTimeout(() => {
+      if (!resolved) {
+        clearInterval(timer);
+        console.warn('获取语音列表超时，返回空数组');
+        resolve([]);
+      }
+    }, 3000);
+
+    window.speechSynthesis.addEventListener('voiceschanged', () => {
+      if (!resolved) {
+        clearInterval(timer);
+        resolved = true;
+        voices = window.speechSynthesis.getVoices();
+        resolve(voices);
+      }
+    }, { once: true });
+  });
+};
+
+const selectBestUsVoice = async (): Promise<SpeechSynthesisVoice | null> => {
+  const voices = await getVoices();
+  
+  if (!voices.length) {
+    console.warn('未找到任何可用语音');
+    return null;
+  }
+  
+  const usVoices = voices.filter(v => v.lang === 'en-US' || v.lang === 'en_US');
+  
+  if (!usVoices.length) {
+    console.warn('未找到美式英语语音');
+    return null;
+  }
+
+  return (
+    usVoices.find(v => v.name.includes('Samantha')) ||
+    usVoices.find(v => v.name.includes('Alex')) ||
+    usVoices.find(v => v.name.includes('Google') || v.name.includes('Premium')) ||
+    usVoices.find(v => v.name.includes('Microsoft')) ||
+    usVoices.find(v => v.localService === true) ||
+    usVoices[0]
+  );
+};
+
+const executeSpeak = async (text: string): Promise<SpeakResult> => {
+  if (!text || typeof text !== 'string' || !text.trim()) {
+    console.warn('发音文本为空');
+    return { success: false, error: '发音文本为空' };
+  }
+
+  if (!('speechSynthesis' in window)) {
+    console.warn('此浏览器不支持本地语音合成');
+    return { success: false, error: '此浏览器不支持语音合成' };
+  }
+
+  window.speechSynthesis.cancel();
+
+  if (window.speechSynthesis.paused) {
+    window.speechSynthesis.resume();
+  }
+
+  if (isIOS()) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  const utterance = new SpeechSynthesisUtterance(text);
+  currentUtterance = utterance;
+
+  const bestVoice = await selectBestUsVoice();
+  if (bestVoice) {
+    utterance.voice = bestVoice;
+  }
+
+  utterance.lang = 'en-US';
+  utterance.rate = 0.9;
+  utterance.pitch = 1.0;
+
+  return new Promise((resolve) => {
+    let isSettled = false;
+    
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      utterance.onend = null;
+      utterance.onerror = null;
+      if (currentUtterance === utterance) {
+        currentUtterance = null;
+      }
+    };
+
+    const timeoutId = setTimeout(() => {
+      if (isSettled) return;
+      isSettled = true;
+      window.speechSynthesis.cancel();
+      cleanup();
+      console.warn('语音合成超时，已取消');
+      resolve({ success: false, error: '语音合成超时，请重试' });
+    }, SPEAK_TIMEOUT);
+
+    utterance.onend = () => {
+      if (isSettled) return;
+      isSettled = true;
+      cleanup();
+      resolve({ success: true });
+    };
+
+    utterance.onerror = (event) => {
+      if (isSettled) return;
+      isSettled = true;
+      cleanup();
+      console.warn('语音合成错误:', event.error);
+      resolve({ success: false, error: `语音播放失败: ${event.error}` });
+    };
+
+    window.speechSynthesis.speak(utterance);
+  });
+};
+
+const processQueue = async () => {
+  if (isProcessing || taskQueue.length === 0) return;
+  
+  isProcessing = true;
+
+  const task = taskQueue.shift()!;
+  try {
+    const result = await executeSpeak(task.text);
+    task.resolve(result);
+  } catch (err) {
+    task.reject(err instanceof Error ? err : new Error(String(err)));
+  } finally {
+    isProcessing = false;
+    if (taskQueue.length > 0) {
+      processQueue();
+    }
+  }
+};
+
 export const geminiService = {
   async speak(text: string): Promise<SpeakResult> {
-    if (!('speechSynthesis' in window)) {
-      console.warn("此浏览器不支持本地语音合成");
-      return { success: false, error: '此浏览器不支持语音合成' };
-    }
-
-    window.speechSynthesis.cancel();
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    const settings = storageService.getSettings();
-
-    const voices = window.speechSynthesis.getVoices();
-    
-    const usVoice = voices.find(v => 
-      (v.lang === 'en-US' || v.lang === 'en_US') && 
-      (v.name.includes('Google') || v.name.includes('Premium'))
-    ) || voices.find(v => v.lang.includes('en-US'));
-
-    if (usVoice) {
-      utterance.voice = usVoice;
-    }
-
-    utterance.lang = 'en-US';
-    utterance.rate = 0.9;
-    utterance.pitch = 1.0;
-
-    return new Promise((resolve) => {
-      let isSettled = false;
-      
-      const cleanup = () => {
-        clearTimeout(timeoutId);
-        utterance.onend = null;
-        utterance.onerror = null;
-      };
-
-      const timeoutId = setTimeout(() => {
-        if (isSettled) return;
-        isSettled = true;
-        window.speechSynthesis.cancel();
-        cleanup();
-        console.warn('语音合成超时，已取消');
-        resolve({ success: false, error: '语音合成超时，请重试' });
-      }, SPEAK_TIMEOUT);
-
-      utterance.onend = () => {
-        if (isSettled) return;
-        isSettled = true;
-        cleanup();
-        resolve({ success: true });
-      };
-
-      utterance.onerror = (event) => {
-        if (isSettled) return;
-        isSettled = true;
-        cleanup();
-        console.warn('语音合成错误:', event.error);
-        resolve({ success: false, error: `语音播放失败: ${event.error}` });
-      };
-
-      window.speechSynthesis.speak(utterance);
+    return new Promise((resolve, reject) => {
+      taskQueue.push({ text, resolve, reject });
+      processQueue();
     });
   },
 
@@ -105,7 +214,7 @@ export const geminiService = {
       }, SUGGEST_TIMEOUT);
 
       try {
-        const keyword = topic.toLowerCase().trim();
+        const keyword = (topic || '').toLowerCase().trim();
         
         let results = LOCAL_SENTENCE_BANK.filter(item => 
           item.tags.some(tag => tag.includes(keyword)) ||
