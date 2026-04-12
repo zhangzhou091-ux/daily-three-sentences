@@ -438,9 +438,10 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     </div>
                   </div>
                   <div 
-                    className="card-back p-6 flex flex-col"
+                    className="card-back p-6 flex flex-col bg-white"
                     style={{ 
                       backfaceVisibility: 'hidden', 
+                      WebkitBackfaceVisibility: 'hidden',
                       position: 'absolute', 
                       inset: 0,
                       transform: 'rotateY(180deg)',
@@ -479,9 +480,6 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       <span>标记掌握</span>
                       <span className="text-sm opacity-50">+{LEARN_XP} XP</span>
                     </button>
-                    <p className="text-center text-xs text-gray-600 mt-1">
-                      📅 学习完成后将在次日复习中出现
-                    </p>
                   </>
                 ) : (
                   <button
@@ -582,9 +580,10 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                   style={{ position: 'relative', width: '100%', height: 'auto', transformStyle: 'preserve-3d' }}
                 >
                   <div 
-                    className="card-front p-6"
+                    className="card-front p-6 bg-white"
                     style={{ 
                       backfaceVisibility: 'hidden', 
+                      WebkitBackfaceVisibility: 'hidden',
                       position: 'relative', 
                       width: '100%',
                       display: 'flex',
@@ -598,7 +597,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       overflow: 'hidden'
                     }}
                   >
-                    <div className="absolute top-3 right-3 flex flex-col items-end bg-white/80 backdrop-blur-sm px-2 py-1 rounded-lg shadow-sm">
+                    <div className="absolute top-3 right-3 flex flex-col items-end bg-white px-2 py-1 rounded-lg shadow-sm">
                       <span className="text-[8px] font-black text-blue-500 uppercase tracking-widest mb-0.5">下次复习</span>
                       <span className="text-xs font-bold text-gray-700">
                         {reviewQueue[currentReviewIndex]?.scheduledDays 
@@ -632,9 +631,10 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     </div>
                   </div>
                   <div 
-                    className="card-back p-6 flex flex-col"
+                    className="card-back p-6 flex flex-col bg-white"
                     style={{ 
                       backfaceVisibility: 'hidden', 
+                      WebkitBackfaceVisibility: 'hidden',
                       position: 'absolute', 
                       inset: 0,
                       transform: 'rotateY(180deg)',
