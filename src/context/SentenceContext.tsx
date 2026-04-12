@@ -77,6 +77,7 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
       }
       
       setSyncError(null);
+      setIsInitialLoading(false);
 
       if (isConfigured && isOnline) {
         console.log('📚 SentenceContext: 开始云端同步...');
@@ -114,15 +115,12 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
       
       if (currentRequestId === lastRequestId.current) {
         setSyncError(err instanceof Error ? err.message : '加载失败');
+        setIsInitialLoading(false);
         
         if (previousSentencesRef.current.length > 0) {
           console.log('📚 SentenceContext: 恢复到上一次的有效数据');
           setSentences(previousSentencesRef.current);
         }
-      }
-    } finally {
-      if (currentRequestId === lastRequestId.current) {
-        setIsInitialLoading(false);
       }
     }
   }, [isConfigured, isOnline, syncData]);
