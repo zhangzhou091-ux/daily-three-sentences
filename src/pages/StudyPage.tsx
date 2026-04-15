@@ -11,6 +11,8 @@ import { useLearnLogic } from './StudyPage/hooks/useLearnLogic';
 import { useProgressRestore } from './StudyPage/hooks/useProgressRestore';
 import { useReviewLogic } from './StudyPage/hooks/useReviewLogic';
 import { useDictationLogic } from './StudyPage/hooks/useDictationLogic';
+import { LearnCard } from './StudyPage/components/LearnCard';
+import { ReviewCard } from './StudyPage/components/ReviewCard';
 
 interface StudyPageProps {
   sentences: Sentence[];
@@ -385,91 +387,18 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
 
       <div className="min-h-[460px]">
         {activeTab === 'learn' && (
-          (dailySelection.length > 0 && !allLearned) ? (
+          dailySelection.length > 0 ? (
             <div className="space-y-8">
-              <div className="perspective-1000 min-h-[340px] w-full">
-                <div 
-                  className={`card-inner apple-card ${isFlipped ? 'card-flipped' : ''}`}
-                  onClick={() => setIsFlipped(!isFlipped)}
-                  style={{ position: 'relative', width: '100%', height: 'auto', transformStyle: 'preserve-3d' }}
-                >
-                  <div 
-                    className={`card-front p-6 transition-all duration-700 ${isCurrentlyLearned || isAnimating ? 'bg-green-50/20' : ''}`}
-                    style={{ 
-                      backfaceVisibility: 'hidden', 
-                      position: 'relative', 
-                      width: '100%',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'flex-start',
-                      justifyContent: 'flex-start',
-                      minHeight: '340px',
-                      textAlign: 'left',
-                      paddingTop: '20px',
-                      paddingBottom: '20px',
-                      overflow: 'hidden'
-                    }}
-                  >
-                    {(isCurrentlyLearned || isAnimating) && (
-                      <div className="bg-green-100 text-green-600 text-xs font-black px-4 py-1.5 rounded-full mb-4 flex items-center gap-2 shadow-sm border border-green-200/50">
-                        <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
-                        已进入计划
-                      </div>
-                    )}
-                    
-                    <div className="mt-[2em] flex flex-col items-center w-full flex-1 overflow-y-auto min-h-0">
-                      <h3 className="text-lg font-normal text-gray-900 leading-normal w-full break-words whitespace-pre-wrap text-left m-0 p-0">
-                        {currentSentenceLatest?.english || ''}
-                      </h3>
-                      
-                      <div className="mt-auto flex flex-col items-center">
-                        <button 
-                          onClick={(e) => { 
-                            e.stopPropagation(); 
-                            if (currentSentence) speak(currentSentence.english); 
-                          }}
-                          className="w-16 h-16 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-2xl hover:scale-110 active:scale-95 transition-all z-20"
-                        >
-                          🔊
-                        </button>
-                        
-                        <p className="text-xs font-black text-gray-600 uppercase tracking-widest mt-6">点击卡片翻转显示中文</p>
-                      </div>
-                    </div>
-                  </div>
-                  <div 
-                    className="card-back p-6 flex flex-col bg-white"
-                    style={{ 
-                      backfaceVisibility: 'hidden', 
-                      WebkitBackfaceVisibility: 'hidden',
-                      position: 'absolute', 
-                      inset: 0,
-                      transform: 'rotateY(180deg)',
-                      textAlign: 'left',
-                      paddingTop: '20px',
-                      paddingBottom: '20px'
-                    }}
-                  >
-                    <div className="flex-shrink-0">
-                      {(isCurrentlyLearned || isAnimating) && (
-                        <div className="opacity-0 mb-4 pointer-events-none">占位</div>
-                      )}
-                    </div>
-                    
-                    <div className="flex-1 flex items-start justify-start overflow-y-auto pr-2 min-h-0">
-                      <p className="text-lg text-gray-800 font-normal leading-normal w-full break-words whitespace-pre-wrap text-left m-0 p-0">
-                        {currentSentenceLatest?.chinese || ''}
-                      </p>
-                    </div>
-                    
-                    <div className="flex-shrink-0 flex justify-center mt-4">
-                      <div className="px-6 py-2 bg-gray-100 rounded-full text-xs font-black text-gray-600 uppercase tracking-widest">
-                        可理解输入，举一反三，场景运用
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <LearnCard
+                sentence={currentSentenceLatest || currentSentence!}
+                onFlip={() => setIsFlipped(!isFlipped)}
+                isFlipped={isFlipped}
+                onMarkLearned={handleMarkLearned}
+                onSpeak={speak}
+                isCurrentlyLearned={isCurrentlyLearned}
+                isAnimating={isAnimating}
+                isSavingLearned={isSavingLearned}
+              />
               <div className="flex flex-col gap-4">
                 {!isCurrentlyLearned && !isAnimating ? (
                   <>
@@ -488,9 +417,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                         if (currentIndex < dailySelection.length - 1) {
                             setCurrentIndex(currentIndex + 1);
                         } else {
-                            setActiveTab('review');
                             setCurrentIndex(0);
-                            setIsFlipped(true);
                         }
                     }}
                     disabled={isSavingLearned}
@@ -507,7 +434,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       </>
                     ) : (
                       <>
-                        <span>{currentIndex < dailySelection.length - 1 ? '继续下一个' : '前往到期复习'}</span>
+                        <span>继续下一个</span>
                         <span className="text-xl">→</span>
                       </>
                     )}
@@ -539,33 +466,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
             </div>
           ) : (
             <div className="apple-card p-16 text-center space-y-6">
-              {sentences.length === 0 ? (
-                <>
-                  <div className="text-7xl">🪴</div>
-                  <h2 className="text-2xl font-black text-gray-900 tracking-tight">库中暂无可学内容</h2>
-                  <p className="text-gray-600 font-medium">请到仓库页添加新句子。</p>
-                </>
-              ) : (
-                <div className="flex flex-col items-center justify-center animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  <div className="text-7xl mb-6">🎉</div>
-                  <h2 className="text-2xl font-black text-gray-900 tracking-tight mb-2">今日学习目标达成！</h2>
-                  <p className="text-gray-600 font-medium mb-4">你已经学完了今日分配的所有句子，做得太棒了！</p>
-                  <div className="flex gap-3">
-                    <button 
-                      onClick={() => setActiveTab('review')}
-                      className="bg-blue-500 text-white px-6 py-3 rounded-full font-bold hover:bg-blue-600 transition-colors"
-                    >
-                      前往复习
-                    </button>
-                    <button 
-                      onClick={() => setActiveTab('dictation')}
-                      className="bg-gray-100 text-gray-700 px-6 py-3 rounded-full font-bold hover:bg-gray-200 transition-colors"
-                    >
-                      去默写挑战
-                    </button>
-                  </div>
-                </div>
-              )}
+              <div className="text-7xl">🪴</div>
+              <h2 className="text-2xl font-black text-gray-900 tracking-tight">库中暂无可学内容</h2>
+              <p className="text-gray-600 font-medium">请到仓库页添加新句子。</p>
             </div>
           )
         )}
@@ -573,95 +476,14 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         {activeTab === 'review' && (
           reviewQueue.length > 0 ? (
             <div className="space-y-8 animate-in slide-in-from-right-4 duration-500">
-              <div className="perspective-1000 min-h-[380px] w-full">
-                <div 
-                  className={`card-inner apple-card ${isFlipped ? 'card-flipped' : ''}`}
-                  onClick={() => setIsFlipped(!isFlipped)}
-                  style={{ position: 'relative', width: '100%', height: 'auto', transformStyle: 'preserve-3d' }}
-                >
-                  <div 
-                    className="card-front p-6 bg-white"
-                    style={{ 
-                      backfaceVisibility: 'hidden', 
-                      WebkitBackfaceVisibility: 'hidden',
-                      position: 'relative', 
-                      width: '100%',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'flex-start',
-                      justifyContent: 'flex-start',
-                      minHeight: '380px',
-                      textAlign: 'left',
-                      paddingTop: '20px',
-                      paddingBottom: '20px',
-                      overflow: 'hidden'
-                    }}
-                  >
-                    <div className="absolute top-3 right-3 flex flex-col items-end bg-white px-2 py-1 rounded-lg shadow-sm">
-                      <span className="text-[8px] font-black text-blue-500 uppercase tracking-widest mb-0.5">下次复习</span>
-                      <span className="text-xs font-bold text-gray-700">
-                        {reviewQueue[currentReviewIndex]?.scheduledDays 
-                          ? reviewQueue[currentReviewIndex].scheduledDays === 1 
-                            ? '明天' 
-                            : `${reviewQueue[currentReviewIndex].scheduledDays}天后`
-                          : '待定'}
-                      </span>
-                    </div>
-                    <p className="text-xs font-black text-gray-600 uppercase tracking-[0.2em] mb-4 pr-16">已复习 {reviewQueue[currentReviewIndex]?.reps || 0} 次</p>
-                    
-                    <div className="mt-[2em] flex flex-col items-center w-full flex-1 overflow-y-auto min-h-0">
-                      <h3 className="text-lg font-normal text-gray-800 w-full leading-normal mt-0 pr-16 break-words whitespace-pre-wrap text-left m-0 p-0">
-                        {reviewQueue[currentReviewIndex]?.english || ''}
-                      </h3>
-                      
-                      <div className="mt-auto flex flex-col items-center">
-                        <button 
-                          onClick={(e) => { 
-                            e.stopPropagation(); 
-                            const sen = reviewQueue[currentReviewIndex];
-                            if (sen) speak(sen.english); 
-                          }}
-                          className="w-16 h-16 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-2xl hover:scale-110 active:scale-95 transition-all z-20"
-                        >
-                          🔊
-                        </button>
-                        
-                        <p className="text-xs font-black text-gray-600 uppercase tracking-widest mt-6">点击翻转查看翻译</p>
-                      </div>
-                    </div>
-                  </div>
-                  <div 
-                    className="card-back p-6 flex flex-col bg-white"
-                    style={{ 
-                      backfaceVisibility: 'hidden', 
-                      WebkitBackfaceVisibility: 'hidden',
-                      position: 'absolute', 
-                      inset: 0,
-                      transform: 'rotateY(180deg)',
-                      textAlign: 'left',
-                      paddingTop: '20px',
-                      paddingBottom: '20px'
-                    }}
-                  >
-                    <div className="flex-shrink-0">
-                      <div className="absolute top-3 right-3 opacity-0 pointer-events-none">占位</div>
-                      <p className="text-xs opacity-0 mb-4 pointer-events-none pr-16">占位</p>
-                    </div>
-                    
-                    <div className="flex-1 flex items-start justify-start overflow-y-auto pr-2 min-h-0">
-                      <h4 className="text-lg font-normal text-gray-900 leading-normal w-full px-4 break-words whitespace-pre-wrap text-left m-0 p-0">
-                        {reviewQueue[currentReviewIndex]?.chinese || ''}
-                      </h4>
-                    </div>
-                    
-                    <div className="flex-shrink-0 flex justify-center mt-4">
-                      <div className="bg-blue-50 text-blue-500 px-6 py-2 rounded-full text-xs font-black uppercase tracking-[0.2em]">
-                        可理解输入，举一反三，场景运用
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <ReviewCard
+                sentence={reviewQueue[currentReviewIndex]!}
+                onFlip={() => setIsFlipped(!isFlipped)}
+                isFlipped={isFlipped}
+                onSpeak={speak}
+                scheduledDays={reviewQueue[currentReviewIndex]?.scheduledDays}
+                reps={reviewQueue[currentReviewIndex]?.reps || 0}
+              />
               
               {!isCurrentReviewed ? (
                 <div className={`grid grid-cols-4 gap-3 transition-opacity duration-300 ${isProcessingReview ? 'opacity-50 pointer-events-none grayscale' : ''}`}>
@@ -721,12 +543,13 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     if (currentReviewIndex < reviewQueue.length - 1) {
                       goToReviewIndex(currentReviewIndex + 1);
                     } else {
-                      setActiveTab('dictation');
+                      goToReviewIndex(0);
+                      setIsFlipped(true);
                     }
                   }}
                   className="w-full bg-green-500 text-white py-5 rounded-[2rem] font-black text-xl shadow-xl shadow-green-200 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
                 >
-                  <span>{currentReviewIndex < reviewQueue.length - 1 ? '继续下一个' : '前往默写挑战'}</span>
+                  <span>继续下一个</span>
                   <span className="text-xl">→</span>
                 </button>
               )}

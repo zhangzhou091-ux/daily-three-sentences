@@ -126,6 +126,11 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
   }, [isConfigured, isOnline, syncData]);
 
   useEffect(() => {
+    if (previousSentencesRef.current.length > 0) {
+      console.log('📚 SentenceContext: 使用缓存数据立即渲染');
+      setSentences(previousSentencesRef.current);
+      setIsInitialLoading(false);
+    }
     refreshSentences();
   }, [refreshSentences]);
 

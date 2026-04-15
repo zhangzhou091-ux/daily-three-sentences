@@ -46,8 +46,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         cleanupPeriodic = localStorageService.startPeriodicCleanup();
         performanceMonitor.startPeriodicReporting();
         
-        await storageService.recoverPendingStats();
-        
         const config = supabaseService.getConfig();
         if (config.isConfigured && config.userName) {
           setIsConfigured(true);
@@ -61,6 +59,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       } finally {
         setIsLoading(false);
       }
+      
+      setTimeout(() => {
+        storageService.recoverPendingStats().catch(err => {
+          console.warn('后台恢复统计数据失败:', err);
+        });
+      }, 0);
     };
     initApp();
 

@@ -1,7 +1,6 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import Navbar from './Navbar';
-// Lazy load pages for better performance
-const StudyPage = lazy(() => import('../pages/StudyPage'));
+import StudyPage from '../pages/StudyPage';
 const ManagePage = lazy(() => import('../pages/ManagePage'));
 const AchievementPage = lazy(() => import('../pages/AchievementPage'));
 const SettingsPage = lazy(() => import('../pages/SettingsPage'));
