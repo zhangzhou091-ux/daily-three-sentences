@@ -48,12 +48,16 @@ export type ViewType = 'study' | 'manage' | 'achievements' | 'settings';
 // 学习步骤类型
 export type StudyStep = 'learn' | 'review' | 'dictation';
 
-// 用户设置接口
+export type TTSEngine = 'edge' | 'webSpeech';
+
 export interface UserSettings {
   dailyTarget: number;
   dailyLearnTarget: number;
   dailyReviewTarget: number;
   voiceName: 'Kore' | 'Puck' | 'Charon' | 'Zephyr' | 'Fenrir';
+  edgeVoice: string;
+  ttsEngine: TTSEngine;
+  speechRate: number;
   showChineseFirst: boolean;
   autoPlayAudio: boolean;
   userName: string;

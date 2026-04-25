@@ -3,6 +3,7 @@ import { storageSyncService } from './storageSyncService';
 import { storageSentenceService } from './storageSentenceService';
 import { storageFsrsService } from './storageFsrsService';
 import { supabaseService } from '../supabaseService';
+import { deviceService } from '../deviceService';
 import { UserStats } from '../../types';
 import { getLocalDateString } from '../../utils/date';
 
@@ -61,7 +62,7 @@ export const storageService = {
   saveStats: async (stats: UserStats, triggerCloud: boolean = true) => {
     localStorageService.saveStats(stats);
 
-    if (triggerCloud && supabaseService.isReady) {
+    if (triggerCloud && supabaseService.isReady && deviceService.canUploadSync()) {
       try {
         const result = await supabaseService.pushStats(stats);
         if (result.success) {
@@ -85,7 +86,7 @@ export const storageService = {
   updateStatsSafely: async (updater: (stats: UserStats) => UserStats, triggerCloud: boolean = true): Promise<void> => {
     await localStorageService.updateStatsSafely(updater, triggerCloud);
     
-    if (triggerCloud && supabaseService.isReady) {
+    if (triggerCloud && supabaseService.isReady && deviceService.canUploadSync()) {
       try {
         const stats = localStorageService.getStats();
         const result = await supabaseService.pushStats(stats);
@@ -127,6 +128,11 @@ export const storageService = {
     try {
       const pendingStats = JSON.parse(localStorage.getItem('d3s_pending_stats') || '[]');
       if (pendingStats.length === 0) return;
+      
+      if (!deviceService.canUploadSync()) {
+        localStorage.removeItem('d3s_pending_stats');
+        return;
+      }
       
       console.log(`📊 发现 ${pendingStats.length} 条待恢复统计数据`);
       
@@ -186,7 +192,7 @@ export const storageService = {
 
   saveTodaySelection: async (ids: string[]) => {
     localStorageService.saveTodaySelection(ids);
-    if (supabaseService.isReady) {
+    if (supabaseService.isReady && deviceService.canUploadSync()) {
       await supabaseService.pushDailySelection(getLocalDateString(), ids);
     }
   },

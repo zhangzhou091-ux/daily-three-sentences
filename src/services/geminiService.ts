@@ -1,7 +1,14 @@
 /**
- * Mock Gemini Service
- * Uses Web Speech API for TTS with iOS bug fixes (queue + delay)
+ * Gemini Service with EdgeTTS
+ * 
+ * TTS 智能调度策略：
+ * 1. 用户选择 edge → 先检测可用性，可用则用 EdgeTTS，不可用则自动回退
+ * 2. 用户选择 webSpeech → 直接使用浏览器原生语音
+ * 3. EdgeTTS 失败后自动缓存不可用状态（5分钟），避免重复尝试
  */
+
+import { edgeTtsService, checkEdgeTtsAvailability, SpeakResult as EdgeSpeakResult } from './edgeTtsService';
+import { storageService } from './storage';
 
 const SPEAK_TIMEOUT = 10000;
 const SUGGEST_TIMEOUT = 5000;
@@ -13,6 +20,8 @@ const isIOS = (): boolean => {
 
 interface SpeakTask {
   text: string;
+  loop: boolean;
+  rate: number;
   resolve: (result: { success: boolean; error?: string }) => void;
   reject: (error: Error) => void;
 }
@@ -88,25 +97,78 @@ const selectBestUsVoice = async (): Promise<SpeechSynthesisVoice | null> => {
     console.warn('未找到任何可用语音');
     return null;
   }
+
+  if (isIOS()) {
+    const zoeVoice = voices.find(v =>
+      (v.lang === 'en-US' || v.lang === 'en_US') && v.name.includes('Zoe')
+    );
+    if (zoeVoice) {
+      console.log('🎤 iOS 选择 ZOE 语音:', zoeVoice.name);
+      return zoeVoice;
+    }
+
+    const samantha = voices.find(v =>
+      (v.lang === 'en-US' || v.lang === 'en_US') && v.name.includes('Samantha')
+    );
+    if (samantha) {
+      console.log('🎤 iOS 选择 Samantha 语音:', samantha.name);
+      return samantha;
+    }
+
+    const premiumVoice = voices.find(v =>
+      (v.lang === 'en-US' || v.lang === 'en_US') &&
+      (v.name.includes('Premium') || v.name.includes('Enhanced'))
+    );
+    if (premiumVoice) {
+      console.log('🎤 iOS 选择 Premium/Enhanced 语音:', premiumVoice.name);
+      return premiumVoice;
+    }
+
+    const alex = voices.find(v =>
+      (v.lang === 'en-US' || v.lang === 'en_US') && v.name.includes('Alex')
+    );
+    if (alex) {
+      console.log('🎤 iOS 选择 Alex 语音:', alex.name);
+      return alex;
+    }
+  }
   
   const usVoices = voices.filter(v => v.lang === 'en-US' || v.lang === 'en_US');
   
   if (!usVoices.length) {
-    console.warn('未找到美式英语语音');
+    const enVoices = voices.filter(v => v.lang.startsWith('en'));
+    if (enVoices.length) {
+      console.warn('未找到美式英语语音，使用其他英语语音');
+      return (
+        enVoices.find(v => v.name.includes('Samantha')) ||
+        enVoices.find(v => v.localService === true) ||
+        enVoices[0]
+      );
+    }
+    console.warn('未找到任何英语语音');
     return null;
+  }
+
+  const premiumVoice = usVoices.find(v => v.name.includes('Premium') || v.name.includes('Enhanced'));
+  if (premiumVoice) {
+    console.log('🎤 选择 Premium/Enhanced 语音:', premiumVoice.name);
+    return premiumVoice;
   }
 
   return (
     usVoices.find(v => v.name.includes('Samantha')) ||
     usVoices.find(v => v.name.includes('Alex')) ||
-    usVoices.find(v => v.name.includes('Google') || v.name.includes('Premium')) ||
+    usVoices.find(v => v.name.includes('Karen')) ||
+    usVoices.find(v => v.name.includes('Google') && v.localService === false) ||
+    usVoices.find(v => v.name.includes('Google')) ||
+    usVoices.find(v => v.name.includes('Microsoft') && v.name.includes('Natural')) ||
     usVoices.find(v => v.name.includes('Microsoft')) ||
     usVoices.find(v => v.localService === true) ||
     usVoices[0]
   );
 };
 
-const executeSpeak = async (text: string): Promise<SpeakResult> => {
+const executeSpeak = async (text: string, loop: boolean = false, rate: number = 1): Promise<SpeakResult> => {
   if (!text || typeof text !== 'string' || !text.trim()) {
     console.warn('发音文本为空');
     return { success: false, error: '发音文本为空' };
@@ -136,46 +198,118 @@ const executeSpeak = async (text: string): Promise<SpeakResult> => {
   }
 
   utterance.lang = 'en-US';
-  utterance.rate = 0.9;
-  utterance.pitch = 1.0;
+  utterance.rate = rate;
+  utterance.pitch = rate < 0.5 ? 0.95 : 1.0;
+  utterance.volume = 1.0;
 
   return new Promise((resolve) => {
-    let isSettled = false;
+    let promiseResolved = false;
+    let loopActive = loop;
+    let retryCount = 0;
+    const MAX_LOOP_RETRIES = 3;
     
     const cleanup = () => {
       clearTimeout(timeoutId);
-      utterance.onend = null;
-      utterance.onerror = null;
       if (currentUtterance === utterance) {
         currentUtterance = null;
       }
     };
 
     const timeoutId = setTimeout(() => {
-      if (isSettled) return;
-      isSettled = true;
+      if (promiseResolved) return;
+      promiseResolved = true;
+      loopActive = false;
       window.speechSynthesis.cancel();
       cleanup();
       console.warn('语音合成超时，已取消');
       resolve({ success: false, error: '语音合成超时，请重试' });
-    }, SPEAK_TIMEOUT);
+    }, loop ? 120000 : SPEAK_TIMEOUT);
 
-    utterance.onend = () => {
-      if (isSettled) return;
-      isSettled = true;
+    const startSpeak = () => {
+      if (!loopActive && !promiseResolved) {
+        cleanup();
+        promiseResolved = true;
+        resolve({ success: true });
+        return;
+      }
+      
+      const pitch = rate < 0.5 ? 0.95 : 1.0;
+
+      if (isIOS()) {
+        window.speechSynthesis.cancel();
+        setTimeout(() => {
+          if (loopActive && !promiseResolved) {
+            const newUtterance = new SpeechSynthesisUtterance(text);
+            newUtterance.voice = utterance.voice;
+            newUtterance.lang = 'en-US';
+            newUtterance.rate = rate;
+            newUtterance.pitch = pitch;
+            newUtterance.volume = 1.0;
+            newUtterance.onend = handleEnd;
+            newUtterance.onerror = handleError;
+            currentUtterance = newUtterance;
+            window.speechSynthesis.speak(newUtterance);
+          }
+        }, 50);
+      } else {
+        const newUtterance = new SpeechSynthesisUtterance(text);
+        newUtterance.voice = utterance.voice;
+        newUtterance.lang = 'en-US';
+        newUtterance.rate = rate;
+        newUtterance.pitch = pitch;
+        newUtterance.volume = 1.0;
+        newUtterance.onend = handleEnd;
+        newUtterance.onerror = handleError;
+        currentUtterance = newUtterance;
+        window.speechSynthesis.speak(newUtterance);
+      }
+    };
+
+    const handleEnd = () => {
+      if (promiseResolved) return;
+      if (loopActive) {
+        retryCount = 0;
+        startSpeak();
+        return;
+      }
+      promiseResolved = true;
       cleanup();
       resolve({ success: true });
     };
 
-    utterance.onerror = (event) => {
-      if (isSettled) return;
-      isSettled = true;
+    const handleError = (event: SpeechSynthesisErrorEvent) => {
+      if (promiseResolved) return;
+      
+      if (loopActive && (event.error === 'interrupted' || event.error === 'canceled') && retryCount < MAX_LOOP_RETRIES) {
+        retryCount++;
+        console.warn(`iOS 循环播放中断，第 ${retryCount} 次重试...`);
+        setTimeout(() => {
+          if (loopActive && !promiseResolved) {
+            startSpeak();
+          }
+        }, 200);
+        return;
+      }
+      
+      promiseResolved = true;
+      loopActive = false;
       cleanup();
       console.warn('语音合成错误:', event.error);
       resolve({ success: false, error: `语音播放失败: ${event.error}` });
     };
 
+    utterance.onend = handleEnd;
+    utterance.onerror = handleError;
+
     window.speechSynthesis.speak(utterance);
+
+    if (loop) {
+      setTimeout(() => {
+        if (!promiseResolved) {
+          promiseResolved = true;
+        }
+      }, 200);
+    }
   });
 };
 
@@ -186,7 +320,7 @@ const processQueue = async () => {
 
   const task = taskQueue.shift()!;
   try {
-    const result = await executeSpeak(task.text);
+    const result = await executeSpeak(task.text, task.loop, task.rate);
     task.resolve(result);
   } catch (err) {
     task.reject(err instanceof Error ? err : new Error(String(err)));
@@ -199,11 +333,46 @@ const processQueue = async () => {
 };
 
 export const geminiService = {
-  async speak(text: string): Promise<SpeakResult> {
+  async speak(text: string, voice?: string, loop: boolean = false): Promise<SpeakResult> {
+    const settings = storageService.getSettings();
+    const ttsEngine = settings.ttsEngine || 'edge';
+    const speechRate = settings.speechRate ?? 1;
+    
+    const edgeRate = speechRate === 0.2 ? '-80%' : speechRate === 0.5 ? '-50%' : '+0%';
+    
+    if (ttsEngine === 'edge') {
+      const isAvailable = await checkEdgeTtsAvailability();
+      
+      if (isAvailable) {
+        try {
+          console.log('🔊 使用 EdgeTTS 播放语音...');
+          const edgeVoice = voice || settings.edgeVoice;
+          const result = await edgeTtsService.speak(text, edgeVoice, edgeRate, loop);
+          if (result.success) {
+            return result;
+          }
+          console.warn('EdgeTTS 播放失败，回退到 Web Speech API:', result.error);
+        } catch (err) {
+          console.warn('EdgeTTS 出错，回退到 Web Speech API:', err);
+        }
+      } else {
+        console.warn('EdgeTTS 不可用（网络限制），自动使用 Web Speech API');
+      }
+    }
+    
+    console.log('🔊 使用 Web Speech API 播放语音...');
     return new Promise((resolve, reject) => {
-      taskQueue.push({ text, resolve, reject });
+      taskQueue.push({ text, loop, rate: speechRate, resolve, reject });
       processQueue();
     });
+  },
+
+  stop(): void {
+    edgeTtsService.stop();
+    window.speechSynthesis.cancel();
+    currentUtterance = null;
+    taskQueue = [];
+    isProcessing = false;
   },
 
   async suggestSentences(topic: string): Promise<{ english: string; chinese: string }[]> {

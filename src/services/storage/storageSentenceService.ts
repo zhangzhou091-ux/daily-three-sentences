@@ -144,6 +144,7 @@ export const storageSentenceService = {
     await dbService.clear();
     localStorage.removeItem('d3s_daily_selection');
     localStorage.removeItem('d3s_last_sync_time');
+    localStorage.removeItem('d3s_last_incremental_sync_time');
     if (supabaseService.isReady) {
       supabaseService.syncSentences([]);
     }

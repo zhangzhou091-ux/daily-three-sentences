@@ -6,11 +6,8 @@ export const deviceService = {
     const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
     const isIPad = /ipad/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
     
-    // ✅ 修复：iPad 应该被视为移动设备，支持触摸反馈
-    // 综合判断：满足任一条件即可判定为移动设备
     const isMobile = isMobileUA || isIPad || (isSmallScreen && isTouchDevice);
     
-    // 调试日志
     if (import.meta.env.DEV) {
       console.log('📱 设备检测:', {
         ua,
@@ -32,6 +29,12 @@ export const deviceService = {
       console.log('📝 反馈提交权限:', result ? 'mobile' : 'desktop');
     }
     return result;
+  },
+  canUploadSync: (): boolean => {
+    return deviceService.isMobile();
+  },
+  getSyncMode: (): 'bidirectional' | 'downloadOnly' => {
+    return deviceService.isMobile() ? 'bidirectional' : 'downloadOnly';
   },
   getScreenInfo: () => {
     const width = window.innerWidth;

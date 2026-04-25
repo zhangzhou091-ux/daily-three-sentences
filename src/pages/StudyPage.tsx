@@ -38,6 +38,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   const [progressAdjusted, setProgressAdjusted] = useState(false);
   const [currentDateStr, setCurrentDateStr] = useState(() => getLocalDateString());
   const [speakError, setSpeakError] = useState<string | null>(null);
+  const [speakingText, setSpeakingText] = useState<string | null>(null);
   
   const [settings, setSettings] = useState(() => storageService.getSettings());
   const todayStr = useMemo(() => {
@@ -161,8 +162,14 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
+      geminiService.stop();
     };
   }, []);
+
+  useEffect(() => {
+    geminiService.stop();
+    setSpeakingText(null);
+  }, [currentIndex, currentReviewIndex]);
 
   const syncOfflineOperations = async () => {
     if (isSyncingRef.current) return;
@@ -220,11 +227,23 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     };
   }, []);
 
-  const speak = async (text: string) => {
+  const speak = async (text: string, loop: boolean = true) => {
     if (!text?.trim()) return;
+
+    if (loop && speakingText === text) {
+      geminiService.stop();
+      setSpeakingText(null);
+      return;
+    }
+
+    geminiService.stop();
+    if (loop) setSpeakingText(text);
+
     try {
-      await geminiService.speak(text);
+      await geminiService.speak(text, settings.edgeVoice, loop);
+      if (!loop) setSpeakingText(null);
     } catch (err: unknown) {
+      setSpeakingText(null);
       if (err instanceof Error) {
         console.warn('语音播放失败', err.message);
       } else {
@@ -374,7 +393,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
             {(['learn', 'review', 'dictation'] as StudyStep[]).map(tab => (
               <button
                 key={tab}
-                onClick={() => { setActiveTab(tab); setCurrentIndex(0); setIsFlipped(tab === 'review'); }}
+                onClick={() => { geminiService.stop(); setSpeakingText(null); setActiveTab(tab); setCurrentIndex(0); setIsFlipped(tab === 'review'); }}
                 className={`px-4 py-2 text-[11px] font-black uppercase tracking-wider rounded-[1.2rem] transition-all duration-300 ${
                   activeTab === tab ? 'bg-white shadow-sm text-blue-600' : 'text-gray-600 hover:text-gray-800'
                 }`}
@@ -398,6 +417,13 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 isCurrentlyLearned={isCurrentlyLearned}
                 isAnimating={isAnimating}
                 isSavingLearned={isSavingLearned}
+                isSpeaking={speakingText === (currentSentenceLatest || currentSentence)?.english}
+                speechRate={settings.speechRate ?? 1}
+                onSpeechRateChange={(rate) => {
+                  const updated = { ...settings, speechRate: rate, updatedAt: Date.now() };
+                  storageService.saveSettings(updated);
+                  setSettings(updated);
+                }}
               />
               <div className="flex flex-col gap-4">
                 {!isCurrentlyLearned && !isAnimating ? (
@@ -483,6 +509,13 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 onSpeak={speak}
                 scheduledDays={reviewQueue[currentReviewIndex]?.scheduledDays}
                 reps={reviewQueue[currentReviewIndex]?.reps || 0}
+                isSpeaking={speakingText === reviewQueue[currentReviewIndex]?.english}
+                speechRate={settings.speechRate ?? 1}
+                onSpeechRateChange={(rate) => {
+                  const updated = { ...settings, speechRate: rate, updatedAt: Date.now() };
+                  storageService.saveSettings(updated);
+                  setSettings(updated);
+                }}
               />
               
               {!isCurrentReviewed ? (
@@ -657,15 +690,20 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 <div className="text-[10px] text-gray-400 text-right mt-1">
                   {userInput.length}/1000
                 </div>
-                <div className="grid grid-cols-2 gap-4 mt-8">
+                <div className="grid grid-cols-3 gap-3 mt-8">
                   <button 
                     onClick={() => { 
-                      setIsFlipped(!isFlipped); 
-                      if(!isFlipped && targetSentence) speak(targetSentence.english); 
+                      if(targetSentence) speak(targetSentence.english); 
                     }} 
                     className="bg-white text-gray-600 py-5 rounded-[2rem] font-bold border border-gray-100 active:scale-95 transition-all"
                   >
-                    {isFlipped ? '隐藏答案' : '听音提示'}
+                    听音提示
+                  </button>
+                  <button 
+                    onClick={() => setIsFlipped(!isFlipped)}
+                    className="bg-white text-gray-600 py-5 rounded-[2rem] font-bold border border-gray-100 active:scale-95 transition-all"
+                  >
+                    {isFlipped ? '隐藏答案' : '查看答案'}
                   </button>
                   <button 
                     onClick={handleDictationCheck} 

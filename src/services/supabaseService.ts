@@ -2,6 +2,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Sentence, UserStats, UserSettings, DictationRecord, QueueTask } from '../types';
 import { generateUUID, isValidUUID } from '../utils/uuid';
 import { getSupabaseConfig } from '../constants';
+import { deviceService } from './deviceService';
 
 export interface SyncResult {
   success: boolean;
@@ -844,12 +845,14 @@ class SupabaseService {
           if (!cloudSentence) {
             const isNewLocal = localSentence.updatedAt && (Date.now() - localSentence.updatedAt < 24 * 60 * 60 * 1000);
 
-            if (isNewLocal) {
+            if (isNewLocal && deviceService.canUploadSync()) {
               const uploadData = this.mapSentenceToDb(localSentence, this._userName);
               if (!this.isValidUUID(localSentence.id)) {
                 uploadData.id = this.generateValidUUID();
               }
               toUpload.push(uploadData);
+              merged.push(localSentence);
+            } else if (isNewLocal) {
               merged.push(localSentence);
             } else {
               deletedLocalIds.push(localSentence.id);
@@ -868,7 +871,7 @@ class SupabaseService {
           }
 
           merged.push(localSentence);
-          if (localTime > cloudTime) {
+          if (localTime > cloudTime && deviceService.canUploadSync()) {
             const uploadData = this.mapSentenceToDb(localSentence, this._userName);
             uploadData.id = cloudSentence.id;
             toUpload.push(uploadData);

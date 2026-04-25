@@ -2,6 +2,7 @@ import { Sentence, ReviewRating, DictationRecord, UserStats, SyncEventType, Sync
 import { supabaseService } from './supabaseService';
 import { storageService } from './storage';
 import { networkService } from './networkService';
+import { deviceService } from './deviceService';
 import { generateUUID, isValidUUID } from '../utils/uuid';
 import { SYNC_CONFIG } from '../constants';
 import { dedupeSentences, sanitizeEnglish, sanitizeSentenceForQuery } from '../utils/validators';
@@ -1384,6 +1385,23 @@ class SyncQueueService {
       return;
     }
     
+    const syncMode = deviceService.getSyncMode();
+    
+    if (syncMode === 'downloadOnly') {
+      logger.info('电脑端同步模式：仅下载，跳过上传队列');
+      this.markLearnedQueue.clear();
+      this.reviewFeedbackQueue.clear();
+      this.addSentenceQueue.clear();
+      this.dictationRecordQueue.clear();
+      this.statsSyncQueue.clear();
+      this.retryCount.clear();
+      this.lastSyncTime = Date.now();
+      this.saveToStorageImmediate();
+      this.emit('syncSuccess', { count: 0, message: '电脑端仅下载模式，已清空上传队列' });
+      this.emit('queueChanged', this.getQueueStatus());
+      return;
+    }
+    
     this.isSyncing = true;
     this.lastSyncError = null;
     const totalCount = this.markLearnedQueue.size + this.reviewFeedbackQueue.size + 
@@ -1915,6 +1933,18 @@ class SyncQueueService {
     });
     
     if ((sentencesToSync.length > 0 || recordsToSync.length > 0 || statsToSync.length > 0) && supabaseService.isReady) {
+      if (!deviceService.canUploadSync()) {
+        logger.info('电脑端仅下载模式，跳过强制同步上传');
+        this.markLearnedQueue.clear();
+        this.reviewFeedbackQueue.clear();
+        this.addSentenceQueue.clear();
+        this.dictationRecordQueue.clear();
+        this.statsSyncQueue.clear();
+        this.lastSyncTime = Date.now();
+        this.saveToStorageImmediate();
+        return;
+      }
+      
       const result = await this.syncIncremental(sentencesToSync, recordsToSync, statsToSync);
       
       if (result.success) {

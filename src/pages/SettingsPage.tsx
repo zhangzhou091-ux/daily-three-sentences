@@ -381,6 +381,68 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                   ))}
                 </div>
               </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">TTS 引擎</label>
+                <select
+                  value={settings.ttsEngine || 'edge'}
+                  onChange={(e) => handleUpdate('ttsEngine', e.target.value as 'edge' | 'webSpeech')}
+                  className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-blue-100 w-full cursor-pointer"
+                  disabled={loading}
+                >
+                  <option value="edge">EdgeTTS (高质量，需海外网络)</option>
+                  <option value="webSpeech">浏览器原生语音 (国内可用)</option>
+                </select>
+                <p className="text-[10px] text-gray-500">国内网络建议选择「浏览器原生语音」</p>
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">语音引擎 (EdgeTTS)</label>
+                <select
+                  value={settings.edgeVoice || 'en-US-AvaMultilingualNeural'}
+                  onChange={(e) => handleUpdate('edgeVoice', e.target.value)}
+                  className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-blue-100 w-full cursor-pointer"
+                  disabled={loading || settings.ttsEngine === 'webSpeech'}
+                >
+                  <optgroup label="美式英语">
+                    <option value="en-US-AvaMultilingualNeural">Ava (女声) - 推荐</option>
+                    <option value="en-US-AndrewMultilingualNeural">Andrew (男声)</option>
+                    <option value="en-US-JennyMultilingualNeural">Jenny (女声)</option>
+                    <option value="en-US-GuyMultilingualNeural">Guy (男声)</option>
+                    <option value="en-US-AriaNeural">Aria (女声)</option>
+                    <option value="en-US-DavisNeural">Davis (男声)</option>
+                    <option value="en-US-AnaNeural">Ana (女声)</option>
+                    <option value="en-US-EricNeural">Eric (男声)</option>
+                  </optgroup>
+                  <optgroup label="英式英语">
+                    <option value="en-GB-SoniaNeural">Sonia (女声)</option>
+                    <option value="en-GB-RyanNeural">Ryan (男声)</option>
+                  </optgroup>
+                </select>
+                <p className="text-[10px] text-gray-500">微软 EdgeTTS 高质量语音，免费无需密钥</p>
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">发音速度</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { value: 0.2, label: '0.2x', desc: '慢速' },
+                    { value: 0.5, label: '0.5x', desc: '中速' },
+                    { value: 1, label: '1x', desc: '正常' },
+                  ].map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => handleUpdate('speechRate', opt.value)}
+                      className={`py-2 rounded-lg text-xs font-bold transition-all ${
+                        (settings.speechRate ?? 1) === opt.value
+                          ? 'bg-blue-500 text-white shadow-md'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      }`}
+                    >
+                      {opt.label}
+                      <span className="block text-[9px] font-normal opacity-70">{opt.desc}</span>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[10px] text-gray-500">0.2x 适合逐词听辨，0.5x 适合跟读，1x 正常语速</p>
+              </div>
             </div>
           </div>
 

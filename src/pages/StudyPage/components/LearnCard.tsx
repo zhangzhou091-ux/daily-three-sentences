@@ -6,11 +6,20 @@ interface LearnCardProps {
   onFlip: () => void;
   isFlipped: boolean;
   onMarkLearned: (id: string) => void;
-  onSpeak: (text: string) => void;
+  onSpeak: (text: string, loop?: boolean) => void;
   isCurrentlyLearned: boolean;
   isAnimating: boolean;
   isSavingLearned: boolean;
+  isSpeaking: boolean;
+  speechRate: number;
+  onSpeechRateChange: (rate: number) => void;
 }
+
+const SPEECH_RATE_OPTIONS = [
+  { value: 0.2, label: '0.2x' },
+  { value: 0.5, label: '0.5x' },
+  { value: 1, label: '1x' },
+];
 
 export const LearnCard: React.FC<LearnCardProps> = ({
   sentence,
@@ -20,7 +29,10 @@ export const LearnCard: React.FC<LearnCardProps> = ({
   onSpeak,
   isCurrentlyLearned,
   isAnimating,
-  isSavingLearned
+  isSavingLearned,
+  isSpeaking,
+  speechRate,
+  onSpeechRateChange,
 }) => {
   return (
     <div className="perspective-1000 min-h-[340px] w-full">
@@ -48,6 +60,24 @@ export const LearnCard: React.FC<LearnCardProps> = ({
             overflow: 'hidden'
           }}
         >
+          <div className="w-full flex justify-center mb-3" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-1">
+              {SPEECH_RATE_OPTIONS.map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => onSpeechRateChange(opt.value)}
+                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold transition-all ${
+                    speechRate === opt.value
+                      ? 'bg-blue-500 text-white shadow-sm'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {(isCurrentlyLearned || isAnimating) && (
             <div className="bg-green-100 text-green-600 text-xs font-black px-4 py-1.5 rounded-full mb-4 flex items-center gap-2 shadow-sm border border-green-200/50">
               <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
@@ -64,11 +94,15 @@ export const LearnCard: React.FC<LearnCardProps> = ({
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  onSpeak(sentence.english);
+                  onSpeak(sentence.english, true);
                 }}
-                className="w-16 h-16 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-2xl hover:scale-110 active:scale-95 transition-all z-20"
+                className={`w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all z-20 ${
+                  isSpeaking
+                    ? 'bg-red-50 text-red-500 hover:scale-110 active:scale-95 animate-pulse'
+                    : 'bg-blue-50 text-blue-600 hover:scale-110 active:scale-95'
+                }`}
               >
-                🔊
+                {isSpeaking ? '⏹' : '🔊'}
               </button>
 
               <p className="text-xs font-black text-gray-600 uppercase tracking-widest mt-6">点击卡片翻转显示中文</p>
@@ -89,6 +123,24 @@ export const LearnCard: React.FC<LearnCardProps> = ({
             paddingBottom: '20px'
           }}
         >
+          <div className="w-full flex justify-center mb-3" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-1">
+              {SPEECH_RATE_OPTIONS.map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => onSpeechRateChange(opt.value)}
+                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold transition-all ${
+                    speechRate === opt.value
+                      ? 'bg-blue-500 text-white shadow-sm'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="flex-shrink-0">
             {(isCurrentlyLearned || isAnimating) && (
               <div className="opacity-0 mb-4 pointer-events-none">占位</div>
@@ -99,6 +151,22 @@ export const LearnCard: React.FC<LearnCardProps> = ({
             <p className="text-lg text-gray-800 font-normal leading-normal w-full break-words whitespace-pre-wrap text-left m-0 p-0">
               {sentence.chinese}
             </p>
+          </div>
+
+          <div className="flex flex-col items-center mt-4">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onSpeak(sentence.english, true);
+              }}
+              className={`w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all z-20 ${
+                isSpeaking
+                  ? 'bg-red-50 text-red-500 hover:scale-110 active:scale-95 animate-pulse'
+                  : 'bg-blue-50 text-blue-600 hover:scale-110 active:scale-95'
+              }`}
+            >
+              {isSpeaking ? '⏹' : '🔊'}
+            </button>
           </div>
 
           <div className="flex-shrink-0 flex justify-center mt-4">
