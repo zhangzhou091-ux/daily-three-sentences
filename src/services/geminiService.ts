@@ -30,6 +30,7 @@ let taskQueue: SpeakTask[] = [];
 let isProcessing = false;
 let currentUtterance: SpeechSynthesisUtterance | null = null;
 let loopActiveFlag = false;
+let speakGeneration = 0;
 
 const LOCAL_SENTENCE_BANK = [
   { english: "Could you please clarify that point?", chinese: "能请你澄清一下那一点吗？", tags: ["work", "meeting"] },
@@ -109,43 +110,37 @@ const selectBestUsVoice = async (): Promise<SpeechSynthesisVoice | null> => {
     console.warn(`🎤 用户选择的语音 "${settings.webSpeechVoice}" 未找到，回退自动选择`);
   }
 
-  const enUsVoices = voices.filter(v => v.lang === 'en-US' || v.lang === 'en_US');
-  console.log(`🎤 语音诊断: 共${voices.length}个语音, en-US: ${enUsVoices.length}个`);
-  enUsVoices.forEach(v => {
+  const enVoices = voices.filter(v => v.lang.startsWith('en'));
+  const enUsVoices = enVoices.filter(v => v.lang === 'en-US' || v.lang === 'en_US');
+  console.log(`🎤 语音诊断: 共${voices.length}个语音, 英语: ${enVoices.length}个, en-US: ${enUsVoices.length}个`);
+  enVoices.forEach(v => {
     console.log(`  - ${v.name} | local:${v.localService} | lang:${v.lang}`);
   });
 
   if (isIOS()) {
     console.log('🎤 iOS 设备，按优先级选择语音...');
 
-    const zoeVoice = voices.find(v =>
-      (v.lang === 'en-US' || v.lang === 'en_US') && v.name.includes('Zoe')
-    );
+    const zoeVoice = enVoices.find(v => v.name.includes('Zoe'));
     if (zoeVoice) {
-      console.log('🎤 ✅ iOS 选择 ZOE 语音:', zoeVoice.name, '| local:', zoeVoice.localService);
+      console.log('🎤 ✅ iOS 选择 ZOE 语音:', zoeVoice.name, '| local:', zoeVoice.localService, '| lang:', zoeVoice.lang);
       return zoeVoice;
     }
 
-    const samantha = voices.find(v =>
-      (v.lang === 'en-US' || v.lang === 'en_US') && v.name.includes('Samantha')
-    );
+    const samantha = enVoices.find(v => v.name.includes('Samantha'));
     if (samantha) {
-      console.log('🎤 ✅ iOS 选择 Samantha 语音:', samantha.name, '| local:', samantha.localService);
+      console.log('🎤 ✅ iOS 选择 Samantha 语音:', samantha.name, '| local:', samantha.localService, '| lang:', samantha.lang);
       return samantha;
     }
 
-    const premiumVoice = voices.find(v =>
-      (v.lang === 'en-US' || v.lang === 'en_US') &&
-      (v.name.includes('Premium') || v.name.includes('Enhanced'))
+    const premiumVoice = enVoices.find(v =>
+      v.name.includes('Premium') || v.name.includes('Enhanced')
     );
     if (premiumVoice) {
       console.log('🎤 ✅ iOS 选择 Premium/Enhanced 语音:', premiumVoice.name, '| local:', premiumVoice.localService);
       return premiumVoice;
     }
 
-    const alex = voices.find(v =>
-      (v.lang === 'en-US' || v.lang === 'en_US') && v.name.includes('Alex')
-    );
+    const alex = enVoices.find(v => v.name.includes('Alex'));
     if (alex) {
       console.log('🎤 ✅ iOS 选择 Alex 语音:', alex.name, '| local:', alex.localService);
       return alex;
@@ -154,10 +149,7 @@ const selectBestUsVoice = async (): Promise<SpeechSynthesisVoice | null> => {
     console.warn('🎤 iOS 未找到优选语音，回退通用逻辑');
   }
   
-  const usVoices = voices.filter(v => v.lang === 'en-US' || v.lang === 'en_US');
-  
-  if (!usVoices.length) {
-    const enVoices = voices.filter(v => v.lang.startsWith('en'));
+  if (!enUsVoices.length) {
     if (enVoices.length) {
       console.warn('未找到美式英语语音，使用其他英语语音');
       return (
@@ -170,22 +162,22 @@ const selectBestUsVoice = async (): Promise<SpeechSynthesisVoice | null> => {
     return null;
   }
 
-  const premiumVoice = usVoices.find(v => v.name.includes('Premium') || v.name.includes('Enhanced'));
+  const premiumVoice = enUsVoices.find(v => v.name.includes('Premium') || v.name.includes('Enhanced'));
   if (premiumVoice) {
     console.log('🎤 选择 Premium/Enhanced 语音:', premiumVoice.name);
     return premiumVoice;
   }
 
   return (
-    usVoices.find(v => v.name.includes('Samantha')) ||
-    usVoices.find(v => v.name.includes('Alex')) ||
-    usVoices.find(v => v.name.includes('Karen')) ||
-    usVoices.find(v => v.name.includes('Google') && v.localService === false) ||
-    usVoices.find(v => v.name.includes('Google')) ||
-    usVoices.find(v => v.name.includes('Microsoft') && v.name.includes('Natural')) ||
-    usVoices.find(v => v.name.includes('Microsoft')) ||
-    usVoices.find(v => v.localService === true) ||
-    usVoices[0]
+    enUsVoices.find(v => v.name.includes('Samantha')) ||
+    enUsVoices.find(v => v.name.includes('Alex')) ||
+    enUsVoices.find(v => v.name.includes('Karen')) ||
+    enUsVoices.find(v => v.name.includes('Google') && v.localService === false) ||
+    enUsVoices.find(v => v.name.includes('Google')) ||
+    enUsVoices.find(v => v.name.includes('Microsoft') && v.name.includes('Natural')) ||
+    enUsVoices.find(v => v.name.includes('Microsoft')) ||
+    enUsVoices.find(v => v.localService === true) ||
+    enUsVoices[0]
   );
 };
 
@@ -210,6 +202,8 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
     await new Promise(resolve => setTimeout(resolve, 100));
   }
 
+  const gen = ++speakGeneration;
+
   const utterance = new SpeechSynthesisUtterance(text);
   currentUtterance = utterance;
 
@@ -229,6 +223,8 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
     const MAX_LOOP_RETRIES = 3;
     loopActiveFlag = loop;
     
+    const isCurrentGen = () => gen === speakGeneration;
+
     const cleanup = () => {
       clearTimeout(timeoutId);
       if (currentUtterance === utterance) {
@@ -247,7 +243,7 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
     }, loop ? 120000 : SPEAK_TIMEOUT);
 
     const startSpeak = () => {
-      if (!loopActiveFlag && !promiseResolved) {
+      if (!isCurrentGen() || (!loopActiveFlag && !promiseResolved)) {
         cleanup();
         promiseResolved = true;
         resolve({ success: true });
@@ -259,7 +255,7 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
       if (isIOS()) {
         window.speechSynthesis.cancel();
         setTimeout(() => {
-          if (loopActiveFlag && !promiseResolved) {
+          if (isCurrentGen() && loopActiveFlag && !promiseResolved) {
             const newUtterance = new SpeechSynthesisUtterance(text);
             newUtterance.voice = utterance.voice;
             newUtterance.lang = 'en-US';
@@ -287,6 +283,7 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
     };
 
     const handleEnd = () => {
+      if (!isCurrentGen()) return;
       if (promiseResolved) return;
       if (loopActiveFlag) {
         retryCount = 0;
@@ -299,13 +296,14 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
     };
 
     const handleError = (event: SpeechSynthesisErrorEvent) => {
+      if (!isCurrentGen()) return;
       if (promiseResolved) return;
       
       if (loopActiveFlag && (event.error === 'interrupted' || event.error === 'canceled') && retryCount < MAX_LOOP_RETRIES) {
         retryCount++;
         console.warn(`iOS 循环播放中断，第 ${retryCount} 次重试...`);
         setTimeout(() => {
-          if (loopActiveFlag && !promiseResolved) {
+          if (isCurrentGen() && loopActiveFlag && !promiseResolved) {
             startSpeak();
           }
         }, 200);
@@ -327,6 +325,7 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
     if (loop) {
       setTimeout(() => {
         if (!promiseResolved) {
+          promiseResolved = true;
           resolve({ success: true });
         }
       }, 200);
@@ -390,6 +389,7 @@ export const geminiService = {
   },
 
   stop(): void {
+    speakGeneration++;
     loopActiveFlag = false;
     edgeTtsService.stop();
     window.speechSynthesis.cancel();

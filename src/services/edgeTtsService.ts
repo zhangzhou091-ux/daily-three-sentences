@@ -139,6 +139,13 @@ const playAudioBlob = async (audioData: Uint8Array, loop: boolean = false): Prom
           resolve();
         };
       }
+
+      audio.onpause = () => {
+        if (loop && currentAudioElement !== audio) {
+          cleanup();
+          resolve();
+        }
+      };
       
       audio.onerror = () => {
         cleanup();

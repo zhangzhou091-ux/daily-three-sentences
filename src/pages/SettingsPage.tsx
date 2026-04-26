@@ -32,12 +32,22 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
 
   const isSyncing = syncQueueStatus.isSyncing;
 
+  const loadAllEnglishVoices = (voices: SpeechSynthesisVoice[]) => {
+    const enVoices = voices.filter(v => v.lang.startsWith('en'));
+    enVoices.sort((a, b) => {
+      if (a.localService !== b.localService) return a.localService ? -1 : 1;
+      const aUs = a.lang === 'en-US' || a.lang === 'en_US' ? 0 : 1;
+      const bUs = b.lang === 'en-US' || b.lang === 'en_US' ? 0 : 1;
+      return aUs - bUs;
+    });
+    setWebSpeechVoices(enVoices);
+  };
+
   useEffect(() => {
     const loadVoices = async () => {
       try {
         const voices = await geminiService.getAvailableVoices();
-        const enUsVoices = voices.filter(v => v.lang === 'en-US' || v.lang === 'en_US');
-        setWebSpeechVoices(enUsVoices);
+        loadAllEnglishVoices(voices);
       } catch {
         setWebSpeechVoices([]);
       }
@@ -46,8 +56,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
 
     const handleVoicesChanged = () => {
       const voices = window.speechSynthesis.getVoices();
-      const enUsVoices = voices.filter(v => v.lang === 'en-US' || v.lang === 'en_US');
-      setWebSpeechVoices(enUsVoices);
+      loadAllEnglishVoices(voices);
     };
     window.speechSynthesis.addEventListener('voiceschanged', handleVoicesChanged);
     return () => window.speechSynthesis.removeEventListener('voiceschanged', handleVoicesChanged);
@@ -457,12 +466,24 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                 <p className="text-[10px] text-gray-500">微软 EdgeTTS 高质量语音，免费无需密钥</p>
               </div>
               <div className="flex flex-col gap-2">
-                <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">浏览器原生语音</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">浏览器原生语音</label>
+                  <button
+                    onClick={() => {
+                      window.speechSynthesis.cancel();
+                      const voices = window.speechSynthesis.getVoices();
+                      loadAllEnglishVoices(voices);
+                    }}
+                    className="text-[10px] font-bold text-blue-500 hover:text-blue-700 transition-colors"
+                  >
+                    🔄 刷新列表
+                  </button>
+                </div>
                 <select
                   value={settings.webSpeechVoice || ''}
                   onChange={(e) => handleUpdate('webSpeechVoice', e.target.value)}
                   className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-blue-100 w-full cursor-pointer"
-                  disabled={loading || settings.ttsEngine === 'edge'}
+                  disabled={loading}
                 >
                   <option value="">自动选择（推荐）</option>
                   {webSpeechVoices.length === 0 && (
@@ -471,21 +492,21 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                   {webSpeechVoices.filter(v => v.localService).length > 0 && (
                     <optgroup label="📱 本地语音（已下载）">
                       {webSpeechVoices.filter(v => v.localService).map(v => (
-                        <option key={v.name} value={v.name}>{v.name}</option>
+                        <option key={v.name} value={v.name}>{v.name} ({v.lang})</option>
                       ))}
                     </optgroup>
                   )}
                   {webSpeechVoices.filter(v => !v.localService).length > 0 && (
                     <optgroup label="☁️ 网络语音">
                       {webSpeechVoices.filter(v => !v.localService).map(v => (
-                        <option key={v.name} value={v.name}>{v.name}</option>
+                        <option key={v.name} value={v.name}>{v.name} ({v.lang})</option>
                       ))}
                     </optgroup>
                   )}
                 </select>
                 <p className="text-[10px] text-gray-500">
                   {webSpeechVoices.length > 0 
-                    ? `检测到 ${webSpeechVoices.length} 个美式英语语音（${webSpeechVoices.filter(v => v.localService).length} 个本地）`
+                    ? `检测到 ${webSpeechVoices.length} 个英语语音（${webSpeechVoices.filter(v => v.localService).length} 个本地，${webSpeechVoices.filter(v => v.lang === 'en-US' || v.lang === 'en_US').length} 个美式）`
                     : '正在加载语音列表...'}
                 </p>
               </div>
