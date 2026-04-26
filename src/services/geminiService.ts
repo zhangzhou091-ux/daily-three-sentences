@@ -57,38 +57,27 @@ export interface SpeakResult {
 
 const getVoices = (): Promise<SpeechSynthesisVoice[]> => {
   return new Promise((resolve) => {
-    let voices = window.speechSynthesis.getVoices();
-    if (voices.length) {
+    let resolved = false;
+
+    const doResolve = (voices: SpeechSynthesisVoice[]) => {
+      if (resolved) return;
+      resolved = true;
       resolve(voices);
+    };
+
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) {
+      doResolve(voices);
       return;
     }
 
-    let resolved = false;
-    const timer = setInterval(() => {
-      voices = window.speechSynthesis.getVoices();
-      if (voices.length > 0) {
-        clearInterval(timer);
-        resolved = true;
-        resolve(voices);
-      }
-    }, 100);
+    window.speechSynthesis.addEventListener('voiceschanged', () => {
+      doResolve(window.speechSynthesis.getVoices());
+    }, { once: true });
 
     setTimeout(() => {
-      if (!resolved) {
-        clearInterval(timer);
-        console.warn('获取语音列表超时，返回空数组');
-        resolve([]);
-      }
+      doResolve(window.speechSynthesis.getVoices());
     }, 3000);
-
-    window.speechSynthesis.addEventListener('voiceschanged', () => {
-      if (!resolved) {
-        clearInterval(timer);
-        resolved = true;
-        voices = window.speechSynthesis.getVoices();
-        resolve(voices);
-      }
-    }, { once: true });
   });
 };
 
@@ -120,6 +109,21 @@ const selectBestUsVoice = async (): Promise<SpeechSynthesisVoice | null> => {
   if (isIOS()) {
     console.log('🎤 iOS 设备，按优先级选择语音...');
 
+    const isEnhanced = (v: SpeechSynthesisVoice) =>
+      v.name.includes('Enhanced') || v.name.includes('Premium') || v.name.includes('增强版') || v.name.includes('优化');
+
+    const zoeEnhanced = enVoices.find(v => v.name.includes('Zoe') && isEnhanced(v));
+    if (zoeEnhanced) {
+      console.log('🎤 ✅ iOS 选择 ZOE (Enhanced) 语音:', zoeEnhanced.name, '| local:', zoeEnhanced.localService, '| lang:', zoeEnhanced.lang);
+      return zoeEnhanced;
+    }
+
+    const samanthaEnhanced = enVoices.find(v => v.name.includes('Samantha') && isEnhanced(v));
+    if (samanthaEnhanced) {
+      console.log('🎤 ✅ iOS 选择 Samantha (Enhanced) 语音:', samanthaEnhanced.name, '| local:', samanthaEnhanced.localService, '| lang:', samanthaEnhanced.lang);
+      return samanthaEnhanced;
+    }
+
     const zoeVoice = enVoices.find(v => v.name.includes('Zoe'));
     if (zoeVoice) {
       console.log('🎤 ✅ iOS 选择 ZOE 语音:', zoeVoice.name, '| local:', zoeVoice.localService, '| lang:', zoeVoice.lang);
@@ -132,11 +136,9 @@ const selectBestUsVoice = async (): Promise<SpeechSynthesisVoice | null> => {
       return samantha;
     }
 
-    const premiumVoice = enVoices.find(v =>
-      v.name.includes('Premium') || v.name.includes('Enhanced')
-    );
+    const premiumVoice = enVoices.find(v => isEnhanced(v));
     if (premiumVoice) {
-      console.log('🎤 ✅ iOS 选择 Premium/Enhanced 语音:', premiumVoice.name, '| local:', premiumVoice.localService);
+      console.log('🎤 ✅ iOS 选择 Enhanced/Premium 语音:', premiumVoice.name, '| local:', premiumVoice.localService);
       return premiumVoice;
     }
 
@@ -251,35 +253,22 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
       }
       
       const pitch = rate < 0.5 ? 0.95 : 1.0;
+      const delay = isIOS() ? 200 : 50;
 
-      if (isIOS()) {
-        window.speechSynthesis.cancel();
-        setTimeout(() => {
-          if (isCurrentGen() && loopActiveFlag && !promiseResolved) {
-            const newUtterance = new SpeechSynthesisUtterance(text);
-            newUtterance.voice = utterance.voice;
-            newUtterance.lang = 'en-US';
-            newUtterance.rate = rate;
-            newUtterance.pitch = pitch;
-            newUtterance.volume = 1.0;
-            newUtterance.onend = handleEnd;
-            newUtterance.onerror = handleError;
-            currentUtterance = newUtterance;
-            window.speechSynthesis.speak(newUtterance);
-          }
-        }, 50);
-      } else {
-        const newUtterance = new SpeechSynthesisUtterance(text);
-        newUtterance.voice = utterance.voice;
-        newUtterance.lang = 'en-US';
-        newUtterance.rate = rate;
-        newUtterance.pitch = pitch;
-        newUtterance.volume = 1.0;
-        newUtterance.onend = handleEnd;
-        newUtterance.onerror = handleError;
-        currentUtterance = newUtterance;
-        window.speechSynthesis.speak(newUtterance);
-      }
+      setTimeout(() => {
+        if (isCurrentGen() && loopActiveFlag && !promiseResolved) {
+          const newUtterance = new SpeechSynthesisUtterance(text);
+          newUtterance.voice = utterance.voice;
+          newUtterance.lang = 'en-US';
+          newUtterance.rate = rate;
+          newUtterance.pitch = pitch;
+          newUtterance.volume = 1.0;
+          newUtterance.onend = handleEnd;
+          newUtterance.onerror = handleError;
+          currentUtterance = newUtterance;
+          window.speechSynthesis.speak(newUtterance);
+        }
+      }, delay);
     };
 
     const handleEnd = () => {
@@ -321,15 +310,6 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
     utterance.onerror = handleError;
 
     window.speechSynthesis.speak(utterance);
-
-    if (loop) {
-      setTimeout(() => {
-        if (!promiseResolved) {
-          promiseResolved = true;
-          resolve({ success: true });
-        }
-      }, 200);
-    }
   });
 };
 
@@ -355,10 +335,15 @@ const processQueue = async () => {
 export const geminiService = {
   async speak(text: string, voice?: string, loop: boolean = false): Promise<SpeakResult> {
     const settings = storageService.getSettings();
-    const ttsEngine = settings.ttsEngine || 'edge';
+    let ttsEngine = settings.ttsEngine || 'edge';
     const speechRate = settings.speechRate ?? 1;
     
     const edgeRate = speechRate === 0.2 ? '-80%' : speechRate === 0.5 ? '-50%' : '+0%';
+
+    if (loop && ttsEngine === 'edge') {
+      console.log('🔊 循环播放模式，强制使用 Web Speech API 以保证稳定性');
+      ttsEngine = 'webSpeech';
+    }
     
     if (ttsEngine === 'edge') {
       const isAvailable = await checkEdgeTtsAvailability();
