@@ -140,6 +140,7 @@ export const DEFAULT_USER_SETTINGS = {
   dailyReviewTarget: 10,
   voiceName: 'Kore' as const,
   edgeVoice: 'en-US-AvaMultilingualNeural',
+  webSpeechVoice: '',
   ttsEngine: 'edge' as const,
   speechRate: 1,
   showChineseFirst: false,

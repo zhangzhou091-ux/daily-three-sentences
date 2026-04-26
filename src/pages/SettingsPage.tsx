@@ -3,6 +3,7 @@ import { useDebouncedCallback } from 'use-debounce';
 import { storageService } from '../services/storage';
 import { supabaseService } from '../services/supabaseService';
 import { syncQueueService } from '../services/syncQueueService';
+import { geminiService } from '../services/geminiService';
 import { UserSettings } from '../types';
 import EnvCheckPanel from '../components/EnvCheckPanel';
 import SupabaseConfigPanel from '../components/SupabaseConfigPanel';
@@ -21,6 +22,8 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [syncQueueStatus, setSyncQueueStatus] = useState(syncQueueService.getQueueStatus());
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [webSpeechVoices, setWebSpeechVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [testVoiceName, setTestVoiceName] = useState<string>('');
   const isSyncingRef = useRef(false);
   const isResettingRef = useRef(false);
   const prevUserNameRef = useRef<string>(settings.userName);
@@ -28,6 +31,40 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
   const isMountedRef = useRef(true);
 
   const isSyncing = syncQueueStatus.isSyncing;
+
+  useEffect(() => {
+    const loadVoices = async () => {
+      try {
+        const voices = await geminiService.getAvailableVoices();
+        const enUsVoices = voices.filter(v => v.lang === 'en-US' || v.lang === 'en_US');
+        setWebSpeechVoices(enUsVoices);
+      } catch {
+        setWebSpeechVoices([]);
+      }
+    };
+    loadVoices();
+
+    const handleVoicesChanged = () => {
+      const voices = window.speechSynthesis.getVoices();
+      const enUsVoices = voices.filter(v => v.lang === 'en-US' || v.lang === 'en_US');
+      setWebSpeechVoices(enUsVoices);
+    };
+    window.speechSynthesis.addEventListener('voiceschanged', handleVoicesChanged);
+    return () => window.speechSynthesis.removeEventListener('voiceschanged', handleVoicesChanged);
+  }, []);
+
+  const handleTestVoice = useCallback(async () => {
+    geminiService.stop();
+    setTestVoiceName('');
+    try {
+      const selectedVoice = await geminiService.getSelectedVoice();
+      const voiceName = selectedVoice?.name || '默认';
+      setTestVoiceName(voiceName);
+      await geminiService.speak('Hello, this is a voice test. How are you doing today?', settings.edgeVoice, false);
+    } catch {
+      setTestVoiceName('播放失败');
+    }
+  }, [settings.edgeVoice]);
 
   useEffect(() => {
     return () => {
@@ -389,13 +426,13 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                   className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-blue-100 w-full cursor-pointer"
                   disabled={loading}
                 >
-                  <option value="edge">EdgeTTS (高质量，需海外网络)</option>
-                  <option value="webSpeech">浏览器原生语音 (国内可用)</option>
+                  <option value="edge">EdgeTTS (微软云端，需海外网络)</option>
+                  <option value="webSpeech">浏览器原生语音 (本地语音包)</option>
                 </select>
-                <p className="text-[10px] text-gray-500">国内网络建议选择「浏览器原生语音」</p>
+                <p className="text-[10px] text-gray-500">iPhone 用户选择「浏览器原生语音」可使用 ZOE/Samantha 等苹果语音包</p>
               </div>
               <div className="flex flex-col gap-2">
-                <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">语音引擎 (EdgeTTS)</label>
+                <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">EdgeTTS 语音</label>
                 <select
                   value={settings.edgeVoice || 'en-US-AvaMultilingualNeural'}
                   onChange={(e) => handleUpdate('edgeVoice', e.target.value)}
@@ -418,6 +455,56 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                   </optgroup>
                 </select>
                 <p className="text-[10px] text-gray-500">微软 EdgeTTS 高质量语音，免费无需密钥</p>
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">浏览器原生语音</label>
+                <select
+                  value={settings.webSpeechVoice || ''}
+                  onChange={(e) => handleUpdate('webSpeechVoice', e.target.value)}
+                  className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-blue-100 w-full cursor-pointer"
+                  disabled={loading || settings.ttsEngine === 'edge'}
+                >
+                  <option value="">自动选择（推荐）</option>
+                  {webSpeechVoices.length === 0 && (
+                    <option value="" disabled>加载中...</option>
+                  )}
+                  {webSpeechVoices.filter(v => v.localService).length > 0 && (
+                    <optgroup label="📱 本地语音（已下载）">
+                      {webSpeechVoices.filter(v => v.localService).map(v => (
+                        <option key={v.name} value={v.name}>{v.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {webSpeechVoices.filter(v => !v.localService).length > 0 && (
+                    <optgroup label="☁️ 网络语音">
+                      {webSpeechVoices.filter(v => !v.localService).map(v => (
+                        <option key={v.name} value={v.name}>{v.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+                <p className="text-[10px] text-gray-500">
+                  {webSpeechVoices.length > 0 
+                    ? `检测到 ${webSpeechVoices.length} 个美式英语语音（${webSpeechVoices.filter(v => v.localService).length} 个本地）`
+                    : '正在加载语音列表...'}
+                </p>
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">朗读测试</label>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={handleTestVoice}
+                    className="px-4 py-2 bg-blue-500 text-white rounded-xl text-sm font-bold hover:bg-blue-600 transition-colors"
+                  >
+                    🔊 试听
+                  </button>
+                  {testVoiceName && (
+                    <span className="text-xs font-bold text-green-600 bg-green-50 px-3 py-1 rounded-full">
+                      当前语音: {testVoiceName}
+                    </span>
+                  )}
+                </div>
+                <p className="text-[10px] text-gray-500">点击试听，确认当前使用的是哪个语音</p>
               </div>
               <div className="flex flex-col gap-2">
                 <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">发音速度</label>

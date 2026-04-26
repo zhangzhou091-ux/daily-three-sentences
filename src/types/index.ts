@@ -56,6 +56,7 @@ export interface UserSettings {
   dailyReviewTarget: number;
   voiceName: 'Kore' | 'Puck' | 'Charon' | 'Zephyr' | 'Fenrir';
   edgeVoice: string;
+  webSpeechVoice: string;
   ttsEngine: TTSEngine;
   speechRate: number;
   showChineseFirst: boolean;
