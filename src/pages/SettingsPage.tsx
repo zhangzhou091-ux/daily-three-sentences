@@ -43,9 +43,18 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
     setWebSpeechVoices(enVoices);
   };
 
+  const triggerVoiceListLoad = () => {
+    const utterance = new SpeechSynthesisUtterance(' ');
+    utterance.volume = 0;
+    utterance.rate = 1;
+    window.speechSynthesis.speak(utterance);
+  };
+
   useEffect(() => {
     const loadVoices = async () => {
       try {
+        // iOS需要先触发一次合成才会加载完整语音列表
+        triggerVoiceListLoad();
         const voices = await geminiService.getAvailableVoices();
         loadAllEnglishVoices(voices);
       } catch {
@@ -471,8 +480,12 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                   <button
                     onClick={() => {
                       window.speechSynthesis.cancel();
-                      const voices = window.speechSynthesis.getVoices();
-                      loadAllEnglishVoices(voices);
+                      // iOS需要先触发一次合成才会加载完整语音列表
+                      triggerVoiceListLoad();
+                      setTimeout(() => {
+                        const voices = window.speechSynthesis.getVoices();
+                        loadAllEnglishVoices(voices);
+                      }, 500);
                     }}
                     className="text-[10px] font-bold text-blue-500 hover:text-blue-700 transition-colors"
                   >
