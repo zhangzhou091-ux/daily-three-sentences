@@ -1,13 +1,15 @@
 /**
- * Gemini Service with EdgeTTS
+ * Gemini Service with EdgeTTS + ElevenLabs
  * 
  * TTS 智能调度策略：
- * 1. 用户选择 edge → 先检测可用性，可用则用 EdgeTTS，不可用则自动回退
- * 2. 用户选择 webSpeech → 直接使用浏览器原生语音
- * 3. EdgeTTS 失败后自动缓存不可用状态（5分钟），避免重复尝试
+ * 1. 用户选择 elevenlabs → 优先使用 ElevenLabs API，失败自动回退
+ * 2. 用户选择 edge → 先检测可用性，可用则用 EdgeTTS，不可用则自动回退
+ * 3. 用户选择 webSpeech → 直接使用浏览器原生语音
+ * 4. ElevenLabs/EdgeTTS 失败后自动缓存不可用状态，避免重复尝试
  */
 
 import { edgeTtsService, checkEdgeTtsAvailability, SpeakResult as EdgeSpeakResult } from './edgeTtsService';
+import { elevenLabsService } from './elevenLabsService';
 import { storageService } from './storage';
 
 const SPEAK_TIMEOUT = 10000;
@@ -335,14 +337,51 @@ const processQueue = async () => {
 export const geminiService = {
   async speak(text: string, voice?: string, loop: boolean = false): Promise<SpeakResult> {
     const settings = storageService.getSettings();
-    let ttsEngine = settings.ttsEngine || 'edge';
+    let ttsEngine = settings.ttsEngine || 'elevenlabs';
     const speechRate = settings.speechRate ?? 1;
     
     const edgeRate = speechRate === 0.2 ? '-80%' : speechRate === 0.5 ? '-50%' : '+0%';
 
     if (loop && ttsEngine === 'edge') {
-      console.log('🔊 循环播放模式，强制使用 Web Speech API 以保证稳定性');
+      console.log('🔊 循环播放模式，EdgeTTS 不支持循环，切换到 Web Speech API');
       ttsEngine = 'webSpeech';
+    }
+
+    if (ttsEngine === 'elevenlabs') {
+      const apiKey = settings.elevenLabsApiKey;
+      const voiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
+
+      if (apiKey && apiKey.trim()) {
+        try {
+          console.log(`🔊 [引擎] ElevenLabs | [语音] ${voiceId} | [循环] ${loop}`);
+          const result = await elevenLabsService.speak(text, apiKey, voiceId, loop);
+          if (result.success) {
+            return result;
+          }
+          console.warn('ElevenLabs 播放失败，回退到 EdgeTTS:', result.error);
+        } catch (err) {
+          console.warn('ElevenLabs 出错，回退到 EdgeTTS:', err);
+        }
+      } else {
+        console.warn('未配置 ElevenLabs API 密钥，回退到 EdgeTTS');
+      }
+
+      const isAvailable = await checkEdgeTtsAvailability();
+      if (isAvailable) {
+        try {
+          const edgeVoice = voice || settings.edgeVoice;
+          console.log(`🔊 [引擎] EdgeTTS (回退) | [语音] ${edgeVoice || 'en-US-AvaMultilingualNeural'} | [语速] ${edgeRate}`);
+          const result = await edgeTtsService.speak(text, edgeVoice, edgeRate, loop);
+          if (result.success) {
+            return result;
+          }
+          console.warn('EdgeTTS 播放失败，回退到 Web Speech API:', result.error);
+        } catch (err) {
+          console.warn('EdgeTTS 出错，回退到 Web Speech API:', err);
+        }
+      } else {
+        console.warn('EdgeTTS 不可用，回退到 Web Speech API');
+      }
     }
     
     if (ttsEngine === 'edge') {
@@ -377,6 +416,7 @@ export const geminiService = {
     speakGeneration++;
     loopActiveFlag = false;
     edgeTtsService.stop();
+    elevenLabsService.stop();
     window.speechSynthesis.cancel();
     currentUtterance = null;
     taskQueue = [];
@@ -389,7 +429,16 @@ export const geminiService = {
 
   getCurrentEngineInfo(): { engine: string; voiceName: string; isLocal: boolean } {
     const settings = storageService.getSettings();
-    const ttsEngine = settings.ttsEngine || 'edge';
+    const ttsEngine = settings.ttsEngine || 'elevenlabs';
+    if (ttsEngine === 'elevenlabs') {
+      const voiceId = settings.elevenLabsVoiceId || 'JBFqnCBsd6RMkjVDRZzb';
+      const apiKey = settings.elevenLabsApiKey;
+      if (!apiKey || !apiKey.trim()) {
+        return { engine: 'ElevenLabs (未配置，回退)', voiceName: '未配置', isLocal: false };
+      }
+      const popularVoice = elevenLabsService.getPopularVoices().find(v => v.voice_id === voiceId);
+      return { engine: 'ElevenLabs', voiceName: popularVoice?.name || voiceId, isLocal: false };
+    }
     if (ttsEngine === 'edge') {
       const edgeVoice = settings.edgeVoice || 'en-US-AvaMultilingualNeural';
       return { engine: 'EdgeTTS', voiceName: edgeVoice, isLocal: false };

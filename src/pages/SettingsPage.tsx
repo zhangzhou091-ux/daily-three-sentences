@@ -4,6 +4,8 @@ import { storageService } from '../services/storage';
 import { supabaseService } from '../services/supabaseService';
 import { syncQueueService } from '../services/syncQueueService';
 import { geminiService } from '../services/geminiService';
+import { elevenLabsService, ElevenLabsVoice } from '../services/elevenLabsService';
+import { elevenLabsCacheService } from '../services/elevenLabsCacheService';
 import { UserSettings } from '../types';
 import EnvCheckPanel from '../components/EnvCheckPanel';
 import SupabaseConfigPanel from '../components/SupabaseConfigPanel';
@@ -24,6 +26,11 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [webSpeechVoices, setWebSpeechVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [testVoiceName, setTestVoiceName] = useState<string>('');
+  const [elevenLabsVoices, setElevenLabsVoices] = useState<ElevenLabsVoice[]>(elevenLabsService.getPopularVoices());
+  const [elevenLabsKeyValidating, setElevenLabsKeyValidating] = useState(false);
+  const [elevenLabsKeyStatus, setElevenLabsKeyStatus] = useState<'idle' | 'valid' | 'invalid'>('idle');
+  const [showElevenLabsKey, setShowElevenLabsKey] = useState(false);
+  const [elevenLabsCacheStats, setElevenLabsCacheStats] = useState<{ count: number; totalSize: number } | null>(null);
   const isSyncingRef = useRef(false);
   const isResettingRef = useRef(false);
   const prevUserNameRef = useRef<string>(settings.userName);
@@ -75,14 +82,52 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
     geminiService.stop();
     setTestVoiceName('');
     try {
-      const selectedVoice = await geminiService.getSelectedVoice();
-      const voiceName = selectedVoice?.name || '默认';
-      setTestVoiceName(voiceName);
+      const engineInfo = geminiService.getCurrentEngineInfo();
+      const voiceName = engineInfo.voiceName || '默认';
+      setTestVoiceName(`${engineInfo.engine} - ${voiceName}`);
       await geminiService.speak('Hello, this is a voice test. How are you doing today?', settings.edgeVoice, false);
     } catch {
       setTestVoiceName('播放失败');
     }
-  }, [settings.edgeVoice]);
+  }, [settings.edgeVoice, settings.ttsEngine, settings.elevenLabsApiKey, settings.elevenLabsVoiceId]);
+
+  const handleValidateElevenLabsKey = useCallback(async (apiKey: string) => {
+    if (!apiKey || !apiKey.trim()) {
+      setElevenLabsKeyStatus('idle');
+      return;
+    }
+    setElevenLabsKeyValidating(true);
+    try {
+      const result = await elevenLabsService.validateApiKey(apiKey);
+      if (result.valid) {
+        setElevenLabsKeyStatus('valid');
+        const voices = await elevenLabsService.fetchVoices(apiKey);
+        setElevenLabsVoices(voices);
+      } else {
+        setElevenLabsKeyStatus('invalid');
+        setMessage({ text: `密钥验证失败：${result.error}`, type: 'error' });
+      }
+    } catch {
+      setElevenLabsKeyStatus('invalid');
+    } finally {
+      setElevenLabsKeyValidating(false);
+    }
+  }, []);
+
+  const loadElevenLabsCacheStats = useCallback(async () => {
+    try {
+      const stats = await elevenLabsCacheService.getStats();
+      setElevenLabsCacheStats({ count: stats.count, totalSize: stats.totalSize });
+    } catch {
+      setElevenLabsCacheStats(null);
+    }
+  }, []);
+
+  const handleClearElevenLabsCache = useCallback(async () => {
+    const count = await elevenLabsCacheService.clearAll();
+    setElevenLabsCacheStats(null);
+    setMessage({ text: `已清理 ${count} 条音频缓存`, type: 'success' });
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -439,23 +484,145 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
               <div className="flex flex-col gap-2">
                 <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">TTS 引擎</label>
                 <select
-                  value={settings.ttsEngine || 'edge'}
-                  onChange={(e) => handleUpdate('ttsEngine', e.target.value as 'edge' | 'webSpeech')}
+                  value={settings.ttsEngine || 'elevenlabs'}
+                  onChange={(e) => handleUpdate('ttsEngine', e.target.value as 'elevenlabs' | 'edge' | 'webSpeech')}
                   className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-blue-100 w-full cursor-pointer"
                   disabled={loading}
                 >
+                  <option value="elevenlabs">ElevenLabs (最高质量，需API密钥)</option>
                   <option value="edge">EdgeTTS (微软云端，需海外网络)</option>
                   <option value="webSpeech">浏览器原生语音 (本地语音包)</option>
                 </select>
-                <p className="text-[10px] text-gray-500">iPhone 用户选择「浏览器原生语音」可使用 ZOE/Samantha 等苹果语音包</p>
+                <p className="text-[10px] text-gray-500">ElevenLabs 音质最佳，适合 iPhone 使用；EdgeTTS 免费但需翻墙；浏览器原生无需网络</p>
               </div>
+              {settings.ttsEngine === 'elevenlabs' && (
+                <div className="space-y-4 p-4 bg-gradient-to-br from-purple-50 to-indigo-50 rounded-2xl">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-sm">🎙️</span>
+                    <h4 className="text-xs font-black text-indigo-700 uppercase tracking-widest">ElevenLabs 配置</h4>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">API 密钥</label>
+                      <div className="flex items-center gap-2">
+                        {elevenLabsKeyStatus === 'valid' && (
+                          <span className="text-[10px] font-bold text-green-600 bg-green-100 px-2 py-0.5 rounded-full">✓ 已验证</span>
+                        )}
+                        {elevenLabsKeyStatus === 'invalid' && (
+                          <span className="text-[10px] font-bold text-red-600 bg-red-100 px-2 py-0.5 rounded-full">✗ 无效</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <input
+                          type={showElevenLabsKey ? 'text' : 'password'}
+                          value={settings.elevenLabsApiKey || ''}
+                          onChange={(e) => {
+                            handleUpdate('elevenLabsApiKey', e.target.value);
+                            setElevenLabsKeyStatus('idle');
+                          }}
+                          className="text-sm font-mono text-gray-900 bg-white rounded-xl px-4 py-3 border border-gray-200 focus:ring-2 focus:ring-indigo-100 focus:border-indigo-300 w-full pr-10"
+                          placeholder="输入你的 ElevenLabs API 密钥"
+                          disabled={loading}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowElevenLabsKey(!showElevenLabsKey)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                        >
+                          {showElevenLabsKey ? '🙈' : '👁️'}
+                        </button>
+                      </div>
+                      <button
+                        onClick={() => handleValidateElevenLabsKey(settings.elevenLabsApiKey || '')}
+                        disabled={elevenLabsKeyValidating || !settings.elevenLabsApiKey}
+                        className="px-4 py-3 bg-indigo-500 text-white rounded-xl text-xs font-bold hover:bg-indigo-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                      >
+                        {elevenLabsKeyValidating ? '验证中...' : '验证'}
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-gray-500">
+                      在 <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener noreferrer" className="text-indigo-500 underline">elevenlabs.io</a> 创建 API 密钥，免费套餐每月有配额
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">ElevenLabs 语音</label>
+                    <select
+                      value={settings.elevenLabsVoiceId || 'JBFqnCBsd6RMkjVDRZzb'}
+                      onChange={(e) => handleUpdate('elevenLabsVoiceId', e.target.value)}
+                      className="text-sm font-bold text-gray-900 bg-white rounded-xl px-4 py-3 border border-gray-200 focus:ring-2 focus:ring-indigo-100 focus:border-indigo-300 w-full cursor-pointer"
+                      disabled={loading}
+                    >
+                      <optgroup label="推荐语音">
+                        {elevenLabsVoices.filter(v =>
+                          ['JBFqnCBsd6RMkjVDRZzb', 'cjVigY5qzO86Huf0OWal', 'onwK4e9ZLuTAKqWW03F9', 'ThT5KcBeYPX3keUQqHPh'].includes(v.voice_id)
+                        ).map(v => (
+                          <option key={v.voice_id} value={v.voice_id}>
+                            {v.name} {v.labels?.gender === 'male' ? '♂' : v.labels?.gender === 'female' ? '♀' : ''} {v.labels?.accent ? `(${v.labels.accent})` : ''}
+                          </option>
+                        ))}
+                      </optgroup>
+                      {elevenLabsVoices.length > 4 && (
+                        <optgroup label="更多语音">
+                          {elevenLabsVoices.filter(v =>
+                            !['JBFqnCBsd6RMkjVDRZzb', 'cjVigY5qzO86Huf0OWal', 'onwK4e9ZLuTAKqWW03F9', 'ThT5KcBeYPX3keUQqHPh'].includes(v.voice_id)
+                          ).map(v => (
+                            <option key={v.voice_id} value={v.voice_id}>
+                              {v.name} {v.labels?.gender === 'male' ? '♂' : v.labels?.gender === 'female' ? '♀' : ''} {v.labels?.accent ? `(${v.labels.accent})` : ''}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </select>
+                    <p className="text-[10px] text-gray-500">
+                      {elevenLabsVoices.length <= 10
+                        ? '验证 API 密钥后可加载你的自定义语音'
+                        : `已加载 ${elevenLabsVoices.length} 个可用语音`
+                      }
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">音频缓存</label>
+                      <button
+                        onClick={loadElevenLabsCacheStats}
+                        className="text-[10px] font-bold text-indigo-500 hover:text-indigo-700 transition-colors"
+                      >
+                        🔄 刷新统计
+                      </button>
+                    </div>
+                    <div className="flex items-center justify-between bg-white rounded-xl px-4 py-3 border border-gray-200">
+                      <div>
+                        {elevenLabsCacheStats ? (
+                          <p className="text-sm font-bold text-gray-900">
+                            {elevenLabsCacheStats.count} 条缓存 · {elevenLabsCacheService.formatSize(elevenLabsCacheStats.totalSize)}
+                          </p>
+                        ) : (
+                          <p className="text-sm text-gray-400">点击刷新查看缓存统计</p>
+                        )}
+                      </div>
+                      <button
+                        onClick={handleClearElevenLabsCache}
+                        disabled={!elevenLabsCacheStats || elevenLabsCacheStats.count === 0}
+                        className="text-[10px] font-bold text-red-500 hover:text-red-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        清理缓存
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-gray-500">
+                      已朗读的音频会自动缓存到本地，再次朗读相同内容不消耗 API 额度
+                    </p>
+                  </div>
+                </div>
+              )}
               <div className="flex flex-col gap-2">
                 <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">EdgeTTS 语音</label>
                 <select
                   value={settings.edgeVoice || 'en-US-AvaMultilingualNeural'}
                   onChange={(e) => handleUpdate('edgeVoice', e.target.value)}
                   className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-blue-100 w-full cursor-pointer"
-                  disabled={loading || settings.ttsEngine === 'webSpeech'}
+                  disabled={loading || settings.ttsEngine !== 'edge'}
                 >
                   <optgroup label="美式英语">
                     <option value="en-US-AvaMultilingualNeural">Ava (女声) - 推荐</option>

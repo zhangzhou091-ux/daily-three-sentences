@@ -3,7 +3,7 @@
  * 功能：学习页强制次日复习 + 复习页延迟激活算法
  */
 import { CardState } from '../types';
-import { FSRS_DEFAULT_PARAMS, FSRS_CONFIG } from '../constants';
+import { FSRS_DEFAULT_PARAMS, FSRS_CONFIG, NEXT_DAY_START_HOUR } from '../constants';
 
 export type Rating = 1 | 2 | 3 | 4;
 export { CardState as State };
@@ -190,7 +190,10 @@ export class FSRSService {
     if (validatedRating === 4) interval = Math.round(interval * this.params.easyBonus);
 
     newCard.scheduled_days = interval;
-    newCard.due = now + interval * 86400000;
+    const dueDate = new Date(now);
+    dueDate.setDate(dueDate.getDate() + interval);
+    dueDate.setHours(NEXT_DAY_START_HOUR, 0, 0, 0);
+    newCard.due = dueDate.getTime();
     newCard.last_review = now;
 
     return newCard;

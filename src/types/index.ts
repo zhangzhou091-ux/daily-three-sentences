@@ -48,7 +48,7 @@ export type ViewType = 'study' | 'manage' | 'achievements' | 'settings';
 // 学习步骤类型
 export type StudyStep = 'learn' | 'review' | 'dictation';
 
-export type TTSEngine = 'edge' | 'webSpeech';
+export type TTSEngine = 'elevenlabs' | 'edge' | 'webSpeech';
 
 export interface UserSettings {
   dailyTarget: number;
@@ -64,6 +64,8 @@ export interface UserSettings {
   userName: string;
   themeColor: string;
   updatedAt: number;
+  elevenLabsApiKey?: string;
+  elevenLabsVoiceId?: string;
 }
 
 // 用户统计接口

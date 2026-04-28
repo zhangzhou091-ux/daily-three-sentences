@@ -141,13 +141,15 @@ export const DEFAULT_USER_SETTINGS = {
   voiceName: 'Kore' as const,
   edgeVoice: 'en-US-AvaMultilingualNeural',
   webSpeechVoice: '',
-  ttsEngine: 'edge' as const,
+  ttsEngine: 'elevenlabs' as const,
   speechRate: 1,
   showChineseFirst: false,
   autoPlayAudio: true,
   userName: '',
   themeColor: '#3b82f6',
-  updatedAt: Date.now()
+  updatedAt: Date.now(),
+  elevenLabsApiKey: '',
+  elevenLabsVoiceId: 'JBFqnCBsd6RMkjVDRZzb',
 };
 
 // 学习奖励
