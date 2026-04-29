@@ -1,14 +1,12 @@
 /**
- * Gemini Service with EdgeTTS + ElevenLabs
+ * Gemini Service with ElevenLabs + Kokoro + Web Speech API
  * 
- * TTS 智能调度策略：
- * 1. 用户选择 elevenlabs → 优先使用 ElevenLabs API，失败自动回退
- * 2. 用户选择 edge → 先检测可用性，可用则用 EdgeTTS，不可用则自动回退
- * 3. 用户选择 webSpeech → 直接使用浏览器原生语音
- * 4. ElevenLabs/EdgeTTS 失败后自动缓存不可用状态，避免重复尝试
+ * TTS 调度策略：
+ * 1. 优先使用 ElevenLabs API（最高质量，缓存后不消耗额度）
+ * 2. ElevenLabs 失败时降级到 Kokoro-82M（本地运行，免费无限使用）
+ * 3. Kokoro 不可用时降级到浏览器原生语音（iOS 自动选择最佳音质）
  */
 
-import { edgeTtsService, checkEdgeTtsAvailability, SpeakResult as EdgeSpeakResult } from './edgeTtsService';
 import { elevenLabsService } from './elevenLabsService';
 import { storageService } from './storage';
 
@@ -339,12 +337,9 @@ export const geminiService = {
     const settings = storageService.getSettings();
     let ttsEngine = settings.ttsEngine || 'elevenlabs';
     const speechRate = settings.speechRate ?? 1;
-    
-    const edgeRate = speechRate === 0.2 ? '-80%' : speechRate === 0.5 ? '-50%' : '+0%';
 
-    if (loop && ttsEngine === 'edge') {
-      console.log('🔊 循环播放模式，EdgeTTS 不支持循环，切换到 Web Speech API');
-      ttsEngine = 'webSpeech';
+    if (ttsEngine === 'edge') {
+      ttsEngine = 'kokoro';
     }
 
     if (ttsEngine === 'elevenlabs') {
@@ -358,49 +353,27 @@ export const geminiService = {
           if (result.success) {
             return result;
           }
-          console.warn('ElevenLabs 播放失败，回退到 EdgeTTS:', result.error);
+          console.warn('ElevenLabs 播放失败，回退到 Kokoro:', result.error);
         } catch (err) {
-          console.warn('ElevenLabs 出错，回退到 EdgeTTS:', err);
+          console.warn('ElevenLabs 出错，回退到 Kokoro:', err);
         }
       } else {
-        console.warn('未配置 ElevenLabs API 密钥，回退到 EdgeTTS');
-      }
-
-      const isAvailable = await checkEdgeTtsAvailability();
-      if (isAvailable) {
-        try {
-          const edgeVoice = voice || settings.edgeVoice;
-          console.log(`🔊 [引擎] EdgeTTS (回退) | [语音] ${edgeVoice || 'en-US-AvaMultilingualNeural'} | [语速] ${edgeRate}`);
-          const result = await edgeTtsService.speak(text, edgeVoice, edgeRate, loop);
-          if (result.success) {
-            return result;
-          }
-          console.warn('EdgeTTS 播放失败，回退到 Web Speech API:', result.error);
-        } catch (err) {
-          console.warn('EdgeTTS 出错，回退到 Web Speech API:', err);
-        }
-      } else {
-        console.warn('EdgeTTS 不可用，回退到 Web Speech API');
+        console.warn('未配置 ElevenLabs API 密钥，尝试 Kokoro');
       }
     }
-    
-    if (ttsEngine === 'edge') {
-      const isAvailable = await checkEdgeTtsAvailability();
-      
-      if (isAvailable) {
-        try {
-          const edgeVoice = voice || settings.edgeVoice;
-          console.log(`🔊 [引擎] EdgeTTS | [语音] ${edgeVoice || 'en-US-AvaMultilingualNeural'} | [语速] ${edgeRate} | [循环] ${loop}`);
-          const result = await edgeTtsService.speak(text, edgeVoice, edgeRate, loop);
-          if (result.success) {
-            return result;
-          }
-          console.warn('EdgeTTS 播放失败，回退到 Web Speech API:', result.error);
-        } catch (err) {
-          console.warn('EdgeTTS 出错，回退到 Web Speech API:', err);
+
+    if (ttsEngine === 'elevenlabs' || ttsEngine === 'kokoro') {
+      try {
+        const { kokoroTtsService: kokoro } = await import('./kokoroTtsService');
+        const kokoroVoice = settings.kokoroVoice || kokoro.getDefaultVoiceId();
+        console.log(`🔊 [引擎] Kokoro-82M | [语音] ${kokoroVoice} | [循环] ${loop}`);
+        const result = await kokoro.speak(text, kokoroVoice, loop);
+        if (result.success) {
+          return { success: true };
         }
-      } else {
-        console.warn('EdgeTTS 不可用（网络限制），自动使用 Web Speech API');
+        console.warn('Kokoro 播放失败，回退到浏览器原生语音:', result.error);
+      } catch (err) {
+        console.warn('Kokoro 出错，回退到浏览器原生语音:', err);
       }
     }
     
@@ -415,8 +388,8 @@ export const geminiService = {
   stop(): void {
     speakGeneration++;
     loopActiveFlag = false;
-    edgeTtsService.stop();
     elevenLabsService.stop();
+    import('./kokoroTtsService').then(({ kokoroTtsService }) => kokoroTtsService.stop()).catch(() => {});
     window.speechSynthesis.cancel();
     currentUtterance = null;
     taskQueue = [];
@@ -439,9 +412,9 @@ export const geminiService = {
       const popularVoice = elevenLabsService.getPopularVoices().find(v => v.voice_id === voiceId);
       return { engine: 'ElevenLabs', voiceName: popularVoice?.name || voiceId, isLocal: false };
     }
-    if (ttsEngine === 'edge') {
-      const edgeVoice = settings.edgeVoice || 'en-US-AvaMultilingualNeural';
-      return { engine: 'EdgeTTS', voiceName: edgeVoice, isLocal: false };
+    if (ttsEngine === 'kokoro') {
+      const voiceId = settings.kokoroVoice || 'af_heart';
+      return { engine: 'Kokoro-82M', voiceName: voiceId, isLocal: true };
     }
     return { engine: 'Web Speech API', voiceName: settings.webSpeechVoice || '自动选择', isLocal: true };
   },

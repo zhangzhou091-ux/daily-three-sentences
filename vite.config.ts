@@ -31,9 +31,11 @@ export default defineConfig({
             if (id.includes('@supabase')) return 'vendor-supabase';
             if (id.includes('xlsx')) return 'vendor-xlsx';
             if (id.includes('recharts')) return 'vendor-recharts';
+            if (id.includes('kokoro-js') || id.includes('onnxruntime-web') || id.includes('onnxruntime-common')) return 'vendor-kokoro';
           }
           if (id.includes('services/fsrsService')) return 'fsrs';
           if (id.includes('pages/StudyPage/components')) return 'components';
+          if (id.includes('services/kokoroTtsService')) return 'vendor-kokoro';
         }
       }
     },

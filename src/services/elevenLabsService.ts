@@ -255,14 +255,16 @@ export const elevenLabsService = {
       return { valid: false, error: '请输入 API 密钥' };
     }
 
+    const trimmedKey = apiKey.trim();
+
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
 
       const response = await fetch(`${API_BASE}/v1/user`, {
         method: 'GET',
         headers: {
-          'xi-api-key': apiKey.trim(),
+          'xi-api-key': trimmedKey,
         },
         signal: controller.signal,
       });
@@ -276,13 +278,58 @@ export const elevenLabsService = {
       if (response.status === 401) {
         return { valid: false, error: 'API 密钥无效' };
       }
-
-      return { valid: false, error: `验证失败 (${response.status})` };
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
-        return { valid: false, error: '验证超时，请检查网络' };
+        console.warn('ElevenLabs /v1/user 超时，降级为 TTS 可用性检测');
+      } else {
+        console.warn('ElevenLabs /v1/user 请求失败，降级为 TTS 可用性检测:', err);
       }
-      return { valid: false, error: '网络连接失败' };
+    }
+
+    try {
+      console.log('🔊 [ElevenLabs] 降级验证：测试 TTS 接口可用性');
+      const testController = new AbortController();
+      const testTimeoutId = setTimeout(() => testController.abort(), 12000);
+
+      const testResponse = await fetch(`${API_BASE}/v1/text-to-speech/${POPULAR_VOICES[0].voice_id}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'xi-api-key': trimmedKey,
+          Accept: 'audio/mpeg',
+        },
+        body: JSON.stringify({
+          text: 'Hi',
+          model_id: DEFAULT_MODEL,
+          output_format: DEFAULT_OUTPUT_FORMAT,
+        }),
+        signal: testController.signal,
+      });
+
+      clearTimeout(testTimeoutId);
+
+      if (testResponse.ok) {
+        const testBlob = await testResponse.blob();
+        if (testBlob.size > 0) {
+          console.log('🔊 [ElevenLabs] TTS 可用性检测通过');
+          return { valid: true };
+        }
+        return { valid: false, error: 'API 返回空音频' };
+      }
+
+      if (testResponse.status === 401) {
+        return { valid: false, error: 'API 密钥无效' };
+      }
+      if (testResponse.status === 429) {
+        return { valid: true, error: undefined };
+      }
+
+      return { valid: false, error: `TTS 接口异常 (${testResponse.status})` };
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return { valid: false, error: '网络连接超时，请检查网络或代理设置' };
+      }
+      return { valid: false, error: '网络连接失败，请检查网络或代理设置' };
     }
   },
 

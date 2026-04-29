@@ -6,6 +6,7 @@ import { syncQueueService } from '../services/syncQueueService';
 import { geminiService } from '../services/geminiService';
 import { elevenLabsService, ElevenLabsVoice } from '../services/elevenLabsService';
 import { elevenLabsCacheService } from '../services/elevenLabsCacheService';
+import { kokoroTtsService, KokoroVoice } from '../services/kokoroTtsService';
 import { UserSettings } from '../types';
 import EnvCheckPanel from '../components/EnvCheckPanel';
 import SupabaseConfigPanel from '../components/SupabaseConfigPanel';
@@ -31,6 +32,9 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
   const [elevenLabsKeyStatus, setElevenLabsKeyStatus] = useState<'idle' | 'valid' | 'invalid'>('idle');
   const [showElevenLabsKey, setShowElevenLabsKey] = useState(false);
   const [elevenLabsCacheStats, setElevenLabsCacheStats] = useState<{ count: number; totalSize: number } | null>(null);
+  const [kokoroVoices] = useState<KokoroVoice[]>(kokoroTtsService.getVoices());
+  const [kokoroCacheStats, setKokoroCacheStats] = useState<{ count: number; totalSize: number } | null>(null);
+  const [kokoroModelStatus, setKokoroModelStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
   const isSyncingRef = useRef(false);
   const isResettingRef = useRef(false);
   const prevUserNameRef = useRef<string>(settings.userName);
@@ -85,11 +89,11 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
       const engineInfo = geminiService.getCurrentEngineInfo();
       const voiceName = engineInfo.voiceName || '默认';
       setTestVoiceName(`${engineInfo.engine} - ${voiceName}`);
-      await geminiService.speak('Hello, this is a voice test. How are you doing today?', settings.edgeVoice, false);
+      await geminiService.speak('Hello, this is a voice test. How are you doing today?', undefined, false);
     } catch {
       setTestVoiceName('播放失败');
     }
-  }, [settings.edgeVoice, settings.ttsEngine, settings.elevenLabsApiKey, settings.elevenLabsVoiceId]);
+  }, [settings.ttsEngine, settings.elevenLabsApiKey, settings.elevenLabsVoiceId]);
 
   const handleValidateElevenLabsKey = useCallback(async (apiKey: string) => {
     if (!apiKey || !apiKey.trim()) {
@@ -127,6 +131,32 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
     const count = await elevenLabsCacheService.clearAll();
     setElevenLabsCacheStats(null);
     setMessage({ text: `已清理 ${count} 条音频缓存`, type: 'success' });
+  }, []);
+
+  const loadKokoroCacheStats = useCallback(async () => {
+    try {
+      const stats = await kokoroTtsService.getCacheStats();
+      setKokoroCacheStats({ count: stats.count, totalSize: stats.totalSize });
+    } catch {
+      setKokoroCacheStats(null);
+    }
+  }, []);
+
+  const handleClearKokoroCache = useCallback(async () => {
+    const count = await kokoroTtsService.clearCache();
+    setKokoroCacheStats(null);
+    setMessage({ text: `已清理 ${count} 条 Kokoro 音频缓存`, type: 'success' });
+  }, []);
+
+  const handleLoadKokoroModel = useCallback(async () => {
+    setKokoroModelStatus('loading');
+    const result = await kokoroTtsService.loadModel();
+    setKokoroModelStatus(result.loaded ? 'loaded' : 'error');
+    if (result.loaded) {
+      setMessage({ text: 'Kokoro 模型加载成功', type: 'success' });
+    } else {
+      setMessage({ text: `模型加载失败: ${result.error}`, type: 'error' });
+    }
   }, []);
 
   useEffect(() => {
@@ -485,15 +515,15 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                 <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">TTS 引擎</label>
                 <select
                   value={settings.ttsEngine || 'elevenlabs'}
-                  onChange={(e) => handleUpdate('ttsEngine', e.target.value as 'elevenlabs' | 'edge' | 'webSpeech')}
+                  onChange={(e) => handleUpdate('ttsEngine', e.target.value as 'elevenlabs' | 'kokoro' | 'webSpeech')}
                   className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-blue-100 w-full cursor-pointer"
                   disabled={loading}
                 >
-                  <option value="elevenlabs">ElevenLabs (最高质量，需API密钥)</option>
-                  <option value="edge">EdgeTTS (微软云端，需海外网络)</option>
-                  <option value="webSpeech">浏览器原生语音 (本地语音包)</option>
+                  <option value="elevenlabs">ElevenLabs (最高质量，缓存后不消耗额度)</option>
+                  <option value="kokoro">Kokoro-82M (本地运行，免费无限使用)</option>
+                  <option value="webSpeech">浏览器原生语音 (无需下载)</option>
                 </select>
-                <p className="text-[10px] text-gray-500">ElevenLabs 音质最佳，适合 iPhone 使用；EdgeTTS 免费但需翻墙；浏览器原生无需网络</p>
+                <p className="text-[10px] text-gray-500">ElevenLabs 音质最佳；Kokoro 本地运行免费无限；浏览器原生无需下载模型</p>
               </div>
               {settings.ttsEngine === 'elevenlabs' && (
                 <div className="space-y-4 p-4 bg-gradient-to-br from-purple-50 to-indigo-50 rounded-2xl">
@@ -616,31 +646,107 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                   </div>
                 </div>
               )}
-              <div className="flex flex-col gap-2">
-                <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">EdgeTTS 语音</label>
-                <select
-                  value={settings.edgeVoice || 'en-US-AvaMultilingualNeural'}
-                  onChange={(e) => handleUpdate('edgeVoice', e.target.value)}
-                  className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-blue-100 w-full cursor-pointer"
-                  disabled={loading || settings.ttsEngine !== 'edge'}
-                >
-                  <optgroup label="美式英语">
-                    <option value="en-US-AvaMultilingualNeural">Ava (女声) - 推荐</option>
-                    <option value="en-US-AndrewMultilingualNeural">Andrew (男声)</option>
-                    <option value="en-US-JennyMultilingualNeural">Jenny (女声)</option>
-                    <option value="en-US-GuyMultilingualNeural">Guy (男声)</option>
-                    <option value="en-US-AriaNeural">Aria (女声)</option>
-                    <option value="en-US-DavisNeural">Davis (男声)</option>
-                    <option value="en-US-AnaNeural">Ana (女声)</option>
-                    <option value="en-US-EricNeural">Eric (男声)</option>
-                  </optgroup>
-                  <optgroup label="英式英语">
-                    <option value="en-GB-SoniaNeural">Sonia (女声)</option>
-                    <option value="en-GB-RyanNeural">Ryan (男声)</option>
-                  </optgroup>
-                </select>
-                <p className="text-[10px] text-gray-500">微软 EdgeTTS 高质量语音，免费无需密钥</p>
-              </div>
+              {settings.ttsEngine === 'kokoro' && (
+                <div className="space-y-4 p-4 bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-sm">🤖</span>
+                    <h4 className="text-xs font-black text-emerald-700 uppercase tracking-widest">Kokoro-82M 配置</h4>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">模型状态</label>
+                      <div className="flex items-center gap-2">
+                        {kokoroModelStatus === 'loaded' && (
+                          <span className="text-[10px] font-bold text-green-600 bg-green-100 px-2 py-0.5 rounded-full">✓ 已加载</span>
+                        )}
+                        {kokoroModelStatus === 'loading' && (
+                          <span className="text-[10px] font-bold text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full">⏳ 加载中...</span>
+                        )}
+                        {kokoroModelStatus === 'error' && (
+                          <span className="text-[10px] font-bold text-red-600 bg-red-100 px-2 py-0.5 rounded-full">✗ 加载失败</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={handleLoadKokoroModel}
+                        disabled={kokoroModelStatus === 'loading'}
+                        className="flex-1 text-sm font-bold text-white bg-emerald-500 hover:bg-emerald-600 disabled:bg-gray-300 rounded-xl px-4 py-2 transition-colors"
+                      >
+                        {kokoroModelStatus === 'loading' ? '加载中...' : kokoroModelStatus === 'loaded' ? '重新加载模型' : '加载模型 (~82MB)'}
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-gray-500">
+                      首次加载需下载约 82MB 模型文件，后续自动缓存。支持 WebGPU 加速和 WASM 兼容模式。
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Kokoro 语音</label>
+                    <select
+                      value={settings.kokoroVoice || 'af_heart'}
+                      onChange={(e) => handleUpdate('kokoroVoice', e.target.value)}
+                      className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-emerald-100 w-full cursor-pointer"
+                      disabled={loading}
+                    >
+                      <optgroup label="🇺🇸 美式英语 - 女声（推荐）">
+                        {kokoroVoices.filter(v => v.accent === 'american' && v.gender === 'female').map(v => (
+                          <option key={v.id} value={v.id}>{v.name} ({v.id}) - 评级: {v.grade}</option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="🇺🇸 美式英语 - 男声">
+                        {kokoroVoices.filter(v => v.accent === 'american' && v.gender === 'male').map(v => (
+                          <option key={v.id} value={v.id}>{v.name} ({v.id}) - 评级: {v.grade}</option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="🇬🇧 英式英语 - 女声">
+                        {kokoroVoices.filter(v => v.accent === 'british' && v.gender === 'female').map(v => (
+                          <option key={v.id} value={v.id}>{v.name} ({v.id}) - 评级: {v.grade}</option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="🇬🇧 英式英语 - 男声">
+                        {kokoroVoices.filter(v => v.accent === 'british' && v.gender === 'male').map(v => (
+                          <option key={v.id} value={v.id}>{v.name} ({v.id}) - 评级: {v.grade}</option>
+                        ))}
+                      </optgroup>
+                    </select>
+                    <p className="text-[10px] text-gray-500">
+                      af_heart (评级 A) 和 af_bella (评级 A-) 音质最佳
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">音频缓存</label>
+                      <button
+                        onClick={loadKokoroCacheStats}
+                        className="text-[10px] font-bold text-emerald-500 hover:text-emerald-700 transition-colors"
+                      >
+                        🔄 刷新统计
+                      </button>
+                    </div>
+                    <div className="flex items-center justify-between bg-white rounded-xl px-4 py-3 border border-gray-200">
+                      <div>
+                        {kokoroCacheStats ? (
+                          <p className="text-sm font-bold text-gray-900">
+                            {kokoroCacheStats.count} 条缓存 · {elevenLabsCacheService.formatSize(kokoroCacheStats.totalSize)}
+                          </p>
+                        ) : (
+                          <p className="text-sm text-gray-400">点击刷新查看缓存统计</p>
+                        )}
+                      </div>
+                      <button
+                        onClick={handleClearKokoroCache}
+                        disabled={!kokoroCacheStats || kokoroCacheStats.count === 0}
+                        className="text-[10px] font-bold text-red-500 hover:text-red-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        清理缓存
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-gray-500">
+                      Kokoro 生成的音频会自动缓存，再次朗读相同内容直接使用缓存
+                    </p>
+                  </div>
+                </div>
+              )}
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between">
                   <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">浏览器原生语音</label>

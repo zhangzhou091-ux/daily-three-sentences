@@ -240,7 +240,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     if (loop) setSpeakingText(text);
 
     try {
-      await geminiService.speak(text, settings.edgeVoice, loop);
+      await geminiService.speak(text, undefined, loop);
       if (!loop) setSpeakingText(null);
     } catch (err: unknown) {
       setSpeakingText(null);

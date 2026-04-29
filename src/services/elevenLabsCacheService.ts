@@ -8,8 +8,8 @@
  * 缓存策略：
  * - 缓存键：text + voiceId + modelId 的哈希值
  * - 每条缓存记录包含：音频 Blob、文本摘要、创建时间、大小
- * - 支持缓存统计（条数、总大小）和批量清理
- * - 自动清理超过 30 天的旧缓存
+ * - 支持缓存统计（条数、总大小）和手动清理
+ * - 禁止自动清理，仅支持用户手动清理
  */
 
 const DB_NAME = 'D3S_ElevenLabs_Cache';
@@ -173,37 +173,6 @@ export const elevenLabsCacheService = {
         const request = store.clear();
 
         request.onsuccess = () => resolve(stats.count);
-        request.onerror = () => resolve(0);
-      });
-    } catch {
-      return 0;
-    }
-  },
-
-  async cleanupOld(maxAgeMs: number = 30 * 24 * 60 * 60 * 1000): Promise<number> {
-    try {
-      const db = await getDB();
-      const cutoff = Date.now() - maxAgeMs;
-
-      return new Promise((resolve) => {
-        const tx = db.transaction([STORE_NAME], 'readwrite');
-        const store = tx.objectStore(STORE_NAME);
-        const index = store.index('createdAt');
-        const range = IDBKeyRange.upperBound(cutoff);
-        const request = index.openCursor(range);
-
-        let deleted = 0;
-        request.onsuccess = (event) => {
-          const cursor = (event.target as IDBRequest).result;
-          if (cursor) {
-            cursor.delete();
-            deleted++;
-            cursor.continue();
-          } else {
-            resolve(deleted);
-          }
-        };
-
         request.onerror = () => resolve(0);
       });
     } catch {
