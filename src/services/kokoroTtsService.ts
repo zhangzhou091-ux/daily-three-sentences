@@ -9,7 +9,10 @@
  */
 
 import { KokoroTTS } from 'kokoro-js';
+import { env } from '@huggingface/transformers';
 import { elevenLabsCacheService } from './elevenLabsCacheService';
+
+env.remoteHost = 'https://hf-mirror.com';
 
 export interface KokoroVoice {
   id: string;
