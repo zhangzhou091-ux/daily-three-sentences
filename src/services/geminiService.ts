@@ -338,10 +338,6 @@ export const geminiService = {
     let ttsEngine = settings.ttsEngine || 'elevenlabs';
     const speechRate = settings.speechRate ?? 1;
 
-    if (ttsEngine === 'edge') {
-      ttsEngine = 'kokoro';
-    }
-
     if (ttsEngine === 'elevenlabs') {
       const apiKey = settings.elevenLabsApiKey;
       const voiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();

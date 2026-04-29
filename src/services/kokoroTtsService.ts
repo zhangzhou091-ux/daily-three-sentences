@@ -12,7 +12,29 @@ import { KokoroTTS } from 'kokoro-js';
 import { env } from '@huggingface/transformers';
 import { elevenLabsCacheService } from './elevenLabsCacheService';
 
-env.remoteHost = 'https://hf-mirror.com';
+const MIRROR_HOSTS = [
+  'https://hf-mirror.com',
+  'https://huggingface.do.mirr.one',
+];
+
+const ORIGINAL_HOST = 'https://huggingface.co';
+
+env.remoteHost = MIRROR_HOSTS[0];
+
+const checkMirrorAvailable = async (host: string): Promise<boolean> => {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const response = await fetch(
+      `${host}/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/config.json`,
+      { method: 'HEAD', signal: controller.signal }
+    );
+    clearTimeout(timeoutId);
+    return response.ok;
+  } catch {
+    return false;
+  }
+};
 
 export interface KokoroVoice {
   id: string;
@@ -46,6 +68,18 @@ let ttsInstance: KokoroTTS | null = null;
 let isLoading = false;
 let loadError: string | null = null;
 let currentAudioElement: HTMLAudioElement | null = null;
+let loadProgress: number = 0;
+
+const isSafari = (): boolean => {
+  if (typeof navigator === 'undefined') return false;
+  return /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+};
+
+const isIOS = (): boolean => {
+  if (typeof navigator === 'undefined') return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+};
 
 const generateKokoroCacheKey = (text: string, voice: string): string => {
   const raw = `${text.trim()}|kokoro|${voice}`;
@@ -186,46 +220,103 @@ export const kokoroTtsService = {
         setTimeout(() => {
           clearInterval(check);
           resolve({ loaded: !!ttsInstance, error: loadError || undefined });
-        }, 60000);
+        }, 120000);
       });
     }
 
     isLoading = true;
     loadError = null;
+    loadProgress = 0;
 
-    try {
-      const hasWebGPU = typeof navigator !== 'undefined' && 'gpu' in navigator;
-      const device = hasWebGPU ? 'webgpu' : 'wasm';
-      const dtype = hasWebGPU ? 'fp32' : 'q8';
+    const onSafari = isSafari() || isIOS();
+    const hasWebGPU = !onSafari && typeof navigator !== 'undefined' && 'gpu' in navigator;
 
-      console.log(`🔊 [Kokoro] 开始加载模型 | [设备] ${device} | [精度] ${dtype}`);
-      ttsInstance = await KokoroTTS.from_pretrained(MODEL_ID, { dtype, device } as any);
-      console.log('🔊 [Kokoro] 模型加载完成');
-      isLoading = false;
-      return { loaded: true };
-    } catch (err) {
-      if (String(err).includes('webgpu') || String(err).includes('WebGPU')) {
-        console.warn('🔊 [Kokoro] WebGPU 不可用，回退到 WASM');
-        try {
-          ttsInstance = await KokoroTTS.from_pretrained(MODEL_ID, { dtype: 'q8', device: 'wasm' } as any);
-          console.log('🔊 [Kokoro] WASM 模式加载完成');
-          isLoading = false;
-          return { loaded: true };
-        } catch (wasmErr) {
-          const msg = wasmErr instanceof Error ? wasmErr.message : String(wasmErr);
-          console.error('🔊 [Kokoro] WASM 模式也加载失败:', msg);
-          loadError = msg;
-          isLoading = false;
-          return { loaded: false, error: msg };
-        }
+    const tryLoadWithHost = async (host: string, dtype: string, device: string): Promise<{ loaded: boolean; error?: string }> => {
+      env.remoteHost = host;
+      console.log(`🔊 [Kokoro] 使用镜像源: ${host} | [设备] ${device} | [精度] ${dtype}`);
+      loadProgress = 5;
+      try {
+        ttsInstance = await KokoroTTS.from_pretrained(MODEL_ID, {
+          dtype,
+          device,
+          progress_callback: (progress: any) => {
+            if (progress?.status === 'progress' && progress.progress) {
+              loadProgress = Math.min(10 + Math.round(progress.progress * 0.9), 99);
+              console.log(`🔊 [Kokoro] 下载进度: ${loadProgress}%`);
+            }
+          },
+        } as any);
+        console.log(`🔊 [Kokoro] 模型加载完成 (${host} | ${device} | ${dtype})`);
+        loadProgress = 100;
+        isLoading = false;
+        return { loaded: true };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`🔊 [Kokoro] 加载失败 (${host} | ${device} | ${dtype}): ${msg}`);
+        ttsInstance = null;
+        return { loaded: false, error: msg };
       }
+    };
 
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('🔊 [Kokoro] 模型加载失败:', msg);
+    const isHtmlError = (error?: string): boolean => {
+      return !!(error && (error.includes('<!DOCTYPE') || error.includes('<html') || error.includes('Unexpected token')));
+    };
+
+    const tryLoadWasm = async (): Promise<{ loaded: boolean; error?: string }> => {
+      const allHosts = [...MIRROR_HOSTS, ORIGINAL_HOST];
+      for (const host of allHosts) {
+        console.log(`🔊 [Kokoro] 检查镜像源可用性: ${host}`);
+        const available = await checkMirrorAvailable(host);
+        if (!available) {
+          console.warn(`🔊 [Kokoro] 镜像源不可用，跳过: ${host}`);
+          continue;
+        }
+        const result = await tryLoadWithHost(host, 'q8', 'wasm');
+        if (result.loaded) return result;
+        if (!isHtmlError(result.error)) {
+          loadError = result.error ?? null;
+          isLoading = false;
+          return result;
+        }
+        console.warn(`🔊 [Kokoro] 镜像源返回 HTML，尝试下一个: ${host}`);
+      }
+      const msg = '所有镜像源均不可用，请检查网络连接';
+      console.error(`🔊 [Kokoro] ${msg}`);
       loadError = msg;
       isLoading = false;
       return { loaded: false, error: msg };
+    };
+
+    if (onSafari) {
+      console.log('🔊 [Kokoro] 检测到 Safari/iOS，跳过 WebGPU，直接使用 WASM q8');
+      return tryLoadWasm();
     }
+
+    if (hasWebGPU) {
+      const allHosts = [...MIRROR_HOSTS, ORIGINAL_HOST];
+      for (const host of allHosts) {
+        console.log(`🔊 [Kokoro] 检查镜像源可用性: ${host}`);
+        const available = await checkMirrorAvailable(host);
+        if (!available) {
+          console.warn(`🔊 [Kokoro] 镜像源不可用，跳过: ${host}`);
+          continue;
+        }
+        const result = await tryLoadWithHost(host, 'fp32', 'webgpu');
+        if (result.loaded) return result;
+        if (isHtmlError(result.error)) {
+          console.warn(`🔊 [Kokoro] 镜像源返回 HTML，尝试下一个: ${host}`);
+          continue;
+        }
+        break;
+      }
+      console.warn('🔊 [Kokoro] WebGPU 加载失败，回退到 WASM q8');
+      isLoading = true;
+      loadError = null;
+      return tryLoadWasm();
+    }
+
+    console.log('🔊 [Kokoro] 无 WebGPU 支持，直接使用 WASM q8');
+    return tryLoadWasm();
   },
 
   isModelLoaded(): boolean {
@@ -234,6 +325,14 @@ export const kokoroTtsService = {
 
   isLoadingModel(): boolean {
     return isLoading;
+  },
+
+  getLoadProgress(): number {
+    return loadProgress;
+  },
+
+  getLoadError(): string | null {
+    return loadError;
   },
 
   async speak(text: string, voice: string = 'af_heart', loop: boolean = false): Promise<KokoroSpeakResult> {

@@ -31,9 +31,13 @@ const DEFAULT_MODEL = 'eleven_v3';
 const DEFAULT_OUTPUT_FORMAT = 'mp3_44100_128';
 const SPEAK_TIMEOUT = 15000;
 const VOICES_CACHE_TTL = 30 * 60 * 1000;
+const VALIDATE_TIMEOUT = 15000;
+const VALIDATE_CACHE_TTL = 5 * 60 * 1000;
+const API_KEY_PATTERN = /^sk_[a-f0-9]{40,}$/i;
 
 let currentAudioElement: HTMLAudioElement | null = null;
 let voicesCache: { voices: ElevenLabsVoice[]; timestamp: number } | null = null;
+let validationCache: { key: string; valid: boolean; timestamp: number } | null = null;
 
 const POPULAR_VOICES: ElevenLabsVoice[] = [
   { voice_id: 'JBFqnCBsd6RMkjVDRZzb', name: 'George', labels: { accent: 'american', gender: 'male' } },
@@ -257,9 +261,22 @@ export const elevenLabsService = {
 
     const trimmedKey = apiKey.trim();
 
+    if (!API_KEY_PATTERN.test(trimmedKey)) {
+      return { valid: false, error: 'API 密钥格式不正确，应以 sk_ 开头后跟十六进制字符' };
+    }
+
+    if (validationCache &&
+        validationCache.key === trimmedKey &&
+        Date.now() - validationCache.timestamp < VALIDATE_CACHE_TTL) {
+      console.log('🔊 [ElevenLabs] 使用缓存的验证结果');
+      return validationCache.valid
+        ? { valid: true }
+        : { valid: false, error: 'API 密钥无效（缓存结果）' };
+    }
+
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), VALIDATE_TIMEOUT);
 
       const response = await fetch(`${API_BASE}/v1/user`, {
         method: 'GET',
@@ -272,24 +289,26 @@ export const elevenLabsService = {
       clearTimeout(timeoutId);
 
       if (response.ok) {
+        validationCache = { key: trimmedKey, valid: true, timestamp: Date.now() };
         return { valid: true };
       }
 
       if (response.status === 401) {
+        validationCache = { key: trimmedKey, valid: false, timestamp: Date.now() };
         return { valid: false, error: 'API 密钥无效' };
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
-        console.warn('ElevenLabs /v1/user 超时，降级为 TTS 可用性检测');
+        console.warn('🔊 [ElevenLabs] /v1/user 超时，降级为 TTS 可用性检测');
       } else {
-        console.warn('ElevenLabs /v1/user 请求失败，降级为 TTS 可用性检测:', err);
+        console.warn('🔊 [ElevenLabs] /v1/user 请求失败，降级为 TTS 可用性检测:', err);
       }
     }
 
     try {
       console.log('🔊 [ElevenLabs] 降级验证：测试 TTS 接口可用性');
       const testController = new AbortController();
-      const testTimeoutId = setTimeout(() => testController.abort(), 12000);
+      const testTimeoutId = setTimeout(() => testController.abort(), VALIDATE_TIMEOUT);
 
       const testResponse = await fetch(`${API_BASE}/v1/text-to-speech/${POPULAR_VOICES[0].voice_id}`, {
         method: 'POST',
@@ -312,15 +331,19 @@ export const elevenLabsService = {
         const testBlob = await testResponse.blob();
         if (testBlob.size > 0) {
           console.log('🔊 [ElevenLabs] TTS 可用性检测通过');
+          validationCache = { key: trimmedKey, valid: true, timestamp: Date.now() };
           return { valid: true };
         }
         return { valid: false, error: 'API 返回空音频' };
       }
 
       if (testResponse.status === 401) {
+        validationCache = { key: trimmedKey, valid: false, timestamp: Date.now() };
         return { valid: false, error: 'API 密钥无效' };
       }
       if (testResponse.status === 429) {
+        console.log('🔊 [ElevenLabs] 429 限流，密钥有效');
+        validationCache = { key: trimmedKey, valid: true, timestamp: Date.now() };
         return { valid: true, error: undefined };
       }
 
@@ -351,6 +374,10 @@ export const elevenLabsService = {
 
   clearVoicesCache(): void {
     voicesCache = null;
+  },
+
+  clearValidationCache(): void {
+    validationCache = null;
   },
 };
 

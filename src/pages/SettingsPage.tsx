@@ -35,6 +35,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
   const [kokoroVoices] = useState<KokoroVoice[]>(kokoroTtsService.getVoices());
   const [kokoroCacheStats, setKokoroCacheStats] = useState<{ count: number; totalSize: number } | null>(null);
   const [kokoroModelStatus, setKokoroModelStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
+  const [kokoroLoadProgress, setKokoroLoadProgress] = useState<number>(0);
   const isSyncingRef = useRef(false);
   const isResettingRef = useRef(false);
   const prevUserNameRef = useRef<string>(settings.userName);
@@ -150,7 +151,13 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
 
   const handleLoadKokoroModel = useCallback(async () => {
     setKokoroModelStatus('loading');
+    setKokoroLoadProgress(0);
+    const progressTimer = setInterval(() => {
+      setKokoroLoadProgress(kokoroTtsService.getLoadProgress());
+    }, 500);
     const result = await kokoroTtsService.loadModel();
+    clearInterval(progressTimer);
+    setKokoroLoadProgress(kokoroTtsService.getLoadProgress());
     setKokoroModelStatus(result.loaded ? 'loaded' : 'error');
     if (result.loaded) {
       setMessage({ text: 'Kokoro 模型加载成功', type: 'success' });
@@ -673,11 +680,19 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                         disabled={kokoroModelStatus === 'loading'}
                         className="flex-1 text-sm font-bold text-white bg-emerald-500 hover:bg-emerald-600 disabled:bg-gray-300 rounded-xl px-4 py-2 transition-colors"
                       >
-                        {kokoroModelStatus === 'loading' ? '加载中...' : kokoroModelStatus === 'loaded' ? '重新加载模型' : '加载模型 (~82MB)'}
+                        {kokoroModelStatus === 'loading' ? `加载中... ${kokoroLoadProgress}%` : kokoroModelStatus === 'loaded' ? '重新加载模型' : '加载模型 (~82MB)'}
                       </button>
                     </div>
+                    {kokoroModelStatus === 'loading' && (
+                      <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                        <div
+                          className="bg-emerald-500 h-full rounded-full transition-all duration-300 ease-out"
+                          style={{ width: `${kokoroLoadProgress}%` }}
+                        />
+                      </div>
+                    )}
                     <p className="text-[10px] text-gray-500">
-                      首次加载需下载约 82MB 模型文件，后续自动缓存。支持 WebGPU 加速和 WASM 兼容模式。
+                      首次加载需下载约 82MB 模型文件，后续自动缓存。Safari/iOS 自动使用 WASM 兼容模式。
                     </p>
                   </div>
                   <div className="flex flex-col gap-2">

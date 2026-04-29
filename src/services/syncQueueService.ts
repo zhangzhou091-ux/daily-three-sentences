@@ -393,7 +393,7 @@ class SyncQueueService {
           }
           
           localStorage.removeItem(STORAGE_KEY_ALL_QUEUES);
-          this.emit('queueWarning', { level: 'critical', message: '存储数据损坏已自动清空' });
+          this.emit('queueWarning', { level: 'critical', message: '存储数据损坏已自动清空', count: 0, storageBytes: 0 });
           logger.warn('存储数据损坏已自动清空');
           return;
         }
