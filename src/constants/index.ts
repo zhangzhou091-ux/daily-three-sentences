@@ -140,7 +140,7 @@ export const DEFAULT_USER_SETTINGS = {
   dailyReviewTarget: 10,
   voiceName: 'Kore' as const,
   webSpeechVoice: '',
-  ttsEngine: 'elevenlabs' as const,
+  ttsEngine: 'auto' as const,
   speechRate: 1,
   showChineseFirst: false,
   autoPlayAudio: true,
@@ -150,6 +150,7 @@ export const DEFAULT_USER_SETTINGS = {
   elevenLabsApiKey: '',
   elevenLabsVoiceId: 'JBFqnCBsd6RMkjVDRZzb',
   kokoroVoice: 'af_heart',
+  kokoroUseLocal: false,
 };
 
 // 学习奖励

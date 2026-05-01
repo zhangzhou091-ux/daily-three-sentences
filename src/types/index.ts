@@ -48,7 +48,7 @@ export type ViewType = 'study' | 'manage' | 'achievements' | 'settings';
 // 学习步骤类型
 export type StudyStep = 'learn' | 'review' | 'dictation';
 
-export type TTSEngine = 'elevenlabs' | 'kokoro' | 'webSpeech';
+export type TTSEngine = 'elevenlabs' | 'kokoro' | 'webSpeech' | 'auto';
 
 export interface UserSettings {
   dailyTarget: number;
@@ -66,6 +66,7 @@ export interface UserSettings {
   elevenLabsApiKey?: string;
   elevenLabsVoiceId?: string;
   kokoroVoice?: string;
+  kokoroUseLocal?: boolean;
 }
 
 // 用户统计接口

@@ -201,7 +201,7 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
   }
 
   if (isIOS()) {
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise(resolve => setTimeout(resolve, 150));
   }
 
   const gen = ++speakGeneration;
@@ -212,9 +212,13 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
   const bestVoice = await selectBestUsVoice();
   if (bestVoice) {
     utterance.voice = bestVoice;
+    console.log(`🔊 [WebSpeech] 使用语音: ${bestVoice.name} | lang: ${bestVoice.lang} | local: ${bestVoice.localService}`);
+  } else {
+    utterance.lang = 'en-US';
+    console.warn('🔊 [WebSpeech] 未找到合适语音，使用默认 en-US');
   }
 
-  utterance.lang = 'en-US';
+  utterance.lang = bestVoice?.lang || 'en-US';
   utterance.rate = rate;
   utterance.pitch = rate < 0.5 ? 0.95 : 1.0;
   utterance.volume = 1.0;
@@ -253,13 +257,13 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
       }
       
       const pitch = rate < 0.5 ? 0.95 : 1.0;
-      const delay = isIOS() ? 200 : 50;
+      const delay = isIOS() ? 250 : 50;
 
       setTimeout(() => {
         if (isCurrentGen() && loopActiveFlag && !promiseResolved) {
           const newUtterance = new SpeechSynthesisUtterance(text);
           newUtterance.voice = utterance.voice;
-          newUtterance.lang = 'en-US';
+          newUtterance.lang = utterance.lang;
           newUtterance.rate = rate;
           newUtterance.pitch = pitch;
           newUtterance.volume = 1.0;
@@ -309,7 +313,15 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
     utterance.onend = handleEnd;
     utterance.onerror = handleError;
 
-    window.speechSynthesis.speak(utterance);
+    if (isIOS()) {
+      setTimeout(() => {
+        if (isCurrentGen() && !promiseResolved) {
+          window.speechSynthesis.speak(utterance);
+        }
+      }, 100);
+    } else {
+      window.speechSynthesis.speak(utterance);
+    }
   });
 };
 
@@ -335,50 +347,87 @@ const processQueue = async () => {
 export const geminiService = {
   async speak(text: string, voice?: string, loop: boolean = false): Promise<SpeakResult> {
     const settings = storageService.getSettings();
-    let ttsEngine = settings.ttsEngine || 'elevenlabs';
+    const ttsEngine = settings.ttsEngine || 'auto';
     const speechRate = settings.speechRate ?? 1;
 
-    if (ttsEngine === 'elevenlabs') {
+    const tryElevenLabs = async (): Promise<SpeakResult> => {
       const apiKey = settings.elevenLabsApiKey;
       const voiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
-
-      if (apiKey && apiKey.trim()) {
-        try {
-          console.log(`🔊 [引擎] ElevenLabs | [语音] ${voiceId} | [循环] ${loop}`);
-          const result = await elevenLabsService.speak(text, apiKey, voiceId, loop);
-          if (result.success) {
-            return result;
-          }
-          console.warn('ElevenLabs 播放失败，回退到 Kokoro:', result.error);
-        } catch (err) {
-          console.warn('ElevenLabs 出错，回退到 Kokoro:', err);
-        }
-      } else {
-        console.warn('未配置 ElevenLabs API 密钥，尝试 Kokoro');
+      if (!apiKey || !apiKey.trim()) {
+        return { success: false, error: '未配置 ElevenLabs API 密钥' };
       }
-    }
+      try {
+        console.log(`🔊 [引擎] ElevenLabs | [语音] ${voiceId} | [循环] ${loop}`);
+        const result = await elevenLabsService.speak(text, apiKey, voiceId, loop);
+        if (result.success) return result;
+        console.warn('🔊 ElevenLabs 播放失败:', result.error);
+        return result;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('🔊 ElevenLabs 出错:', msg);
+        return { success: false, error: msg };
+      }
+    };
 
-    if (ttsEngine === 'elevenlabs' || ttsEngine === 'kokoro') {
+    const tryKokoro = async (): Promise<SpeakResult> => {
       try {
         const { kokoroTtsService: kokoro } = await import('./kokoroTtsService');
         const kokoroVoice = settings.kokoroVoice || kokoro.getDefaultVoiceId();
         console.log(`🔊 [引擎] Kokoro-82M | [语音] ${kokoroVoice} | [循环] ${loop}`);
         const result = await kokoro.speak(text, kokoroVoice, loop);
-        if (result.success) {
-          return { success: true };
-        }
-        console.warn('Kokoro 播放失败，回退到浏览器原生语音:', result.error);
+        if (result.success) return { success: true };
+        console.warn('🔊 Kokoro 播放失败:', result.error);
+        return { success: false, error: result.error };
       } catch (err) {
-        console.warn('Kokoro 出错，回退到浏览器原生语音:', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('🔊 Kokoro 出错:', msg);
+        return { success: false, error: msg };
       }
+    };
+
+    const tryWebSpeech = async (): Promise<SpeakResult> => {
+      const selectedVoice = await selectBestUsVoice();
+      console.log(`🔊 [引擎] Web Speech API | [语音] ${selectedVoice?.name || '默认'} | [local] ${selectedVoice?.localService} | [语速] ${speechRate} | [循环] ${loop}`);
+      return new Promise((resolve, reject) => {
+        taskQueue.push({ text, loop, rate: speechRate, resolve, reject });
+        processQueue();
+      });
+    };
+
+    if (ttsEngine === 'auto') {
+      const elResult = await tryElevenLabs();
+      if (elResult.success) return elResult;
+      console.warn('🔊 [auto] ElevenLabs 不可用，回退到 Kokoro');
+
+      const kokoroResult = await tryKokoro();
+      if (kokoroResult.success) return kokoroResult;
+      console.warn('🔊 [auto] Kokoro 不可用，回退到 Web Speech API');
+
+      return tryWebSpeech();
     }
-    
-    const selectedVoice = await selectBestUsVoice();
-    console.log(`🔊 [引擎] Web Speech API | [语音] ${selectedVoice?.name || '默认'} | [local] ${selectedVoice?.localService} | [语速] ${speechRate} | [循环] ${loop}`);
-    return new Promise((resolve, reject) => {
-      taskQueue.push({ text, loop, rate: speechRate, resolve, reject });
-      processQueue();
-    });
+
+    if (ttsEngine === 'elevenlabs') {
+      const result = await tryElevenLabs();
+      if (result.success) return result;
+      console.warn('🔊 ElevenLabs 失败，回退到 Kokoro');
+      const kokoroResult = await tryKokoro();
+      if (kokoroResult.success) return kokoroResult;
+      console.warn('🔊 Kokoro 失败，回退到 Web Speech API');
+      return tryWebSpeech();
+    }
+
+    if (ttsEngine === 'kokoro') {
+      const result = await tryKokoro();
+      if (result.success) return result;
+      console.warn('🔊 Kokoro 失败，回退到 Web Speech API');
+      return tryWebSpeech();
+    }
+
+    if (ttsEngine === 'webSpeech') {
+      return tryWebSpeech();
+    }
+
+    return tryWebSpeech();
   },
 
   stop(): void {
@@ -398,12 +447,21 @@ export const geminiService = {
 
   getCurrentEngineInfo(): { engine: string; voiceName: string; isLocal: boolean } {
     const settings = storageService.getSettings();
-    const ttsEngine = settings.ttsEngine || 'elevenlabs';
+    const ttsEngine = settings.ttsEngine || 'auto';
+    if (ttsEngine === 'auto') {
+      const apiKey = settings.elevenLabsApiKey;
+      if (apiKey && apiKey.trim()) {
+        const voiceId = settings.elevenLabsVoiceId || 'JBFqnCBsd6RMkjVzb';
+        const popularVoice = elevenLabsService.getPopularVoices().find(v => v.voice_id === voiceId);
+        return { engine: '自动 (ElevenLabs → Kokoro → Web Speech)', voiceName: popularVoice?.name || voiceId, isLocal: false };
+      }
+      return { engine: '自动 (Kokoro → Web Speech)', voiceName: settings.kokoroVoice || 'af_heart', isLocal: true };
+    }
     if (ttsEngine === 'elevenlabs') {
       const voiceId = settings.elevenLabsVoiceId || 'JBFqnCBsd6RMkjVDRZzb';
       const apiKey = settings.elevenLabsApiKey;
       if (!apiKey || !apiKey.trim()) {
-        return { engine: 'ElevenLabs (未配置，回退)', voiceName: '未配置', isLocal: false };
+        return { engine: 'ElevenLabs (未配置，将回退)', voiceName: '未配置', isLocal: false };
       }
       const popularVoice = elevenLabsService.getPopularVoices().find(v => v.voice_id === voiceId);
       return { engine: 'ElevenLabs', voiceName: popularVoice?.name || voiceId, isLocal: false };

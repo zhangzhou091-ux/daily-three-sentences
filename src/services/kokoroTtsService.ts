@@ -1,16 +1,7 @@
-/**
- * Kokoro TTS Service
- *
- * 基于 Kokoro-82M 模型的本地 TTS 服务
- * - 82M 参数轻量模型，浏览器本地运行，无需网络
- * - 支持 WebGPU 加速 + WASM 兼容回退
- * - 27 种美式/英式英语语音
- * - 首次加载约 82MB (q8 量化)，后续自动缓存
- */
-
 import { KokoroTTS } from 'kokoro-js';
 import { env } from '@huggingface/transformers';
 import { elevenLabsCacheService } from './elevenLabsCacheService';
+import { storageService } from './storage';
 
 const MIRROR_HOSTS = [
   'https://hf-mirror.com',
@@ -19,7 +10,95 @@ const MIRROR_HOSTS = [
 
 const ORIGINAL_HOST = 'https://huggingface.co';
 
-env.remoteHost = MIRROR_HOSTS[0];
+const MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
+
+const BASE_PATH = import.meta.env.BASE_URL || '/daily-three-sentences/';
+const LOCAL_MODEL_PATH = `${BASE_PATH}models/`;
+
+env.allowLocalModels = true;
+env.localModelPath = LOCAL_MODEL_PATH;
+
+const getStoredUseLocalModels = (): boolean => {
+  try {
+    const settings = storageService.getSettings();
+    return settings.kokoroUseLocal ?? false;
+  } catch {
+    return false;
+  }
+};
+
+let useLocalModels = getStoredUseLocalModels();
+
+if (useLocalModels) {
+  env.allowLocalModels = true;
+  env.allowRemoteModels = false;
+  env.localModelPath = LOCAL_MODEL_PATH;
+}
+
+export const setUseLocalModels = (enabled: boolean): void => {
+  useLocalModels = enabled;
+  try {
+    const settings = storageService.getSettings();
+    storageService.saveSettings({ ...settings, kokoroUseLocal: enabled });
+  } catch {
+    // ignore
+  }
+  if (enabled) {
+    env.allowLocalModels = true;
+    env.allowRemoteModels = false;
+    env.localModelPath = LOCAL_MODEL_PATH;
+    console.log(`🔊 [Kokoro] 切换为本地模型模式，路径: ${LOCAL_MODEL_PATH}`);
+  } else {
+    env.allowLocalModels = false;
+    env.allowRemoteModels = true;
+    env.remoteHost = MIRROR_HOSTS[0];
+    console.log('🔊 [Kokoro] 切换为远程模型模式');
+  }
+};
+
+export const getUseLocalModels = (): boolean => useLocalModels;
+
+const patchVoiceLoading = (activeHost: string): void => {
+  try {
+    const originalFetch = window.fetch;
+    if ((window as any).__kokoroFetchPatched) {
+      updateActiveHost(activeHost);
+      return;
+    }
+
+    (window as any).__kokoroFetchPatched = true;
+    (window as any).__kokoroActiveHost = activeHost;
+
+    window.fetch = function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+
+      if (url.includes('huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/')) {
+        if (useLocalModels) {
+          const voiceMatch = url.match(/voices\/([^/]+\.bin)/);
+          const voiceFile = voiceMatch ? voiceMatch[1] : '';
+          const localUrl = `${LOCAL_MODEL_PATH}onnx-community/Kokoro-82M-v1.0-ONNX/voices/${voiceFile}`;
+          console.log(`🔊 [Kokoro] 本地 voice 加载: ${localUrl}`);
+          return originalFetch.call(window, localUrl, init);
+        }
+        const activeMirror = (window as any).__kokoroActiveHost || MIRROR_HOSTS[0];
+        const patchedUrl = url.replace('https://huggingface.co', activeMirror);
+        console.log(`🔊 [Kokoro] 拦截 voice 下载: ${url} → ${patchedUrl}`);
+        return originalFetch.call(window, patchedUrl, init);
+      }
+
+      return originalFetch.call(window, input, init);
+    };
+
+    console.log('🔊 [Kokoro] Voice 下载拦截器已安装');
+  } catch (err) {
+    console.warn('🔊 [Kokoro] Voice 下载拦截器安装失败:', err);
+  }
+};
+
+const updateActiveHost = (host: string): void => {
+  (window as any).__kokoroActiveHost = host;
+  env.remoteHost = host;
+};
 
 const checkMirrorAvailable = async (host: string): Promise<boolean> => {
   try {
@@ -27,10 +106,19 @@ const checkMirrorAvailable = async (host: string): Promise<boolean> => {
     const timeoutId = setTimeout(() => controller.abort(), 8000);
     const response = await fetch(
       `${host}/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/config.json`,
-      { method: 'HEAD', signal: controller.signal }
+      { method: 'GET', signal: controller.signal, mode: 'cors' }
     );
     clearTimeout(timeoutId);
-    return response.ok;
+    if (!response.ok) return false;
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('text/html')) return false;
+    const text = await response.text();
+    try {
+      JSON.parse(text);
+      return true;
+    } catch {
+      return false;
+    }
   } catch {
     return false;
   }
@@ -49,7 +137,6 @@ export interface KokoroSpeakResult {
   error?: string;
 }
 
-const MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
 const CACHE_STORE_NAME = 'kokoro_audio_cache';
 
 const RECOMMENDED_VOICES: KokoroVoice[] = [
@@ -228,11 +315,44 @@ export const kokoroTtsService = {
     loadError = null;
     loadProgress = 0;
 
+    patchVoiceLoading(MIRROR_HOSTS[0]);
+
     const onSafari = isSafari() || isIOS();
     const hasWebGPU = !onSafari && typeof navigator !== 'undefined' && 'gpu' in navigator;
 
+    const tryLoadLocal = async (): Promise<{ loaded: boolean; error?: string }> => {
+      console.log(`🔊 [Kokoro] 尝试从本地路径加载模型: ${LOCAL_MODEL_PATH}`);
+      loadProgress = 5;
+      try {
+        const configUrl = `${LOCAL_MODEL_PATH}onnx-community/Kokoro-82M-v1.0-ONNX/config.json`;
+        const configResp = await fetch(configUrl);
+        if (!configResp.ok) {
+          throw new Error(`本地模型文件不存在: config.json (${configResp.status})`);
+        }
+        console.log('🔊 [Kokoro] 本地模型文件检测通过，开始加载...');
+        ttsInstance = await KokoroTTS.from_pretrained(MODEL_ID, {
+          dtype: 'q8',
+          device: 'wasm',
+          progress_callback: (progress: any) => {
+            if (progress?.status === 'progress' && progress.progress) {
+              loadProgress = Math.min(10 + Math.round(progress.progress * 0.9), 99);
+            }
+          },
+        } as any);
+        console.log('🔊 [Kokoro] 本地模型加载完成');
+        loadProgress = 100;
+        isLoading = false;
+        return { loaded: true };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`🔊 [Kokoro] 本地模型加载失败: ${msg}`);
+        ttsInstance = null;
+        return { loaded: false, error: msg };
+      }
+    };
+
     const tryLoadWithHost = async (host: string, dtype: string, device: string): Promise<{ loaded: boolean; error?: string }> => {
-      env.remoteHost = host;
+      updateActiveHost(host);
       console.log(`🔊 [Kokoro] 使用镜像源: ${host} | [设备] ${device} | [精度] ${dtype}`);
       loadProgress = 5;
       try {
@@ -262,6 +382,10 @@ export const kokoroTtsService = {
       return !!(error && (error.includes('<!DOCTYPE') || error.includes('<html') || error.includes('Unexpected token')));
     };
 
+    const isCorsError = (error?: string): boolean => {
+      return !!(error && (error.includes('CORS') || error.includes('cors') || error.includes('Failed to fetch') || error.includes('NetworkError')));
+    };
+
     const tryLoadWasm = async (): Promise<{ loaded: boolean; error?: string }> => {
       const allHosts = [...MIRROR_HOSTS, ORIGINAL_HOST];
       for (const host of allHosts) {
@@ -273,19 +397,27 @@ export const kokoroTtsService = {
         }
         const result = await tryLoadWithHost(host, 'q8', 'wasm');
         if (result.loaded) return result;
-        if (!isHtmlError(result.error)) {
-          loadError = result.error ?? null;
-          isLoading = false;
-          return result;
+        if (isHtmlError(result.error) || isCorsError(result.error)) {
+          console.warn(`🔊 [Kokoro] 镜像源返回错误，尝试下一个: ${host} - ${result.error}`);
+          continue;
         }
-        console.warn(`🔊 [Kokoro] 镜像源返回 HTML，尝试下一个: ${host}`);
+        loadError = result.error ?? null;
+        isLoading = false;
+        return result;
       }
-      const msg = '所有镜像源均不可用，请检查网络连接';
+      const msg = '所有镜像源均不可用，请检查网络连接或使用本地模型';
       console.error(`🔊 [Kokoro] ${msg}`);
       loadError = msg;
       isLoading = false;
       return { loaded: false, error: msg };
     };
+
+    if (useLocalModels) {
+      patchVoiceLoading('');
+      return tryLoadLocal();
+    }
+
+    patchVoiceLoading(MIRROR_HOSTS[0]);
 
     if (onSafari) {
       console.log('🔊 [Kokoro] 检测到 Safari/iOS，跳过 WebGPU，直接使用 WASM q8');
@@ -303,8 +435,8 @@ export const kokoroTtsService = {
         }
         const result = await tryLoadWithHost(host, 'fp32', 'webgpu');
         if (result.loaded) return result;
-        if (isHtmlError(result.error)) {
-          console.warn(`🔊 [Kokoro] 镜像源返回 HTML，尝试下一个: ${host}`);
+        if (isHtmlError(result.error) || isCorsError(result.error)) {
+          console.warn(`🔊 [Kokoro] 镜像源返回错误，尝试下一个: ${host}`);
           continue;
         }
         break;

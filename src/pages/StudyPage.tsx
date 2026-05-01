@@ -249,7 +249,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
       } else {
         console.warn('语音播放失败', String(err));
       }
-      setSpeakError('语音播放失败，请检查网络');
+      setSpeakError('语音播放失败，请在设置中检查TTS引擎配置');
       setTimeout(() => setSpeakError(null), 3000);
     }
   };

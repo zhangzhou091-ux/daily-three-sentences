@@ -106,11 +106,11 @@ export default defineConfig({
       // Workbox核心配置：缓存规则
       workbox: {
         // 预缓存：打包后的所有静态资源（HTML/JS/CSS/图片/图标）
-        globPatterns: ['**/*.{html,js,css,ico,png,svg,jpg,jpeg,woff,woff2,ttf}'],
+        globPatterns: ['**/*.{html,js,css,ico,png,svg,jpg,jpeg,woff,woff2,ttf,json,bin,onnx}'],
         // 排除大图标文件（超过2MB的文件）
         globIgnores: ['icons/apple-touch-icon*.png'],
         // 最大缓存文件大小：4MB（默认2MB，图标文件较大）
-        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+        maximumFileSizeToCacheInBytes: 100 * 1024 * 1024,
         // 启用跳过等待和客户端声明，确保新SW立即激活
         skipWaiting: true,
         clientsClaim: true,
@@ -178,8 +178,8 @@ export default defineConfig({
     host: '0.0.0.0',
     open: true,
     headers: {
-      'Cross-Origin-Embedder-Policy': 'require-corp',
       'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'credentialless',
     }
   }
 })

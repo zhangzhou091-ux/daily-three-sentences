@@ -6,7 +6,7 @@ import { syncQueueService } from '../services/syncQueueService';
 import { geminiService } from '../services/geminiService';
 import { elevenLabsService, ElevenLabsVoice } from '../services/elevenLabsService';
 import { elevenLabsCacheService } from '../services/elevenLabsCacheService';
-import { kokoroTtsService, KokoroVoice } from '../services/kokoroTtsService';
+import { kokoroTtsService, KokoroVoice, setUseLocalModels, getUseLocalModels } from '../services/kokoroTtsService';
 import { UserSettings } from '../types';
 import EnvCheckPanel from '../components/EnvCheckPanel';
 import SupabaseConfigPanel from '../components/SupabaseConfigPanel';
@@ -36,6 +36,8 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
   const [kokoroCacheStats, setKokoroCacheStats] = useState<{ count: number; totalSize: number } | null>(null);
   const [kokoroModelStatus, setKokoroModelStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
   const [kokoroLoadProgress, setKokoroLoadProgress] = useState<number>(0);
+  const [kokoroUseLocal, setKokoroUseLocal] = useState<boolean>(settings.kokoroUseLocal ?? getUseLocalModels());
+  const [showLocalModelHelp, setShowLocalModelHelp] = useState<boolean>(false);
   const isSyncingRef = useRef(false);
   const isResettingRef = useRef(false);
   const prevUserNameRef = useRef<string>(settings.userName);
@@ -160,10 +162,17 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
     setKokoroLoadProgress(kokoroTtsService.getLoadProgress());
     setKokoroModelStatus(result.loaded ? 'loaded' : 'error');
     if (result.loaded) {
-      setMessage({ text: 'Kokoro 模型加载成功', type: 'success' });
+      setMessage({ text: kokoroUseLocal ? 'Kokoro 本地模型加载成功' : 'Kokoro 模型加载成功', type: 'success' });
     } else {
       setMessage({ text: `模型加载失败: ${result.error}`, type: 'error' });
     }
+  }, [kokoroUseLocal]);
+
+  const handleToggleKokoroLocal = useCallback((enabled: boolean) => {
+    setKokoroUseLocal(enabled);
+    setUseLocalModels(enabled);
+    setKokoroModelStatus('idle');
+    setMessage({ text: enabled ? '已切换为本地模型模式' : '已切换为在线下载模式', type: 'info' });
   }, []);
 
   useEffect(() => {
@@ -521,18 +530,19 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
               <div className="flex flex-col gap-2">
                 <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">TTS 引擎</label>
                 <select
-                  value={settings.ttsEngine || 'elevenlabs'}
-                  onChange={(e) => handleUpdate('ttsEngine', e.target.value as 'elevenlabs' | 'kokoro' | 'webSpeech')}
+                  value={settings.ttsEngine || 'auto'}
+                  onChange={(e) => handleUpdate('ttsEngine', e.target.value as 'auto' | 'elevenlabs' | 'kokoro' | 'webSpeech')}
                   className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-blue-100 w-full cursor-pointer"
                   disabled={loading}
                 >
+                  <option value="auto">自动选择 (ElevenLabs → Kokoro → 浏览器原生)</option>
                   <option value="elevenlabs">ElevenLabs (最高质量，缓存后不消耗额度)</option>
                   <option value="kokoro">Kokoro-82M (本地运行，免费无限使用)</option>
                   <option value="webSpeech">浏览器原生语音 (无需下载)</option>
                 </select>
-                <p className="text-[10px] text-gray-500">ElevenLabs 音质最佳；Kokoro 本地运行免费无限；浏览器原生无需下载模型</p>
+                <p className="text-[10px] text-gray-500">自动模式按优先级回退；手动选择某引擎时，失败仍会回退到浏览器原生语音</p>
               </div>
-              {settings.ttsEngine === 'elevenlabs' && (
+              {(settings.ttsEngine === 'elevenlabs' || settings.ttsEngine === 'auto') && (
                 <div className="space-y-4 p-4 bg-gradient-to-br from-purple-50 to-indigo-50 rounded-2xl">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-sm">🎙️</span>
@@ -653,11 +663,90 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                   </div>
                 </div>
               )}
-              {settings.ttsEngine === 'kokoro' && (
+              {(settings.ttsEngine === 'kokoro' || settings.ttsEngine === 'auto') && (
                 <div className="space-y-4 p-4 bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-sm">🤖</span>
                     <h4 className="text-xs font-black text-emerald-700 uppercase tracking-widest">Kokoro-82M 配置</h4>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">模型来源</label>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleToggleKokoroLocal(false)}
+                          className={`text-[10px] font-bold px-3 py-1 rounded-full transition-colors ${!kokoroUseLocal ? 'bg-emerald-500 text-white' : 'bg-gray-200 text-gray-600'}`}
+                        >
+                          在线下载
+                        </button>
+                        <button
+                          onClick={() => handleToggleKokoroLocal(true)}
+                          className={`text-[10px] font-bold px-3 py-1 rounded-full transition-colors ${kokoroUseLocal ? 'bg-emerald-500 text-white' : 'bg-gray-200 text-gray-600'}`}
+                        >
+                          本地加载
+                        </button>
+                      </div>
+                    </div>
+                    {kokoroUseLocal && (
+                      <div className="bg-white rounded-xl p-3 border border-emerald-200">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-[10px] font-black text-emerald-700 uppercase tracking-widest">本地模型说明</span>
+                          <button
+                            onClick={() => setShowLocalModelHelp(!showLocalModelHelp)}
+                            className="text-[10px] font-bold text-emerald-500 hover:text-emerald-700"
+                          >
+                            {showLocalModelHelp ? '收起' : '查看下载说明'}
+                          </button>
+                        </div>
+                        {showLocalModelHelp ? (
+                          <div className="text-[10px] text-gray-600 space-y-2 mt-2">
+                            <p className="font-bold text-gray-800">1. 下载模型文件</p>
+                            <p>从以下任一地址下载（需科学上网）：</p>
+                            <div className="bg-gray-50 rounded-lg p-2 font-mono text-[9px] break-all">
+                              <p>https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/tree/main</p>
+                              <p className="mt-1">https://hf-mirror.com/onnx-community/Kokoro-82M-v1.0-ONNX/tree/main</p>
+                            </div>
+                            <p className="font-bold text-gray-800 mt-2">2. 需要下载的文件</p>
+                            <div className="bg-gray-50 rounded-lg p-2 font-mono text-[9px] space-y-0.5">
+                              <p>config.json</p>
+                              <p>tokenizer.json</p>
+                              <p>tokenizer_config.json</p>
+                              <p>special_tokens_map.json</p>
+                              <p>onnx/model_q8.onnx (~82MB)</p>
+                              <p>voices/af_heart.bin</p>
+                              <p>voices/af_bella.bin</p>
+                              <p>voices/af_nicole.bin</p>
+                              <p>voices/am_michael.bin</p>
+                              <p>...（其他需要的语音 .bin 文件）</p>
+                            </div>
+                            <p className="font-bold text-gray-800 mt-2">3. 放置到项目目录</p>
+                            <div className="bg-gray-50 rounded-lg p-2 font-mono text-[9px]">
+                              <p>public/models/onnx-community/Kokoro-82M-v1.0-ONNX/</p>
+                              <p>├── config.json</p>
+                              <p>├── tokenizer.json</p>
+                              <p>├── tokenizer_config.json</p>
+                              <p>├── special_tokens_map.json</p>
+                              <p>├── onnx/</p>
+                              <p>│   └── model_q8.onnx</p>
+                              <p>└── voices/</p>
+                              <p>    ├── af_heart.bin</p>
+                              <p>    ├── af_bella.bin</p>
+                              <p>    └── ...</p>
+                            </div>
+                            <p className="font-bold text-gray-800 mt-2">4. 重新构建部署</p>
+                            <div className="bg-gray-50 rounded-lg p-2 font-mono text-[9px]">
+                              <p>npm run build</p>
+                              <p>git add . && git commit -m "add local model"</p>
+                              <p>git push</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-[10px] text-gray-500">
+                            将模型文件下载到 <code className="bg-gray-100 px-1 rounded">public/models/</code> 目录，无需网络即可加载。点击"查看下载说明"获取详细步骤。
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center justify-between">
@@ -680,7 +769,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                         disabled={kokoroModelStatus === 'loading'}
                         className="flex-1 text-sm font-bold text-white bg-emerald-500 hover:bg-emerald-600 disabled:bg-gray-300 rounded-xl px-4 py-2 transition-colors"
                       >
-                        {kokoroModelStatus === 'loading' ? `加载中... ${kokoroLoadProgress}%` : kokoroModelStatus === 'loaded' ? '重新加载模型' : '加载模型 (~82MB)'}
+                        {kokoroModelStatus === 'loading' ? `加载中... ${kokoroLoadProgress}%` : kokoroModelStatus === 'loaded' ? '重新加载模型' : kokoroUseLocal ? '加载本地模型' : '加载模型 (~82MB)'}
                       </button>
                     </div>
                     {kokoroModelStatus === 'loading' && (
@@ -692,7 +781,10 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                       </div>
                     )}
                     <p className="text-[10px] text-gray-500">
-                      首次加载需下载约 82MB 模型文件，后续自动缓存。Safari/iOS 自动使用 WASM 兼容模式。
+                      {kokoroUseLocal
+                        ? '从项目 public/models/ 目录加载模型，无需网络连接'
+                        : '首次加载需下载约 82MB 模型文件，后续自动缓存。Safari/iOS 自动使用 WASM 兼容模式。'
+                      }
                     </p>
                   </div>
                   <div className="flex flex-col gap-2">
