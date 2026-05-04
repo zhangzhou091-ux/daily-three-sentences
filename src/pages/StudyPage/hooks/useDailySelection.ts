@@ -143,7 +143,7 @@ export const useDailySelection = ({
           );
           const manualSentences = available.filter(s => s.isManual === true);
           const importedSentences = available.filter(s => s.isManual === false || s.isManual === undefined);
-          const sortedManual = manualSentences.sort((a, b) => b.addedAt - a.addedAt);
+          const sortedManual = manualSentences.sort((a, b) => a.addedAt - b.addedAt);
           const sortedImported = importedSentences.sort((a, b) => a.addedAt - b.addedAt);
           const sorted = [...sortedManual, ...sortedImported];
           
@@ -161,7 +161,7 @@ export const useDailySelection = ({
           );
           const manualSentences = moreAvailable.filter(s => s.isManual === true);
           const importedSentences = moreAvailable.filter(s => s.isManual === false || s.isManual === undefined);
-          const sortedManual = manualSentences.sort((a, b) => b.addedAt - a.addedAt);
+          const sortedManual = manualSentences.sort((a, b) => a.addedAt - b.addedAt);
           const sortedImported = importedSentences.sort((a, b) => a.addedAt - b.addedAt);
           const sortedMore = [...sortedManual, ...sortedImported];
           
@@ -179,7 +179,7 @@ export const useDailySelection = ({
           );
           const manualSentences = available.filter(s => s.isManual === true);
           const importedSentences = available.filter(s => s.isManual === false || s.isManual === undefined);
-          const sortedManual = manualSentences.sort((a, b) => b.addedAt - a.addedAt);
+          const sortedManual = manualSentences.sort((a, b) => a.addedAt - b.addedAt);
           const sortedImported = importedSentences.sort((a, b) => a.addedAt - b.addedAt);
           const sortedAll = [...sortedManual, ...sortedImported];
           

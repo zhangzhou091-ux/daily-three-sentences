@@ -154,8 +154,8 @@ const RECOMMENDED_VOICES: KokoroVoice[] = [
 let ttsInstance: KokoroTTS | null = null;
 let isLoading = false;
 let loadError: string | null = null;
-let currentAudioElement: HTMLAudioElement | null = null;
 let loadProgress: number = 0;
+let audioGeneration = 0;
 
 const isSafari = (): boolean => {
   if (typeof navigator === 'undefined') return false;
@@ -166,6 +166,32 @@ const isIOS = (): boolean => {
   if (typeof navigator === 'undefined') return false;
   return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+};
+
+const collectIOSDiagnostics = (): Record<string, unknown> => {
+  const info: Record<string, unknown> = {
+    userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'N/A',
+    platform: typeof navigator !== 'undefined' ? navigator.platform : 'N/A',
+    isIOS: isIOS(),
+    isSafari: isSafari(),
+    crossOriginIsolated: typeof crossOriginIsolated !== 'undefined' ? crossOriginIsolated : false,
+    SharedArrayBuffer: typeof SharedArrayBuffer !== 'undefined',
+    webAssembly: typeof WebAssembly !== 'undefined',
+    indexedDB: typeof indexedDB !== 'undefined',
+    maxTouchPoints: typeof navigator !== 'undefined' ? navigator.maxTouchPoints : 0,
+    hardwareConcurrency: typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : 0,
+    deviceMemory: (navigator as any).deviceMemory || 'unknown',
+    onLine: typeof navigator !== 'undefined' ? navigator.onLine : false,
+  };
+
+  if (typeof performance !== 'undefined' && (performance as any).memory) {
+    const mem = (performance as any).memory;
+    info.jsHeapSizeLimitMB = Math.round(mem.jsHeapSizeLimit / 1048576);
+    info.totalJSHeapSizeMB = Math.round(mem.totalJSHeapSize / 1048576);
+    info.usedJSHeapSizeMB = Math.round(mem.usedJSHeapSize / 1048576);
+  }
+
+  return info;
 };
 
 const generateKokoroCacheKey = (text: string, voice: string): string => {
@@ -239,57 +265,132 @@ const setCachedAudio = async (text: string, voice: string, audioBlob: Blob): Pro
   }
 };
 
-const playAudioBlob = async (audioBlob: Blob, loop: boolean = false): Promise<void> => {
+let audioContext: AudioContext | null = null;
+let currentSourceNode: AudioBufferSourceNode | null = null;
+
+const getAudioContext = (): AudioContext => {
+  if (!audioContext || audioContext.state === 'closed') {
+    audioContext = new AudioContext({ sampleRate: 24000 });
+  }
+  if (audioContext.state === 'suspended') {
+    audioContext.resume();
+  }
+  return audioContext;
+};
+
+const stopCurrentSource = () => {
+  if (currentSourceNode) {
+    try {
+      currentSourceNode.stop();
+      currentSourceNode.disconnect();
+    } catch {
+      // already stopped
+    }
+    currentSourceNode = null;
+  }
+};
+
+const encodeWav16Bit = (samples: Float32Array, sampleRate: number): Blob => {
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const bytesPerSample = bitsPerSample / 8;
+  const blockAlign = numChannels * bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = samples.length * bytesPerSample;
+  const headerSize = 44;
+  const totalSize = headerSize + dataSize;
+
+  const buffer = new ArrayBuffer(totalSize);
+  const view = new DataView(buffer);
+
+  const writeStr = (off: number, str: string) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i));
+  };
+
+  writeStr(0, 'RIFF');
+  view.setUint32(4, totalSize - 8, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeStr(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++, offset += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+};
+
+const playRawAudio = async (samples: Float32Array, sampleRate: number, loop: boolean = false): Promise<void> => {
   return new Promise((resolve, reject) => {
     try {
-      if (currentAudioElement) {
-        currentAudioElement.pause();
-        currentAudioElement.src = '';
-        currentAudioElement = null;
+      const gen = ++audioGeneration;
+      const isCurrentGen = () => gen === audioGeneration;
+
+      stopCurrentSource();
+
+      const ctx = getAudioContext();
+      const buffer = ctx.createBuffer(1, samples.length, sampleRate);
+      buffer.getChannelData(0).set(samples);
+
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.loop = loop;
+      source.connect(ctx.destination);
+      currentSourceNode = source;
+
+      source.onended = () => {
+        if (!isCurrentGen()) return;
+        if (currentSourceNode === source) currentSourceNode = null;
+        resolve();
+      };
+
+      source.start();
+
+      if (loop) {
+        resolve();
       }
-
-      const url = URL.createObjectURL(audioBlob);
-      const audio = new Audio(url);
-      audio.loop = loop;
-      currentAudioElement = audio;
-
-      const cleanup = () => {
-        URL.revokeObjectURL(url);
-        if (currentAudioElement === audio) currentAudioElement = null;
-      };
-
-      audio.oncanplaythrough = () => {
-        audio.play().then(() => {
-          if (loop) resolve();
-        }).catch((err) => {
-          cleanup();
-          reject(new Error(err.name === 'NotAllowedError' ? '请先点击页面后重试' : '播放被阻止'));
-        });
-      };
-
-      if (!loop) {
-        audio.onended = () => {
-          cleanup();
-          resolve();
-        };
-      }
-
-      audio.onpause = () => {
-        if (loop && currentAudioElement !== audio) {
-          cleanup();
-          resolve();
-        }
-      };
-
-      audio.onerror = () => {
-        cleanup();
-        reject(new Error('音频解码失败'));
-      };
-
-      audio.load();
     } catch (err) {
       reject(err instanceof Error ? err : new Error(String(err)));
     }
+  });
+};
+
+const playCachedBlob = async (audioBlob: Blob, loop: boolean = false): Promise<void> => {
+  const gen = ++audioGeneration;
+  const isCurrentGen = () => gen === audioGeneration;
+
+  stopCurrentSource();
+
+  const ctx = getAudioContext();
+  const arrayBuffer = await audioBlob.arrayBuffer();
+  const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+
+  if (!isCurrentGen()) return;
+
+  const source = ctx.createBufferSource();
+  source.buffer = audioBuffer;
+  source.loop = loop;
+  source.connect(ctx.destination);
+  currentSourceNode = source;
+
+  return new Promise((resolve) => {
+    source.onended = () => {
+      if (!isCurrentGen()) return;
+      if (currentSourceNode === source) currentSourceNode = null;
+      resolve();
+    };
+    source.start();
+    if (loop) resolve();
   });
 };
 
@@ -315,14 +416,49 @@ export const kokoroTtsService = {
     loadError = null;
     loadProgress = 0;
 
-    patchVoiceLoading(MIRROR_HOSTS[0]);
-
-    const onSafari = isSafari() || isIOS();
+    const onIOS = isIOS();
+    const onSafari = isSafari() || onIOS;
     const hasWebGPU = !onSafari && typeof navigator !== 'undefined' && 'gpu' in navigator;
+
+    if (onIOS) {
+      const diag = collectIOSDiagnostics();
+      console.log('🔊 [Kokoro] iOS 环境诊断:', JSON.stringify(diag, null, 2));
+
+      if (!diag.crossOriginIsolated) {
+        const msg = 'iOS Safari 当前环境不支持 SharedArrayBuffer（缺少 COOP/COEP 响应头）。' +
+          'Kokoro 模型的多线程 WASM 依赖此特性。' +
+          '建议：1) 使用浏览器原生语音引擎；2) 将站点部署到支持 COOP/COEP 头的服务器。';
+        console.error('🔊 [Kokoro] ' + msg);
+        console.error('🔊 [Kokoro] 诊断详情:', JSON.stringify(diag));
+        loadError = msg;
+        isLoading = false;
+        return { loaded: false, error: msg };
+      }
+
+      if (diag.jsHeapSizeLimitMB !== undefined && (diag.jsHeapSizeLimitMB as number) < 512) {
+        console.warn('🔊 [Kokoro] iOS JS 堆内存限制较低 (' + diag.jsHeapSizeLimitMB + 'MB)，模型加载可能失败');
+      }
+    }
+
+    const checkLocalAvailable = async (): Promise<boolean> => {
+      try {
+        const configUrl = `${LOCAL_MODEL_PATH}onnx-community/Kokoro-82M-v1.0-ONNX/config.json`;
+        const resp = await fetch(configUrl, { method: 'HEAD' });
+        return resp.ok;
+      } catch {
+        return false;
+      }
+    };
 
     const tryLoadLocal = async (): Promise<{ loaded: boolean; error?: string }> => {
       console.log(`🔊 [Kokoro] 尝试从本地路径加载模型: ${LOCAL_MODEL_PATH}`);
       loadProgress = 5;
+
+      const prevAllowRemote = env.allowRemoteModels;
+      env.allowLocalModels = true;
+      env.allowRemoteModels = false;
+      env.localModelPath = LOCAL_MODEL_PATH;
+
       try {
         const configUrl = `${LOCAL_MODEL_PATH}onnx-community/Kokoro-82M-v1.0-ONNX/config.json`;
         const configResp = await fetch(configUrl);
@@ -346,10 +482,35 @@ export const kokoroTtsService = {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(`🔊 [Kokoro] 本地模型加载失败: ${msg}`);
+        if (onIOS) {
+          const diag = collectIOSDiagnostics();
+          console.error('🔊 [Kokoro] iOS 加载失败诊断:', JSON.stringify(diag));
+          if (msg.includes('Out of memory') || msg.includes('memory')) {
+            console.error('🔊 [Kokoro] iOS 内存不足，建议关闭其他标签页后重试');
+          }
+          if (msg.includes('SharedArrayBuffer')) {
+            console.error('🔊 [Kokoro] iOS SharedArrayBuffer 不可用，当前环境不支持多线程 WASM');
+          }
+        }
         ttsInstance = null;
+        env.allowRemoteModels = prevAllowRemote;
         return { loaded: false, error: msg };
       }
     };
+
+    const localAvailable = await checkLocalAvailable();
+
+    if (localAvailable) {
+      console.log('🔊 [Kokoro] 检测到本地模型文件，优先使用本地加载');
+      patchVoiceLoading('');
+      const result = await tryLoadLocal();
+      if (result.loaded) return result;
+      console.warn('🔊 [Kokoro] 本地加载失败，回退到远程加载');
+      isLoading = true;
+      loadError = null;
+    }
+
+    patchVoiceLoading(MIRROR_HOSTS[0]);
 
     const tryLoadWithHost = async (host: string, dtype: string, device: string): Promise<{ loaded: boolean; error?: string }> => {
       updateActiveHost(host);
@@ -373,6 +534,9 @@ export const kokoroTtsService = {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(`🔊 [Kokoro] 加载失败 (${host} | ${device} | ${dtype}): ${msg}`);
+        if (onIOS) {
+          console.error('🔊 [Kokoro] iOS 远程加载失败诊断:', JSON.stringify(collectIOSDiagnostics()));
+        }
         ttsInstance = null;
         return { loaded: false, error: msg };
       }
@@ -467,6 +631,10 @@ export const kokoroTtsService = {
     return loadError;
   },
 
+  getIOSDiagnostics(): Record<string, unknown> {
+    return collectIOSDiagnostics();
+  },
+
   async speak(text: string, voice: string = 'af_heart', loop: boolean = false): Promise<KokoroSpeakResult> {
     if (!text || !text.trim()) {
       return { success: false, error: '发音文本为空' };
@@ -488,24 +656,24 @@ export const kokoroTtsService = {
       const cachedBlob = await getCachedAudio(trimmedText, voice);
       if (cachedBlob) {
         console.log(`🔊 [Kokoro] 缓存命中 | [语音] ${voice}`);
-        await playAudioBlob(cachedBlob, loop);
+        await playCachedBlob(cachedBlob, loop);
         return { success: true };
       }
 
       console.log(`🔊 [Kokoro] 生成音频 | [语音] ${voice} | [文本] ${trimmedText.slice(0, 40)}...`);
       const audio = await ttsInstance!.generate(trimmedText, { voice: voice as any });
 
-      const audioBlob = new Blob([audio.audio as any], { type: 'audio/wav' });
-
-      if (audioBlob.size === 0) {
+      if (!audio.audio || audio.audio.length === 0) {
         return { success: false, error: '未生成音频数据' };
       }
+
+      const audioBlob = encodeWav16Bit(audio.audio, audio.sampling_rate);
 
       setCachedAudio(trimmedText, voice, audioBlob).then(() => {
         console.log(`🔊 [Kokoro] 音频已缓存 | [大小] ${elevenLabsCacheService.formatSize(audioBlob.size)}`);
       });
 
-      await playAudioBlob(audioBlob, loop);
+      await playRawAudio(audio.audio, audio.sampling_rate, loop);
       return { success: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -515,11 +683,8 @@ export const kokoroTtsService = {
   },
 
   stop(): void {
-    if (currentAudioElement) {
-      currentAudioElement.pause();
-      currentAudioElement.src = '';
-      currentAudioElement = null;
-    }
+    audioGeneration++;
+    stopCurrentSource();
   },
 
   getVoices(): KokoroVoice[] {

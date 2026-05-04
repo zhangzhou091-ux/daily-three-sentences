@@ -52,6 +52,7 @@ let taskQueue: Array<{
 }> = [];
 let isProcessing = false;
 let currentAudioElement: HTMLAudioElement | null = null;
+let audioGeneration = 0;
 
 export const POPULAR_VOICES: EdgeVoice[] = [
   { name: 'Microsoft Ava Online (Natural) - English (United States)', shortName: 'en-US-AvaMultilingualNeural', gender: 'Female', locale: 'en-US', friendlyName: 'Ava (美式女声)' },
@@ -104,9 +105,12 @@ const findAudioDataOffset = (data: Uint8Array): number => {
 const playAudioBlob = async (audioData: Uint8Array, loop: boolean = false): Promise<void> => {
   return new Promise((resolve, reject) => {
     try {
+      const gen = ++audioGeneration;
+
       if (currentAudioElement) {
         currentAudioElement.pause();
         currentAudioElement.src = '';
+        currentAudioElement.load();
         currentAudioElement = null;
       }
 
@@ -117,12 +121,15 @@ const playAudioBlob = async (audioData: Uint8Array, loop: boolean = false): Prom
       audio.loop = loop;
       currentAudioElement = audio;
 
+      const isCurrentGen = () => gen === audioGeneration;
+
       const cleanup = () => {
         URL.revokeObjectURL(url);
         if (currentAudioElement === audio) currentAudioElement = null;
       };
       
       audio.oncanplaythrough = () => {
+        if (!isCurrentGen()) { cleanup(); resolve(); return; }
         audio.play().then(() => {
           if (loop) {
             resolve();
@@ -135,6 +142,7 @@ const playAudioBlob = async (audioData: Uint8Array, loop: boolean = false): Prom
 
       if (!loop) {
         audio.onended = () => {
+          if (!isCurrentGen()) return;
           cleanup();
           resolve();
         };
@@ -439,11 +447,13 @@ export const edgeTtsService = {
   },
 
   stop(): void {
+    audioGeneration++;
     taskQueue = [];
     isProcessing = false;
     if (currentAudioElement) {
       currentAudioElement.pause();
       currentAudioElement.src = '';
+      currentAudioElement.load();
       currentAudioElement = null;
     }
   }

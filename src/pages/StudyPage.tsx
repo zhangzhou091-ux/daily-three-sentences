@@ -166,10 +166,14 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     };
   }, []);
 
+  const prevTabRef = useRef(activeTab);
   useEffect(() => {
-    geminiService.stop();
-    setSpeakingText(null);
-  }, [currentIndex, currentReviewIndex]);
+    if (prevTabRef.current !== activeTab) {
+      prevTabRef.current = activeTab;
+      geminiService.stop();
+      setSpeakingText(null);
+    }
+  }, [activeTab]);
 
   const syncOfflineOperations = async () => {
     if (isSyncingRef.current) return;

@@ -226,7 +226,7 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
   return new Promise((resolve) => {
     let promiseResolved = false;
     let retryCount = 0;
-    const MAX_LOOP_RETRIES = 3;
+    const MAX_LOOP_RETRIES = 5;
     loopActiveFlag = loop;
     
     const isCurrentGen = () => gen === speakGeneration;
@@ -294,12 +294,13 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
       
       if (loopActiveFlag && (event.error === 'interrupted' || event.error === 'canceled') && retryCount < MAX_LOOP_RETRIES) {
         retryCount++;
-        console.warn(`iOS 循环播放中断，第 ${retryCount} 次重试...`);
+        const backoffDelay = Math.min(200 * Math.pow(2, retryCount - 1), 3000);
+        console.warn(`iOS 循环播放中断 (${event.error})，第 ${retryCount}/${MAX_LOOP_RETRIES} 次重试，延迟 ${backoffDelay}ms...`);
         setTimeout(() => {
           if (isCurrentGen() && loopActiveFlag && !promiseResolved) {
             startSpeak();
           }
-        }, 200);
+        }, backoffDelay);
         return;
       }
       
@@ -436,6 +437,9 @@ export const geminiService = {
     elevenLabsService.stop();
     import('./kokoroTtsService').then(({ kokoroTtsService }) => kokoroTtsService.stop()).catch(() => {});
     window.speechSynthesis.cancel();
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+    }
     currentUtterance = null;
     taskQueue = [];
     isProcessing = false;

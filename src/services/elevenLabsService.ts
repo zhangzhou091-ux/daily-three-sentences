@@ -38,6 +38,7 @@ const API_KEY_PATTERN = /^sk_[a-f0-9]{40,}$/i;
 let currentAudioElement: HTMLAudioElement | null = null;
 let voicesCache: { voices: ElevenLabsVoice[]; timestamp: number } | null = null;
 let validationCache: { key: string; valid: boolean; timestamp: number } | null = null;
+let audioGeneration = 0;
 
 const POPULAR_VOICES: ElevenLabsVoice[] = [
   { voice_id: 'JBFqnCBsd6RMkjVDRZzb', name: 'George', labels: { accent: 'american', gender: 'male' } },
@@ -55,9 +56,12 @@ const POPULAR_VOICES: ElevenLabsVoice[] = [
 const playAudioBlob = async (audioBlob: Blob, loop: boolean = false): Promise<void> => {
   return new Promise((resolve, reject) => {
     try {
+      const gen = ++audioGeneration;
+
       if (currentAudioElement) {
         currentAudioElement.pause();
         currentAudioElement.src = '';
+        currentAudioElement.load();
         currentAudioElement = null;
       }
 
@@ -66,12 +70,15 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false): Promise<vo
       audio.loop = loop;
       currentAudioElement = audio;
 
+      const isCurrentGen = () => gen === audioGeneration;
+
       const cleanup = () => {
         URL.revokeObjectURL(url);
         if (currentAudioElement === audio) currentAudioElement = null;
       };
 
       audio.oncanplaythrough = () => {
+        if (!isCurrentGen()) { cleanup(); resolve(); return; }
         audio.play().then(() => {
           if (loop) resolve();
         }).catch((err) => {
@@ -82,6 +89,7 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false): Promise<vo
 
       if (!loop) {
         audio.onended = () => {
+          if (!isCurrentGen()) return;
           cleanup();
           resolve();
         };
@@ -365,9 +373,11 @@ export const elevenLabsService = {
   },
 
   stop(): void {
+    audioGeneration++;
     if (currentAudioElement) {
       currentAudioElement.pause();
       currentAudioElement.src = '';
+      currentAudioElement.load();
       currentAudioElement = null;
     }
   },
