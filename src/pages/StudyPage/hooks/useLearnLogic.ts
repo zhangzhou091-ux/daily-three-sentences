@@ -76,7 +76,14 @@ export const useLearnLogic = ({
           stats.totalPoints += LEARN_XP;
           stats.mobileLearnCount = (stats.mobileLearnCount || 0) + 1;
           if (stats.lastLearnDate !== today) {
-            stats.streak += 1;
+            const yesterdayDate = new Date();
+            yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+            const yesterday = getLocalDateString(yesterdayDate);
+            if (stats.lastLearnDate === yesterday) {
+              stats.streak += 1;
+            } else {
+              stats.streak = 1;
+            }
             stats.lastLearnDate = today;
           }
           return stats;

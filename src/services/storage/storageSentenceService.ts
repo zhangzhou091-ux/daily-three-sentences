@@ -157,6 +157,5 @@ export const storageSentenceService = {
     await dbService.clear();
     localStorage.clear();
     supabaseService.clearConfig();
-    window.location.reload();
   }
 };

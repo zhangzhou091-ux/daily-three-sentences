@@ -71,8 +71,7 @@ const safePercent = (value: number): number => {
 };
 
 const AchievementPage: React.FC<{ sentences: Sentence[] }> = ({ sentences }) => {
-  const { setView } = useAppContext();
-  const stats = storageService.getStats();
+  const { setView, stats } = useAppContext();
   const { memory, forecast, level, achievements, timeStats } = useAnalytics(sentences, stats);
   const events = useMemo(() => loadEvents(), []);
   const [activeTab, setActiveTab] = useState<TabType>('stats');

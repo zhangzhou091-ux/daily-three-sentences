@@ -34,6 +34,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   const isMountedRef = useRef(true);
   const isMarkLearnedSubmittingRef = useRef(false);
   const animationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasTriggeredRegenRef = useRef(false);
   
   const [progressAdjusted, setProgressAdjusted] = useState(false);
   const [currentDateStr, setCurrentDateStr] = useState(() => getLocalDateString());
@@ -289,14 +290,20 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     }
   }, [dailySelection.length]);
 
+  const sentenceMap = useMemo(() => {
+    const map = new Map<string, Sentence>();
+    sentences.forEach(s => map.set(s.id, s));
+    return map;
+  }, [sentences]);
+
   const targetSentence = useMemo(() => 
-    sentences.find(s => s.id === targetDictationId) || null,
-    [sentences, targetDictationId]
+    targetDictationId ? sentenceMap.get(targetDictationId) || null : null,
+    [sentenceMap, targetDictationId]
   );
   
   const currentSentence = dailySelection[currentIndex] || null;
   const currentSentenceLatest = currentSentence 
-    ? sentences.find(s => s.id === currentSentence.id) || currentSentence 
+    ? sentenceMap.get(currentSentence.id) || currentSentence 
     : null;
   const isCurrentlyLearned = useMemo(() => {
     if (!currentSentence) return false;
@@ -308,17 +315,25 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     const todayIds = dailySelection.map(s => s.id);
     if (todayIds.length === 0) return false;
     return todayIds.every(id => {
-      const sentence = sentences.find(s => s.id === id);
+      const sentence = sentenceMap.get(id);
       return sentence ? sentence.intervalIndex > 0 : false;
     });
-  }, [dailySelection, sentences]);
+  }, [dailySelection, sentenceMap]);
   
   useEffect(() => {
-    if (allLearned && sentences.some(s => s.intervalIndex === 0)) {
-      console.log('🔄 dailySelection 中句子已全部学习，但仍有未学习句子，触发重新生成');
-      generateDailySelection();
+    if (!allLearned) {
+      hasTriggeredRegenRef.current = false;
+      return;
     }
-  }, [allLearned, sentences, generateDailySelection]);
+    if (activeTab !== 'learn') return;
+    if (isGeneratingRef.current) return;
+    if (hasTriggeredRegenRef.current) return;
+    if (!sentences.some(s => s.intervalIndex === 0)) return;
+
+    hasTriggeredRegenRef.current = true;
+    console.log('🔄 dailySelection 中句子已全部学习，但仍有未学习句子，触发重新生成');
+    generateDailySelection();
+  }, [allLearned, sentences, generateDailySelection, activeTab]);
   
   const currentReviewSentence = useMemo(() => {
     if (reviewQueue.length === 0 || currentReviewIndex < 0) return null;
@@ -338,7 +353,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     return lastReviewed === today;
   }, [currentReviewSentence, reviewedIds]);
 
-  const isReviewButtonDisabled = useCallback((sentenceId: string) => {
+  const shouldDisableReviewButton = useCallback((sentenceId: string) => {
     if (!sentenceId || isProcessingReview) return true;
     return false;
   }, [isProcessingReview]);
@@ -411,9 +426,13 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
       <div className="min-h-[460px]">
         {activeTab === 'learn' && (
           dailySelection.length > 0 ? (
+            (() => {
+              const sentence = currentSentenceLatest || currentSentence;
+              if (!sentence) return null;
+              return (
             <div className="space-y-8">
               <LearnCard
-                sentence={currentSentenceLatest || currentSentence!}
+                sentence={sentence}
                 onFlip={() => setIsFlipped(!isFlipped)}
                 isFlipped={isFlipped}
                 onMarkLearned={handleMarkLearned}
@@ -421,19 +440,21 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 isCurrentlyLearned={isCurrentlyLearned}
                 isAnimating={isAnimating}
                 isSavingLearned={isSavingLearned}
-                isSpeaking={speakingText === (currentSentenceLatest || currentSentence)?.english}
+                isSpeaking={speakingText === sentence.english}
                 speechRate={settings.speechRate ?? 1}
                 onSpeechRateChange={(rate) => {
-                  const updated = { ...settings, speechRate: rate, updatedAt: Date.now() };
+                  const clampedRate = Math.max(0.1, Math.min(10, rate));
+                  const updated = { ...settings, speechRate: clampedRate, updatedAt: Date.now() };
                   storageService.saveSettings(updated);
                   setSettings(updated);
+                  geminiService.setPlaybackRate(clampedRate);
                 }}
               />
               <div className="flex flex-col gap-4">
                 {!isCurrentlyLearned && !isAnimating ? (
                   <>
                     <button
-                      onClick={() => currentSentence && handleMarkLearned(currentSentence.id)}
+                      onClick={() => handleMarkLearned(sentence.id)}
                       className="w-full bg-black text-white py-5 rounded-[2rem] font-black text-xl shadow-2xl shadow-black/10 hover:bg-gray-800 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
                     >
                       <span>标记掌握</span>
@@ -494,6 +515,8 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 </div>
               </div>
             </div>
+              );
+            })()
           ) : (
             <div className="apple-card p-16 text-center space-y-6">
               <div className="text-7xl">🪴</div>
@@ -516,9 +539,11 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 isSpeaking={speakingText === reviewQueue[currentReviewIndex]?.english}
                 speechRate={settings.speechRate ?? 1}
                 onSpeechRateChange={(rate) => {
-                  const updated = { ...settings, speechRate: rate, updatedAt: Date.now() };
+                  const clampedRate = Math.max(0.1, Math.min(10, rate));
+                  const updated = { ...settings, speechRate: clampedRate, updatedAt: Date.now() };
                   storageService.saveSettings(updated);
                   setSettings(updated);
+                  geminiService.setPlaybackRate(clampedRate);
                 }}
               />
               
@@ -526,9 +551,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 <div className={`grid grid-cols-4 gap-3 transition-opacity duration-300 ${isProcessingReview ? 'opacity-50 pointer-events-none grayscale' : ''}`}>
                   <button 
                     onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 1)} 
-                    disabled={isReviewButtonDisabled(currentReviewSentence?.id || '')}
+                    disabled={shouldDisableReviewButton(currentReviewSentence?.id || '')}
                     className={`bg-white py-4 rounded-[1.5rem] font-bold shadow-sm border transition-all ${
-                      isReviewButtonDisabled(currentReviewSentence?.id || '')
+                      shouldDisableReviewButton(currentReviewSentence?.id || '')
                         ? 'text-gray-400 border-gray-100 cursor-not-allowed bg-gray-50' 
                         : 'text-red-400 border-red-50 hover:bg-red-50 active:scale-95'
                     }`}
@@ -538,9 +563,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                   </button>
                   <button 
                     onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 2)} 
-                    disabled={isReviewButtonDisabled(currentReviewSentence?.id || '')}
+                    disabled={shouldDisableReviewButton(currentReviewSentence?.id || '')}
                     className={`bg-white py-4 rounded-[1.5rem] font-bold shadow-sm border transition-all ${
-                      isReviewButtonDisabled(currentReviewSentence?.id || '')
+                      shouldDisableReviewButton(currentReviewSentence?.id || '')
                         ? 'text-gray-400 border-gray-100 cursor-not-allowed bg-gray-50' 
                         : 'text-orange-400 border-orange-50 hover:bg-orange-50 active:scale-95'
                     }`}
@@ -550,9 +575,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                   </button>
                   <button 
                     onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 3)} 
-                    disabled={isReviewButtonDisabled(currentReviewSentence?.id || '')}
+                    disabled={shouldDisableReviewButton(currentReviewSentence?.id || '')}
                     className={`bg-white py-4 rounded-[1.5rem] font-bold shadow-sm border transition-all ${
-                      isReviewButtonDisabled(currentReviewSentence?.id || '')
+                      shouldDisableReviewButton(currentReviewSentence?.id || '')
                         ? 'text-gray-400 border-gray-100 cursor-not-allowed bg-gray-50' 
                         : 'text-blue-500 border-blue-50 hover:bg-blue-50 active:scale-95'
                     }`}
@@ -562,9 +587,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                   </button>
                   <button 
                     onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 4)} 
-                    disabled={isReviewButtonDisabled(currentReviewSentence?.id || '')}
+                    disabled={shouldDisableReviewButton(currentReviewSentence?.id || '')}
                     className={`py-4 rounded-[1.5rem] font-black shadow-xl transition-all ${
-                      isReviewButtonDisabled(currentReviewSentence?.id || '')
+                      shouldDisableReviewButton(currentReviewSentence?.id || '')
                         ? 'bg-gray-200 text-gray-500 shadow-none cursor-not-allowed' 
                         : 'bg-green-500 text-white shadow-green-200 active:scale-95'
                     }`}

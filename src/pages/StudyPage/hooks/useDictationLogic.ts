@@ -16,16 +16,11 @@ interface UseDictationLogicProps {
 interface UseDictationLogicReturn {
   dictationPool: Sentence[];
   targetDictationId: string | null;
-  setTargetDictationId: (id: string | null) => void;
   dictationList: DictationRecord[];
-  isFlipped: boolean;
-  setIsFlipped: (flipped: boolean) => void;
   userInput: string;
   setUserInput: (input: string) => void;
   isDictationRefreshDisabled: boolean;
   isDictationChecking: boolean;
-  isDictationCheckingRef: RefObject<boolean>;
-  dictationPoolRef: RefObject<Sentence[]>;
   handleDictationRefresh: () => void;
   handleDictationCheck: () => Promise<void>;
 }
@@ -243,16 +238,11 @@ export const useDictationLogic = ({
   return {
     dictationPool,
     targetDictationId,
-    setTargetDictationId,
     dictationList,
-    isFlipped,
-    setIsFlipped,
     userInput,
     setUserInput,
     isDictationRefreshDisabled,
     isDictationChecking,
-    isDictationCheckingRef,
-    dictationPoolRef,
     handleDictationRefresh,
     handleDictationCheck,
   };

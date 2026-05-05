@@ -1,6 +1,6 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import Navbar from './Navbar';
-import StudyPage from '../pages/StudyPage';
+const StudyPage = lazy(() => import('../pages/StudyPage'));
 const ManagePage = lazy(() => import('../pages/ManagePage'));
 const AchievementPage = lazy(() => import('../pages/AchievementPage'));
 const SettingsPage = lazy(() => import('../pages/SettingsPage'));
@@ -10,12 +10,14 @@ import { useSentenceContext } from '../context/SentenceContext';
 import { syncQueueService } from '../services/syncQueueService';
 import { SyncStatus, SyncEventData, QueueWarningData } from '../types';
 import { supabaseService } from '../services/supabaseService';
+import { useAchievementNotifications } from '../core/hooks/useAchievementNotifications';
+import { AchievementNotificationManager } from '../components/achievements/AchievementNotification';
 
 // const SYNC_MESSAGE_DURATION = 3000; // Unused
 
 const MainLayout: React.FC = () => {
   const { 
-    currentView, setView, settings, isOnline, isLoading, 
+    currentView, setView, settings, stats, isOnline, isLoading, 
     syncMessage, isSyncing, configError, updateSettings, setSyncMessage,
     refreshConfig
   } = useAppContext();
@@ -37,6 +39,8 @@ const MainLayout: React.FC = () => {
     type: 'info' 
   });
   const [dbError, setDbError] = useState<string | null>(null);
+
+  const { notifications, dismissNotification } = useAchievementNotifications(sentences, stats);
 
   useEffect(() => {
     console.log('[MainLayout] 订阅 supabaseService.onStatusChange');
@@ -422,6 +426,13 @@ const MainLayout: React.FC = () => {
         <div className="md:hidden fixed bottom-6 left-4 right-4 z-50 safe-area-bottom">
           <Navbar currentView={currentView} setView={setView} />
         </div>
+      )}
+
+      {notifications.length > 0 && (
+        <AchievementNotificationManager
+          notifications={notifications}
+          onDismiss={dismissNotification}
+        />
       )}
     </div>
   );

@@ -55,6 +55,10 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
   const lastRequestId = useRef(0);
   const previousSentencesRef = useRef<Sentence[]>([]);
   const dataVersionRef = useRef(0);
+  const isConfiguredRef = useRef(isConfigured);
+  const isOnlineRef = useRef(isOnline);
+  isConfiguredRef.current = isConfigured;
+  isOnlineRef.current = isOnline;
 
   const refreshSentences = useCallback(async () => {
     const currentRequestId = ++lastRequestId.current;
@@ -79,7 +83,7 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
       setSyncError(null);
       setIsInitialLoading(false);
 
-      if (isConfigured && isOnline) {
+      if (isConfiguredRef.current && isOnlineRef.current) {
         console.log('📚 SentenceContext: 开始云端同步...');
         const result = await syncData(localData);
         
@@ -108,7 +112,7 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
           }
         }
       } else {
-        console.log('📚 SentenceContext: 跳过云端同步', { isConfigured, isOnline });
+        console.log('📚 SentenceContext: 跳过云端同步', { isConfigured: isConfiguredRef.current, isOnline: isOnlineRef.current });
       }
     } catch (err: unknown) {
       console.error('📚 SentenceContext: 加载句子失败:', err);
@@ -123,7 +127,7 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
         }
       }
     }
-  }, [isConfigured, isOnline, syncData]);
+  }, [syncData]);
 
   useEffect(() => {
     if (previousSentencesRef.current.length > 0) {
@@ -132,7 +136,7 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
       setIsInitialLoading(false);
     }
     refreshSentences();
-  }, [refreshSentences]);
+  }, [isConfigured, isOnline, refreshSentences]);
 
   return (
     <SentenceContext.Provider value={{ sentences, refreshSentences, isSyncing, syncMessage, isInitialLoading, syncError }}>

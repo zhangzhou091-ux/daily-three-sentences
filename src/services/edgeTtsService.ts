@@ -34,6 +34,12 @@ const DEFAULT_VOICE = 'en-US-AvaMultilingualNeural';
 const DEFAULT_RATE = '+0%';
 const DEFAULT_PITCH = '+0Hz';
 
+const speechRateToSSML = (rate: number): string => {
+  const clampedRate = Math.max(0.1, Math.min(10, rate));
+  const percentage = Math.round((clampedRate - 1) * 100);
+  return percentage >= 0 ? `+${percentage}%` : `${percentage}%`;
+};
+
 const CONNECT_TIMEOUT = 3000;
 const AUDIO_TIMEOUT = 20000;
 const TURN_START_TIMEOUT = 3000;
@@ -422,6 +428,8 @@ const processQueue = async () => {
 };
 
 export const edgeTtsService = {
+  speechRateToSSML,
+
   async speak(text: string, voice: string = DEFAULT_VOICE, rate: string = DEFAULT_RATE, loop: boolean = false): Promise<SpeakResult> {
     if (!text || typeof text !== 'string' || !text.trim()) {
       return { success: false, error: '发音文本为空' };

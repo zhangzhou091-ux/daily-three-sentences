@@ -12,7 +12,6 @@ import {
   AchievementTier,
   AchievementCategory,
   AchievementReward,
-  AchievementNotification,
   AchievementRecommendation,
   TIER_CONFIG,
   getUnlockedCount,
@@ -24,6 +23,8 @@ import {
   computeOverallProgress,
   getNextMilestone,
   getTotalRewards,
+  detectNewAchievements,
+  persistAchievementUnlock,
 } from './achievements';
 import { computeTimePeriodStats, TimePeriodStats } from './timeStats';
 
@@ -91,6 +92,8 @@ export {
   computeOverallProgress,
   getNextMilestone,
   getTotalRewards,
+  detectNewAchievements,
+  persistAchievementUnlock,
 };
 
 export type { 
@@ -103,7 +106,6 @@ export type {
   AchievementTier,
   AchievementCategory,
   AchievementReward,
-  AchievementNotification,
   AchievementRecommendation,
   TimePeriodStats,
 };

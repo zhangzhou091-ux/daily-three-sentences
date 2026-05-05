@@ -84,6 +84,10 @@ export const useReviewLogic = ({
   currentReviewIdRef.current = currentReviewId;
 
   const reviewQueue = useMemo(() => {
+    if (activeTab !== 'review') {
+      return [];
+    }
+
     const todayStr = currentDateStr;
     const reviewTarget = settings.dailyReviewTarget;
     const activeReviewId = currentReviewIdRef.current;

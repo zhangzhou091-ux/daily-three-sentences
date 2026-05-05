@@ -1,6 +1,7 @@
 import React, { useRef, useCallback } from 'react';
 import { Achievement, TIER_CONFIG, ACHIEVEMENT_CATEGORIES } from '../../core/analytics/achievements';
 import { LevelInfo } from '../../core/analytics/level';
+import { localStorageService } from '../../services/storage/localStorageService';
 
 interface AchievementShareCardProps {
   achievement: Achievement;
@@ -23,6 +24,10 @@ export const AchievementShareCard: React.FC<AchievementShareCardProps> = ({
       text: `${achievement.desc}\n\n连续学习 ${streak} 天 | 等级 ${level.level}\n\n来自 Daily Three Sentences`,
       url: window.location.origin,
     };
+
+    const stats = localStorageService.getStats();
+    stats.shareCount = (stats.shareCount || 0) + 1;
+    localStorageService.saveStats(stats);
 
     if (navigator.share) {
       try {

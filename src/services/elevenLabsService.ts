@@ -53,7 +53,7 @@ const POPULAR_VOICES: ElevenLabsVoice[] = [
   { voice_id: 'XB0fDUnXU5powFXDhCwa', name: 'Charlotte', labels: { accent: 'british', gender: 'female' } },
 ];
 
-const playAudioBlob = async (audioBlob: Blob, loop: boolean = false): Promise<void> => {
+const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: number = 1): Promise<void> => {
   return new Promise((resolve, reject) => {
     try {
       const gen = ++audioGeneration;
@@ -68,6 +68,7 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false): Promise<vo
       const url = URL.createObjectURL(audioBlob);
       const audio = new Audio(url);
       audio.loop = loop;
+      audio.playbackRate = rate;
       currentAudioElement = audio;
 
       const isCurrentGen = () => gen === audioGeneration;
@@ -120,7 +121,8 @@ export const elevenLabsService = {
     apiKey: string,
     voiceId: string,
     loop: boolean = false,
-    modelId: string = DEFAULT_MODEL
+    modelId: string = DEFAULT_MODEL,
+    rate: number = 1
   ): Promise<SpeakResult> {
     if (!text || typeof text !== 'string' || !text.trim()) {
       return { success: false, error: '发音文本为空' };
@@ -143,7 +145,7 @@ export const elevenLabsService = {
       const cachedBlob = await elevenLabsCacheService.get(trimmedText, voiceId, modelId);
       if (cachedBlob) {
         console.log(`🔊 [ElevenLabs] 缓存命中，跳过API调用 | [语音] ${voiceId}`);
-        await playAudioBlob(cachedBlob, loop);
+        await playAudioBlob(cachedBlob, loop, rate);
         return { success: true, fromCache: true };
       }
 
@@ -379,6 +381,12 @@ export const elevenLabsService = {
       currentAudioElement.src = '';
       currentAudioElement.load();
       currentAudioElement = null;
+    }
+  },
+
+  setPlaybackRate(rate: number): void {
+    if (currentAudioElement) {
+      currentAudioElement.playbackRate = rate;
     }
   },
 

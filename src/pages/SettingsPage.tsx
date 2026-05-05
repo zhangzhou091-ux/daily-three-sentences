@@ -42,6 +42,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
   const isResettingRef = useRef(false);
   const prevUserNameRef = useRef<string>(settings.userName);
   const clearConfirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearDataAbortRef = useRef<AbortController | null>(null);
   const isMountedRef = useRef(true);
 
   const isSyncing = syncQueueStatus.isSyncing;
@@ -96,7 +97,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
     } catch {
       setTestVoiceName('播放失败');
     }
-  }, [settings.ttsEngine, settings.elevenLabsApiKey, settings.elevenLabsVoiceId]);
+  }, [settings.ttsEngine, settings.elevenLabsApiKey, settings.elevenLabsVoiceId, settings.kokoroVoice, settings.webSpeechVoice, settings.speechRate]);
 
   const handleValidateElevenLabsKey = useCallback(async (apiKey: string) => {
     if (!apiKey || !apiKey.trim()) {
@@ -172,13 +173,37 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
     setKokoroUseLocal(enabled);
     setUseLocalModels(enabled);
     setKokoroModelStatus('idle');
+    setSettings(prev => {
+      const updated = { ...prev, kokoroUseLocal: enabled, updatedAt: Date.now() };
+      storageService.saveSettings(updated);
+      return updated;
+    });
     setMessage({ text: enabled ? '已切换为本地模型模式' : '已切换为在线下载模式', type: 'info' });
   }, []);
 
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
+      if (clearDataAbortRef.current) {
+        clearDataAbortRef.current.abort();
+        clearDataAbortRef.current = null;
+      }
     };
+  }, []);
+
+  useEffect(() => {
+    setKokoroUseLocal(settings.kokoroUseLocal ?? getUseLocalModels());
+  }, [settings.kokoroUseLocal]);
+
+  useEffect(() => {
+    const handleSettingsChange = (e: Event) => {
+      const detail = (e as CustomEvent<UserSettings>).detail;
+      if (detail && isMountedRef.current) {
+        setSettings(detail);
+      }
+    };
+    window.addEventListener('settingsChanged', handleSettingsChange);
+    return () => window.removeEventListener('settingsChanged', handleSettingsChange);
   }, []);
 
   useEffect(() => {
@@ -198,7 +223,11 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
 
   const handleUpdate = useCallback(<K extends keyof UserSettings>(key: K, value: UserSettings[K]) => {
     setSettings(prev => {
-      const updated = { ...prev, [key]: value };
+      let clampedValue = value;
+      if (key === 'speechRate' && typeof value === 'number') {
+        clampedValue = Math.max(0.1, Math.min(10, value)) as UserSettings[K];
+      }
+      const updated = { ...prev, [key]: clampedValue };
       storageService.saveSettings(updated);
       return updated;
     });
@@ -273,7 +302,8 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
       const MAX_WAIT_MS = 10000;
       const CHECK_INTERVAL_MS = 100;
       const startTime = Date.now();
-      const waitAbortController = new AbortController();
+      clearDataAbortRef.current = new AbortController();
+      const waitAbortController = clearDataAbortRef.current;
       
       const waitForSyncComplete = async (): Promise<'completed' | 'timeout' | 'aborted'> => {
         while (Date.now() - startTime < MAX_WAIT_MS) {
@@ -359,6 +389,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
       } finally {
         setLoading(false);
         isResettingRef.current = false;
+        clearDataAbortRef.current = null;
       }
     } else {
       setShowClearConfirm(true);

@@ -10,6 +10,7 @@ export interface MemoryAnalysis {
   avgStability: number;
   avgDifficulty: number;
   retention: number;
+  totalReps: number;
   distribution: {
     name: string;
     key: string;
@@ -41,6 +42,7 @@ export const computeMemoryAnalysis = (sentences: Sentence[]): MemoryAnalysis => 
       avgStability: 0,
       avgDifficulty: 0,
       retention: 0,
+      totalReps: 0,
       distribution: MEMORY_LEVELS.map(level => ({
         ...level,
         count: 0,
@@ -101,6 +103,7 @@ export const computeMemoryAnalysis = (sentences: Sentence[]): MemoryAnalysis => 
     avgStability: learned > 0 ? Math.round((totalStability / learned) * 10) / 10 : 0,
     avgDifficulty: learned > 0 ? Math.round((totalDifficulty / learned) * 10) / 10 : 0,
     retention,
+    totalReps,
     distribution,
   };
 };

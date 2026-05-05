@@ -47,13 +47,6 @@ export interface AchievementRule {
   prevTierId?: string;
 }
 
-export interface AchievementNotification {
-  id: string;
-  achievement: Achievement;
-  timestamp: number;
-  seen: boolean;
-}
-
 export interface AchievementRecommendation {
   achievement: Achievement;
   priority: 'high' | 'medium' | 'low';
@@ -334,8 +327,12 @@ export const ACHIEVEMENT_RULES: AchievementRule[] = [
     title: '记忆精准',
     icon: '🎯',
     target: 90,
-    desc: '记忆保留率达到 90%',
-    getValue: ctx => ctx.memory.retention,
+    desc: '记忆保留率达到 90%（需至少复习 10 次）',
+    getValue: ctx => {
+      const totalReps = ctx.memory.totalReps || 0;
+      if (totalReps < 10) return 0;
+      return ctx.memory.retention;
+    },
     rewards: [createReward('points', 100, '获得 100 积分')],
     nextTierId: 'fsrs-retention-95',
   },
@@ -346,8 +343,12 @@ export const ACHIEVEMENT_RULES: AchievementRule[] = [
     title: '记忆完美',
     icon: '💯',
     target: 95,
-    desc: '记忆保留率达到 95%',
-    getValue: ctx => ctx.memory.retention,
+    desc: '记忆保留率达到 95%（需至少复习 30 次）',
+    getValue: ctx => {
+      const totalReps = ctx.memory.totalReps || 0;
+      if (totalReps < 30) return 0;
+      return ctx.memory.retention;
+    },
     rewards: [createReward('points', 300, '获得 300 积分'), createReward('badge', 'perfect_memory', '完美记忆徽章')],
     prevTierId: 'fsrs-retention-90',
   },
@@ -379,12 +380,45 @@ export const ACHIEVEMENT_RULES: AchievementRule[] = [
   },
 ];
 
+const ACHIEVEMENTS_STORAGE_KEY = 'd3s_achievements_unlocked';
+
+interface UnlockedRecord {
+  unlockedAt: number;
+}
+
+const loadUnlockedMap = (): Record<string, UnlockedRecord> => {
+  try {
+    const raw = localStorage.getItem(ACHIEVEMENTS_STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return {};
+};
+
+const saveUnlockedMap = (map: Record<string, UnlockedRecord>): void => {
+  try {
+    localStorage.setItem(ACHIEVEMENTS_STORAGE_KEY, JSON.stringify(map));
+  } catch {}
+};
+
+export const persistAchievementUnlock = (achievementId: string): void => {
+  const map = loadUnlockedMap();
+  if (!map[achievementId]) {
+    map[achievementId] = { unlockedAt: Date.now() };
+    saveUnlockedMap(map);
+  }
+};
+
 export const computeAchievements = (ctx: AchievementContext): Achievement[] => {
+  const unlockedMap = loadUnlockedMap();
+
   return ACHIEVEMENT_RULES.map(rule => {
     const current = rule.getValue(ctx);
+    const target = rule.target > 0 ? rule.target : 1;
     const unlocked = current >= rule.target;
-    const progress = Math.min((current / rule.target) * 100, 100);
-    
+    const progress = Math.min((current / target) * 100, 100);
+
+    const persisted = unlockedMap[rule.id];
+
     return {
       id: rule.id,
       category: rule.category,
@@ -396,6 +430,7 @@ export const computeAchievements = (ctx: AchievementContext): Achievement[] => {
       desc: rule.desc,
       unlocked,
       progress: Math.round(progress),
+      unlockedAt: persisted?.unlockedAt,
       rewards: rule.rewards,
       nextTierId: rule.nextTierId,
       prevTierId: rule.prevTierId,
@@ -403,8 +438,18 @@ export const computeAchievements = (ctx: AchievementContext): Achievement[] => {
   });
 };
 
+export const detectNewAchievements = (
+  prev: Achievement[],
+  next: Achievement[]
+): Achievement[] => {
+  const prevUnlocked = new Set(prev.filter(a => a.unlocked).map(a => a.id));
+  return next.filter(a => a.unlocked && !prevUnlocked.has(a.id));
+};
+
 let achievementsCache: Achievement[] | null = null;
 let cacheKey: string | null = null;
+let cacheTimestamp: number = 0;
+const CACHE_TTL = 60_000;
 
 const getCacheKey = (ctx: AchievementContext): string => {
   return JSON.stringify({
@@ -420,11 +465,13 @@ const getCacheKey = (ctx: AchievementContext): string => {
 };
 
 export const computeAchievementsCached = (ctx: AchievementContext): Achievement[] => {
+  const now = Date.now();
   const key = getCacheKey(ctx);
-  if (cacheKey === key && achievementsCache) {
+  if (cacheKey === key && achievementsCache && (now - cacheTimestamp) < CACHE_TTL) {
     return achievementsCache;
   }
   cacheKey = key;
+  cacheTimestamp = now;
   achievementsCache = computeAchievements(ctx);
   return achievementsCache;
 };
@@ -432,6 +479,7 @@ export const computeAchievementsCached = (ctx: AchievementContext): Achievement[
 export const clearAchievementsCache = (): void => {
   achievementsCache = null;
   cacheKey = null;
+  cacheTimestamp = 0;
 };
 
 export const getUnlockedCount = (achievements: Achievement[]): number => {
@@ -455,8 +503,8 @@ export const getRecentlyUnlocked = (achievements: Achievement[], days = 7): Achi
   return achievements.filter(a => a.unlocked && a.unlockedAt && a.unlockedAt >= cutoff);
 };
 
-export const getRecommendations = (ctx: AchievementContext): AchievementRecommendation[] => {
-  const achievements = computeAchievementsCached(ctx);
+export const getRecommendations = (ctx: AchievementContext, existingAchievements?: Achievement[]): AchievementRecommendation[] => {
+  const achievements = existingAchievements ?? computeAchievementsCached(ctx);
   const recommendations: AchievementRecommendation[] = [];
   
   const almostUnlocked = getAlmostUnlocked(achievements, 70);

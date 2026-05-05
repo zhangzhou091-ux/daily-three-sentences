@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useEffect, memo } from 'react';
 import { Sentence } from '../../types';
+import { getSafeTags } from '../../utils/format';
 import { 
   PieChart, Pie, Cell, Tooltip, 
   BarChart, Bar, XAxis, YAxis 
@@ -62,13 +63,7 @@ export const StatisticsSection: React.FC<StatisticsSectionProps> = memo(({ sente
     
     const tagMap: Record<string, number> = {};
     sentences.forEach(s => {
-      let tags: string[] = [];
-      if (Array.isArray(s.tags)) {
-        tags = s.tags.filter(tag => typeof tag === 'string' && tag.trim() !== '');
-      } else if (typeof s.tags === 'string') {
-        tags = (s.tags as string).split(/[，,;；]/).map(t => t.trim()).filter(t => t !== '');
-      }
-      
+      const tags = getSafeTags(s.tags);
       tags.forEach(tag => {
         tagMap[tag] = (tagMap[tag] || 0) + 1;
       });

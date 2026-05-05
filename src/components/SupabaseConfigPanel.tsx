@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabaseService } from '../services/supabaseService';
 
 interface SupabaseConfigPanelProps {
@@ -17,6 +17,7 @@ const SupabaseConfigPanel: React.FC<SupabaseConfigPanelProps> = ({
   const [validating, setValidating] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const messageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const USER_NAME_PATTERN = /^[a-zA-Z0-9_\u4e00-\u9fa5-]{1,30}$/;
   const sanitizeUserName = (input: string): string => {
@@ -70,9 +71,16 @@ const SupabaseConfigPanel: React.FC<SupabaseConfigPanelProps> = ({
     if (config.userName) setUserName(config.userName);
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (messageTimerRef.current) clearTimeout(messageTimerRef.current);
+    };
+  }, []);
+
   const showMessage = (text: string, type: 'success' | 'error' | 'info') => {
     setMessage({ text, type });
-    setTimeout(() => setMessage(null), 3000);
+    if (messageTimerRef.current) clearTimeout(messageTimerRef.current);
+    messageTimerRef.current = setTimeout(() => setMessage(null), 3000);
   };
 
   const handleConfigure = async () => {

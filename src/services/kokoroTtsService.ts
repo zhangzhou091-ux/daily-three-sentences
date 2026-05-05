@@ -37,12 +37,6 @@ if (useLocalModels) {
 
 export const setUseLocalModels = (enabled: boolean): void => {
   useLocalModels = enabled;
-  try {
-    const settings = storageService.getSettings();
-    storageService.saveSettings({ ...settings, kokoroUseLocal: enabled });
-  } catch {
-    // ignore
-  }
   if (enabled) {
     env.allowLocalModels = true;
     env.allowRemoteModels = false;
@@ -72,7 +66,7 @@ const patchVoiceLoading = (activeHost: string): void => {
     window.fetch = function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
 
-      if (url.includes('huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/')) {
+      if (url.startsWith('https://huggingface.co') && url.includes('/Kokoro-82M-v1.0-ONNX/resolve/main/voices/')) {
         if (useLocalModels) {
           const voiceMatch = url.match(/voices\/([^/]+\.bin)/);
           const voiceFile = voiceMatch ? voiceMatch[1] : '';
@@ -142,6 +136,7 @@ const CACHE_STORE_NAME = 'kokoro_audio_cache';
 const RECOMMENDED_VOICES: KokoroVoice[] = [
   { id: 'af_heart', name: 'Heart', gender: 'female', accent: 'american', grade: 'A' },
   { id: 'af_bella', name: 'Bella', gender: 'female', accent: 'american', grade: 'A-' },
+  { id: 'af_alloy', name: 'Alloy', gender: 'female', accent: 'american', grade: 'B+' },
   { id: 'af_nicole', name: 'Nicole', gender: 'female', accent: 'american', grade: 'B-' },
   { id: 'af_kore', name: 'Kore', gender: 'female', accent: 'american', grade: 'C+' },
   { id: 'am_michael', name: 'Michael', gender: 'male', accent: 'american', grade: 'C+' },
@@ -150,6 +145,8 @@ const RECOMMENDED_VOICES: KokoroVoice[] = [
   { id: 'bf_emma', name: 'Emma', gender: 'female', accent: 'british', grade: 'B-' },
   { id: 'bm_george', name: 'George', gender: 'male', accent: 'british', grade: 'C' },
 ];
+
+const LOCAL_VOICE_IDS = new Set(['af_heart', 'af_bella', 'af_alloy', 'am_michael']);
 
 let ttsInstance: KokoroTTS | null = null;
 let isLoading = false;
@@ -268,12 +265,12 @@ const setCachedAudio = async (text: string, voice: string, audioBlob: Blob): Pro
 let audioContext: AudioContext | null = null;
 let currentSourceNode: AudioBufferSourceNode | null = null;
 
-const getAudioContext = (): AudioContext => {
+const getAudioContext = async (): Promise<AudioContext> => {
   if (!audioContext || audioContext.state === 'closed') {
     audioContext = new AudioContext({ sampleRate: 24000 });
   }
   if (audioContext.state === 'suspended') {
-    audioContext.resume();
+    await audioContext.resume();
   }
   return audioContext;
 };
@@ -330,21 +327,22 @@ const encodeWav16Bit = (samples: Float32Array, sampleRate: number): Blob => {
   return new Blob([buffer], { type: 'audio/wav' });
 };
 
-const playRawAudio = async (samples: Float32Array, sampleRate: number, loop: boolean = false): Promise<void> => {
-  return new Promise((resolve, reject) => {
+const playRawAudio = async (samples: Float32Array, sampleRate: number, loop: boolean = false, rate: number = 1): Promise<void> => {
+  return new Promise(async (resolve, reject) => {
     try {
       const gen = ++audioGeneration;
       const isCurrentGen = () => gen === audioGeneration;
 
       stopCurrentSource();
 
-      const ctx = getAudioContext();
+      const ctx = await getAudioContext();
       const buffer = ctx.createBuffer(1, samples.length, sampleRate);
       buffer.getChannelData(0).set(samples);
 
       const source = ctx.createBufferSource();
       source.buffer = buffer;
       source.loop = loop;
+      source.playbackRate.value = rate;
       source.connect(ctx.destination);
       currentSourceNode = source;
 
@@ -365,13 +363,13 @@ const playRawAudio = async (samples: Float32Array, sampleRate: number, loop: boo
   });
 };
 
-const playCachedBlob = async (audioBlob: Blob, loop: boolean = false): Promise<void> => {
+const playCachedBlob = async (audioBlob: Blob, loop: boolean = false, rate: number = 1): Promise<void> => {
   const gen = ++audioGeneration;
   const isCurrentGen = () => gen === audioGeneration;
 
   stopCurrentSource();
 
-  const ctx = getAudioContext();
+  const ctx = await getAudioContext();
   const arrayBuffer = await audioBlob.arrayBuffer();
   const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
 
@@ -380,6 +378,7 @@ const playCachedBlob = async (audioBlob: Blob, loop: boolean = false): Promise<v
   const source = ctx.createBufferSource();
   source.buffer = audioBuffer;
   source.loop = loop;
+  source.playbackRate.value = rate;
   source.connect(ctx.destination);
   currentSourceNode = source;
 
@@ -635,7 +634,7 @@ export const kokoroTtsService = {
     return collectIOSDiagnostics();
   },
 
-  async speak(text: string, voice: string = 'af_heart', loop: boolean = false): Promise<KokoroSpeakResult> {
+  async speak(text: string, voice: string = 'af_heart', loop: boolean = false, rate: number = 1): Promise<KokoroSpeakResult> {
     if (!text || !text.trim()) {
       return { success: false, error: '发音文本为空' };
     }
@@ -656,7 +655,7 @@ export const kokoroTtsService = {
       const cachedBlob = await getCachedAudio(trimmedText, voice);
       if (cachedBlob) {
         console.log(`🔊 [Kokoro] 缓存命中 | [语音] ${voice}`);
-        await playCachedBlob(cachedBlob, loop);
+        await playCachedBlob(cachedBlob, loop, rate);
         return { success: true };
       }
 
@@ -673,7 +672,7 @@ export const kokoroTtsService = {
         console.log(`🔊 [Kokoro] 音频已缓存 | [大小] ${elevenLabsCacheService.formatSize(audioBlob.size)}`);
       });
 
-      await playRawAudio(audio.audio, audio.sampling_rate, loop);
+      await playRawAudio(audio.audio, audio.sampling_rate, loop, rate);
       return { success: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -687,7 +686,16 @@ export const kokoroTtsService = {
     stopCurrentSource();
   },
 
+  setPlaybackRate(rate: number): void {
+    if (currentSourceNode) {
+      currentSourceNode.playbackRate.value = rate;
+    }
+  },
+
   getVoices(): KokoroVoice[] {
+    if (useLocalModels) {
+      return RECOMMENDED_VOICES.filter(v => LOCAL_VOICE_IDS.has(v.id));
+    }
     return RECOMMENDED_VOICES;
   },
 

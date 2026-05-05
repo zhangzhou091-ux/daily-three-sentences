@@ -99,6 +99,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
   
   const [duplicateWarning, setDuplicateWarning] = useState<{ show: boolean; existing?: Sentence }>({ show: false });
   const [isAddingSentence, setIsAddingSentence] = useState(false);
+  const isAddingSentenceRef = useRef(false);
   const [isImporting, setIsImporting] = useState(false);
   
   const [importProgress, setImportProgress] = useState<ImportProgress>({
@@ -143,8 +144,9 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
     const english = newEn.trim();
     const chinese = newZh.trim();
 
-    if (!english || !chinese || isAddingSentence) return;
+    if (!english || !chinese || isAddingSentenceRef.current) return;
 
+    isAddingSentenceRef.current = true;
     setIsAddingSentence(true);
 
     try {
@@ -186,9 +188,10 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
     } catch (error) {
       console.error("保存失败:", error);
     } finally {
+      isAddingSentenceRef.current = false;
       setIsAddingSentence(false);
     }
-  }, [newEn, newZh, newTags, onUpdate, isAddingSentence]);
+  }, [newEn, newZh, newTags, onUpdate]);
 
   const deleteSentence = useCallback(async (id: string) => {
     if (!window.confirm('确定要从数据库中永久移除这句话吗？')) return;

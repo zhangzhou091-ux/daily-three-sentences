@@ -37,7 +37,8 @@ export const useDailySelection = ({
     const currentVersion = ++generateVersionRef.current;
     
     const sentencesSnapshot = [...sentences];
-    const validSentenceIds = new Set(sentencesSnapshot.map(s => s.id));
+    const sentenceMap = new Map<string, Sentence>();
+    sentencesSnapshot.forEach(s => sentenceMap.set(s.id, s));
     
     try {
       if (!sentencesSnapshot.length) {
@@ -65,12 +66,11 @@ export const useDailySelection = ({
       let forceRegenerate = false;
       if (savedIds.length > 0) {
         savedIds.forEach((id: string) => {
-          if (!validSentenceIds.has(id)) {
+          const sentence = sentenceMap.get(id);
+          if (!sentence) {
             console.log(`📚 generateDailySelection: 跳过已删除的句子ID: ${id}`);
             return;
           }
-          const sentence = sentencesSnapshot.find(s => s.id === id);
-          if (!sentence) return;
           const isLearnedToday = sentence.lastReviewedAt 
             ? getLocalDateString(new Date(sentence.lastReviewedAt)) === todayDateStr 
             : false;
@@ -113,12 +113,12 @@ export const useDailySelection = ({
         console.log(`📚 generateDailySelection: 昨日学习列表=${yesterdayIds.length}个句子`);
         
         yesterdayIds.forEach(id => {
-          if (!validSentenceIds.has(id)) {
+          const s = sentenceMap.get(id);
+          if (!s) {
             console.log(`📚 generateDailySelection: 跳过昨日已删除的句子ID: ${id}`);
             return;
           }
-          const s = sentencesSnapshot.find(s => s.id === id);
-          if (s && s.intervalIndex === 0) {
+          if (s.intervalIndex === 0) {
             retained.push(s);
           }
         });
@@ -136,10 +136,11 @@ export const useDailySelection = ({
         
         let supplementCountFromYesterday = Math.min(needCount, yesterdayLearnedCount);
         
+        const retainedIdSet = new Set(retained.map(r => r.id));
+        
         if (supplementCountFromYesterday > 0) {
           const available = sentencesSnapshot.filter(s => 
-            s.intervalIndex === 0 && 
-            !retained.some(r => r.id === s.id)
+            s.intervalIndex === 0 && !retainedIdSet.has(s.id)
           );
           const manualSentences = available.filter(s => s.isManual === true);
           const importedSentences = available.filter(s => s.isManual === false || s.isManual === undefined);
@@ -149,6 +150,7 @@ export const useDailySelection = ({
           
           const supplementList = sorted.slice(0, supplementCountFromYesterday);
           retained.push(...supplementList);
+          supplementList.forEach(s => retainedIdSet.add(s.id));
           needCount = LIMIT - retained.length;
           
           console.log(`📚 generateDailySelection: 根据昨日完成数量补充 ${supplementList.length} 个句子`);
@@ -156,8 +158,7 @@ export const useDailySelection = ({
         
         if (needCount > 0) {
           const moreAvailable = sentencesSnapshot.filter(s => 
-            s.intervalIndex === 0 && 
-            !retained.some(r => r.id === s.id)
+            s.intervalIndex === 0 && !retainedIdSet.has(s.id)
           );
           const manualSentences = moreAvailable.filter(s => s.isManual === true);
           const importedSentences = moreAvailable.filter(s => s.isManual === false || s.isManual === undefined);
@@ -173,9 +174,9 @@ export const useDailySelection = ({
       } else {
         let needCount = LIMIT - retained.length;
         if (needCount > 0) {
+          const retainedIdSet = new Set(retained.map(r => r.id));
           const available = sentencesSnapshot.filter(s => 
-            s.intervalIndex === 0 && 
-            !retained.some(r => r.id === s.id)
+            s.intervalIndex === 0 && !retainedIdSet.has(s.id)
           );
           const manualSentences = available.filter(s => s.isManual === true);
           const importedSentences = available.filter(s => s.isManual === false || s.isManual === undefined);
@@ -216,7 +217,7 @@ export const useDailySelection = ({
 
   useEffect(() => {
     const today = getLocalDateString();
-    const currentSentencesKey = `${sentences.length}|${sentences.map(s => s.id).sort().join(',')}`;
+    const currentSentencesKey = `${sentences.length}|${sentences.map(s => s.id).join(',')}`;
     const sentencesChanged = lastSentencesKeyRef.current !== currentSentencesKey;
     const isNewDay = lastGeneratedDateRef.current !== '' && lastGeneratedDateRef.current !== today;
 

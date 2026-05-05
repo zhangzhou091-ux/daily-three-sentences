@@ -183,6 +183,14 @@ const selectBestUsVoice = async (): Promise<SpeechSynthesisVoice | null> => {
   );
 };
 
+const getPitchForRate = (rate: number): number => {
+  if (rate <= 0.3) return 0.90;
+  if (rate < 0.5) return 0.95;
+  if (rate <= 1.5) return 1.0;
+  if (rate <= 2.5) return 1.05;
+  return 1.10;
+};
+
 const executeSpeak = async (text: string, loop: boolean = false, rate: number = 1): Promise<SpeakResult> => {
   if (!text || typeof text !== 'string' || !text.trim()) {
     console.warn('发音文本为空');
@@ -220,7 +228,7 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
 
   utterance.lang = bestVoice?.lang || 'en-US';
   utterance.rate = rate;
-  utterance.pitch = rate < 0.5 ? 0.95 : 1.0;
+  utterance.pitch = getPitchForRate(rate);
   utterance.volume = 1.0;
 
   return new Promise((resolve) => {
@@ -256,7 +264,7 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
         return;
       }
       
-      const pitch = rate < 0.5 ? 0.95 : 1.0;
+      const pitch = getPitchForRate(rate);
       const delay = isIOS() ? 250 : 50;
 
       setTimeout(() => {
@@ -358,8 +366,8 @@ export const geminiService = {
         return { success: false, error: '未配置 ElevenLabs API 密钥' };
       }
       try {
-        console.log(`🔊 [引擎] ElevenLabs | [语音] ${voiceId} | [循环] ${loop}`);
-        const result = await elevenLabsService.speak(text, apiKey, voiceId, loop);
+        console.log(`🔊 [引擎] ElevenLabs | [语音] ${voiceId} | [循环] ${loop} | [语速] ${speechRate}`);
+        const result = await elevenLabsService.speak(text, apiKey, voiceId, loop, undefined, speechRate);
         if (result.success) return result;
         console.warn('🔊 ElevenLabs 播放失败:', result.error);
         return result;
@@ -374,8 +382,8 @@ export const geminiService = {
       try {
         const { kokoroTtsService: kokoro } = await import('./kokoroTtsService');
         const kokoroVoice = settings.kokoroVoice || kokoro.getDefaultVoiceId();
-        console.log(`🔊 [引擎] Kokoro-82M | [语音] ${kokoroVoice} | [循环] ${loop}`);
-        const result = await kokoro.speak(text, kokoroVoice, loop);
+        console.log(`🔊 [引擎] Kokoro-82M | [语音] ${kokoroVoice} | [循环] ${loop} | [语速] ${speechRate}`);
+        const result = await kokoro.speak(text, kokoroVoice, loop, speechRate);
         if (result.success) return { success: true };
         console.warn('🔊 Kokoro 播放失败:', result.error);
         return { success: false, error: result.error };
@@ -400,9 +408,13 @@ export const geminiService = {
       if (elResult.success) return elResult;
       console.warn('🔊 [auto] ElevenLabs 不可用，回退到 Kokoro');
 
-      const kokoroResult = await tryKokoro();
-      if (kokoroResult.success) return kokoroResult;
-      console.warn('🔊 [auto] Kokoro 不可用，回退到 Web Speech API');
+      if (!isIOS()) {
+        const kokoroResult = await tryKokoro();
+        if (kokoroResult.success) return kokoroResult;
+        console.warn('🔊 [auto] Kokoro 不可用，回退到 Web Speech API');
+      } else {
+        console.warn('🔊 [auto] iOS 设备，跳过 Kokoro，直接使用 Web Speech API');
+      }
 
       return tryWebSpeech();
     }
@@ -411,9 +423,13 @@ export const geminiService = {
       const result = await tryElevenLabs();
       if (result.success) return result;
       console.warn('🔊 ElevenLabs 失败，回退到 Kokoro');
-      const kokoroResult = await tryKokoro();
-      if (kokoroResult.success) return kokoroResult;
-      console.warn('🔊 Kokoro 失败，回退到 Web Speech API');
+      if (!isIOS()) {
+        const kokoroResult = await tryKokoro();
+        if (kokoroResult.success) return kokoroResult;
+        console.warn('🔊 Kokoro 失败，回退到 Web Speech API');
+      } else {
+        console.warn('🔊 iOS 设备，跳过 Kokoro，直接使用 Web Speech API');
+      }
       return tryWebSpeech();
     }
 
@@ -443,6 +459,16 @@ export const geminiService = {
     currentUtterance = null;
     taskQueue = [];
     isProcessing = false;
+  },
+
+  setPlaybackRate(rate: number): void {
+    const clampedRate = Math.max(0.1, Math.min(10, rate));
+    elevenLabsService.setPlaybackRate(clampedRate);
+    import('./kokoroTtsService').then(({ kokoroTtsService }) => kokoroTtsService.setPlaybackRate(clampedRate)).catch(() => {});
+    if (currentUtterance) {
+      currentUtterance.rate = clampedRate;
+      currentUtterance.pitch = getPitchForRate(clampedRate);
+    }
   },
 
   getAvailableVoices: getVoices,
