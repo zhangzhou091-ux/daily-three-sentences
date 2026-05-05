@@ -100,7 +100,7 @@ const checkMirrorAvailable = async (host: string): Promise<boolean> => {
     const timeoutId = setTimeout(() => controller.abort(), 8000);
     const response = await fetch(
       `${host}/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/config.json`,
-      { method: 'GET', signal: controller.signal, mode: 'cors' }
+      { method: 'GET', signal: controller.signal }
     );
     clearTimeout(timeoutId);
     if (!response.ok) return false;
@@ -424,14 +424,21 @@ export const kokoroTtsService = {
       console.log('🔊 [Kokoro] iOS 环境诊断:', JSON.stringify(diag, null, 2));
 
       if (!diag.crossOriginIsolated) {
-        const msg = 'iOS Safari 当前环境不支持 SharedArrayBuffer（缺少 COOP/COEP 响应头）。' +
-          'Kokoro 模型的多线程 WASM 依赖此特性。' +
-          '建议：1) 使用浏览器原生语音引擎；2) 将站点部署到支持 COOP/COEP 头的服务器。';
-        console.error('🔊 [Kokoro] ' + msg);
-        console.error('🔊 [Kokoro] 诊断详情:', JSON.stringify(diag));
-        loadError = msg;
-        isLoading = false;
-        return { loaded: false, error: msg };
+        console.warn('🔊 [Kokoro] iOS SharedArrayBuffer 不可用，切换到单线程 WASM 模式');
+        try {
+          if ((env as any).backends?.onnx?.wasm) {
+            (env as any).backends.onnx.wasm.numThreads = 1;
+          }
+        } catch (e) {
+          console.warn('🔊 [Kokoro] 无法配置单线程模式:', e);
+        }
+        try {
+          if ((env as any).backends?.onnx?.wasm) {
+            (env as any).backends.onnx.wasm.initTimeout = 120000;
+          }
+        } catch (e) {
+          // ignore
+        }
       }
 
       if (diag.jsHeapSizeLimitMB !== undefined && (diag.jsHeapSizeLimitMB as number) < 512) {
@@ -442,8 +449,17 @@ export const kokoroTtsService = {
     const checkLocalAvailable = async (): Promise<boolean> => {
       try {
         const configUrl = `${LOCAL_MODEL_PATH}onnx-community/Kokoro-82M-v1.0-ONNX/config.json`;
-        const resp = await fetch(configUrl, { method: 'HEAD' });
-        return resp.ok;
+        const resp = await fetch(configUrl, { method: 'GET' });
+        if (!resp.ok) return false;
+        const contentType = resp.headers.get('content-type') || '';
+        if (contentType.includes('text/html')) return false;
+        const text = await resp.text();
+        try {
+          JSON.parse(text);
+          return true;
+        } catch {
+          return false;
+        }
       } catch {
         return false;
       }

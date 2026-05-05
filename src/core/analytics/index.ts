@@ -25,6 +25,8 @@ import {
   getTotalRewards,
   detectNewAchievements,
   persistAchievementUnlock,
+  loadShownAchievements,
+  persistShownAchievement,
 } from './achievements';
 import { computeTimePeriodStats, TimePeriodStats } from './timeStats';
 
@@ -94,6 +96,8 @@ export {
   getTotalRewards,
   detectNewAchievements,
   persistAchievementUnlock,
+  loadShownAchievements,
+  persistShownAchievement,
 };
 
 export type { 

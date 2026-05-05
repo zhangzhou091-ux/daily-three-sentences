@@ -4,6 +4,8 @@ import {
   computeAchievements,
   detectNewAchievements,
   persistAchievementUnlock,
+  loadShownAchievements,
+  persistShownAchievement,
   Achievement,
 } from '../analytics/achievements';
 import { computeMemoryAnalysis } from '../analytics/memory';
@@ -14,7 +16,7 @@ export const useAchievementNotifications = (
 ) => {
   const [notifications, setNotifications] = useState<Achievement[]>([]);
   const prevAchievementsRef = useRef<Achievement[] | null>(null);
-  const dismissedRef = useRef<Set<string>>(new Set());
+  const dismissedRef = useRef<Set<string>>(loadShownAchievements());
 
   useEffect(() => {
     const memory = computeMemoryAnalysis(sentences);
@@ -45,6 +47,7 @@ export const useAchievementNotifications = (
 
   const dismissNotification = useCallback((id: string) => {
     dismissedRef.current.add(id);
+    persistShownAchievement(id);
     setNotifications(prev => prev.filter(n => n.id !== id));
   }, []);
 

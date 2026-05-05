@@ -381,6 +381,7 @@ export const ACHIEVEMENT_RULES: AchievementRule[] = [
 ];
 
 const ACHIEVEMENTS_STORAGE_KEY = 'd3s_achievements_unlocked';
+const ACHIEVEMENTS_SHOWN_KEY = 'd3s_achievements_shown';
 
 interface UnlockedRecord {
   unlockedAt: number;
@@ -406,6 +407,26 @@ export const persistAchievementUnlock = (achievementId: string): void => {
     map[achievementId] = { unlockedAt: Date.now() };
     saveUnlockedMap(map);
   }
+};
+
+export const loadShownAchievements = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem(ACHIEVEMENTS_SHOWN_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) return new Set(arr);
+    return new Set();
+  } catch {
+    return new Set();
+  }
+};
+
+export const persistShownAchievement = (achievementId: string): void => {
+  try {
+    const shown = loadShownAchievements();
+    shown.add(achievementId);
+    localStorage.setItem(ACHIEVEMENTS_SHOWN_KEY, JSON.stringify([...shown]));
+  } catch {}
 };
 
 export const computeAchievements = (ctx: AchievementContext): Achievement[] => {
