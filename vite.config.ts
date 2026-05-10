@@ -31,11 +31,9 @@ export default defineConfig({
             if (id.includes('@supabase')) return 'vendor-supabase';
             if (id.includes('xlsx')) return 'vendor-xlsx';
             if (id.includes('recharts')) return 'vendor-recharts';
-            if (id.includes('kokoro-js') || id.includes('onnxruntime-web') || id.includes('onnxruntime-common')) return 'vendor-kokoro';
           }
           if (id.includes('services/fsrsService')) return 'fsrs';
           if (id.includes('pages/StudyPage/components')) return 'components';
-          if (id.includes('services/kokoroTtsService')) return 'vendor-kokoro';
         }
       }
     },
@@ -166,6 +164,47 @@ export default defineConfig({
               expiration: {
                 maxAgeSeconds: 30 * 24 * 60 * 60, // 缓存30天
                 maxEntries: 20
+              }
+            }
+          },
+          {
+            // ElevenLabs TTS API - 仅缓存成功的音频响应
+            urlPattern: /^https:\/\/api\.elevenlabs\.io\/v1\/text-to-speech\/.*$/,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'elevenlabs-tts-cache',
+              networkTimeoutSeconds: 10,
+              expiration: {
+                maxAgeSeconds: 30 * 24 * 60 * 60,
+                maxEntries: 50
+              },
+              cacheableResponse: {
+                statuses: [200]
+              },
+              plugins: [{
+                cacheWillUpdate: async ({ response }) => {
+                  const contentType = response.headers.get('content-type') || '';
+                  if (contentType.includes('audio/') && response.status === 200) {
+                    return response;
+                  }
+                  return null;
+                }
+              }]
+            }
+          },
+          {
+            // ElevenLabs 语音列表 API
+            urlPattern: /^https:\/\/api\.elevenlabs\.io\/v1\/voices$/,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'elevenlabs-voices-cache',
+              networkTimeoutSeconds: 5,
+              expiration: {
+                maxAgeSeconds: 24 * 60 * 60,
+                maxEntries: 5
+              },
+              cacheableResponse: {
+                statuses: [200]
               }
             }
           }

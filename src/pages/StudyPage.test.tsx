@@ -23,7 +23,6 @@ vi.mock('../services/storage', () => ({
       dailyTarget: 3,
       dailyLearnTarget: 3,
       dailyReviewTarget: 10,
-      voiceName: 'Kore',
       showChineseFirst: false,
       autoPlayAudio: true,
       userName: 'Tester',

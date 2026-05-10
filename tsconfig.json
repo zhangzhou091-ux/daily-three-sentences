@@ -37,5 +37,8 @@
     "alwaysStrict": true,
     "noFallthroughCasesInSwitch": true,
     "forceConsistentCasingInFileNames": true
-  }
+  },
+  "exclude": [
+    "supabase"
+  ]
 }

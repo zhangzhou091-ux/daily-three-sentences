@@ -138,7 +138,6 @@ export const DEFAULT_USER_SETTINGS = {
   dailyTarget: 3,
   dailyLearnTarget: 3,
   dailyReviewTarget: 10,
-  voiceName: 'Kore' as const,
   webSpeechVoice: '',
   ttsEngine: 'auto' as const,
   speechRate: 1,
@@ -149,8 +148,11 @@ export const DEFAULT_USER_SETTINGS = {
   updatedAt: Date.now(),
   elevenLabsApiKey: '',
   elevenLabsVoiceId: 'JBFqnCBsd6RMkjVDRZzb',
-  kokoroVoice: 'af_heart',
-  kokoroUseLocal: false,
+  minimaxApiKey: '',
+  minimaxVoiceId: 'English_expressive_narrator',
+  ttsMakerToken: '',
+  ttsMakerVoiceId: 663,
+  edgeTtsVoiceId: 'en-US-AvaMultilingualNeural',
 };
 
 // 学习奖励

@@ -8,10 +8,17 @@
  * - 自动降级：API调用失败时回退到其他引擎
  * - 音频缓存：相同文本+语音只调用一次API，后续从本地缓存播放
  *
+ * iOS Safari 兼容性：
+ * - iOS 要求音频播放必须由用户手势触发
+ * - 使用 Audio 元素 + Blob URL 播放，兼容 iOS Safari
+ * - 增加 iOS 专用延迟和重试机制
+ * - 网络状态检测增强：navigator.onLine + 实际连通性检测
+ *
  * API文档：https://elevenlabs.io/docs/eleven-api/quickstart
  */
 
 import { elevenLabsCacheService } from './elevenLabsCacheService';
+import { ttsCloudCacheService } from './ttsCloudCacheService';
 
 export interface ElevenLabsVoice {
   voice_id: string;
@@ -26,19 +33,154 @@ export interface SpeakResult {
   fromCache?: boolean;
 }
 
+export type NetworkQuality = 'good' | 'medium' | 'weak' | 'offline';
+
+interface NetworkQualitySnapshot {
+  quality: NetworkQuality;
+  latency: number;
+  timestamp: number;
+}
+
+interface PendingSpeakRequest {
+  text: string;
+  apiKey: string;
+  voiceId: string;
+  loop: boolean;
+  modelId: string;
+  rate: number;
+  resolve: (result: SpeakResult) => void;
+}
+
 const API_BASE = 'https://api.elevenlabs.io';
 const DEFAULT_MODEL = 'eleven_v3';
 const DEFAULT_OUTPUT_FORMAT = 'mp3_44100_128';
-const SPEAK_TIMEOUT = 15000;
+const BASE_SPEAK_TIMEOUT = 20000;
 const VOICES_CACHE_TTL = 30 * 60 * 1000;
 const VALIDATE_TIMEOUT = 15000;
 const VALIDATE_CACHE_TTL = 5 * 60 * 1000;
 const API_KEY_PATTERN = /^sk_[a-f0-9]{40,}$/i;
+const MAX_RETRIES = 3;
+const RETRY_BASE_DELAY = 1000;
+const IOS_PLAYBACK_RETRIES = 3;
+const IOS_PLAYBACK_DELAY = 200;
+const WEAK_NETWORK_LATENCY_THRESHOLD = 2000;
+const MEDIUM_NETWORK_LATENCY_THRESHOLD = 800;
+const CONNECTIVITY_CHECK_INTERVAL = 30000;
+const MAX_PENDING_REQUESTS = 3;
 
 let currentAudioElement: HTMLAudioElement | null = null;
+let activePlaybackAudio: HTMLAudioElement | null = null;
 let voicesCache: { voices: ElevenLabsVoice[]; timestamp: number } | null = null;
 let validationCache: { key: string; valid: boolean; timestamp: number } | null = null;
 let audioGeneration = 0;
+
+let networkOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+let lastConnectivityCheck = 0;
+let connectivityCheckResult: boolean | null = null;
+let lastNetworkQuality: NetworkQualitySnapshot | null = null;
+let pendingRequests: PendingSpeakRequest[] = [];
+
+const isIOS = (): boolean => {
+  if (typeof navigator === 'undefined') return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+};
+
+const updateNetworkStatus = (online: boolean) => {
+  const wasOffline = !networkOnline;
+  networkOnline = online;
+  console.log(`🔊 [ElevenLabs] 网络状态: ${online ? '在线' : '离线'}`);
+
+  if (online && wasOffline && pendingRequests.length > 0) {
+    console.log(`🔊 [ElevenLabs] 网络恢复，处理 ${pendingRequests.length} 个待重试请求`);
+    processPendingRequests();
+  }
+};
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => updateNetworkStatus(true));
+  window.addEventListener('offline', () => updateNetworkStatus(false));
+}
+
+const measureNetworkQuality = async (): Promise<NetworkQualitySnapshot> => {
+  if (!navigator.onLine) {
+    lastNetworkQuality = { quality: 'offline', latency: Infinity, timestamp: Date.now() };
+    return lastNetworkQuality;
+  }
+
+  const now = Date.now();
+  if (lastNetworkQuality && now - lastNetworkQuality.timestamp < CONNECTIVITY_CHECK_INTERVAL / 2) {
+    return lastNetworkQuality;
+  }
+
+  try {
+    const start = performance.now();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    await fetch(`${API_BASE}/v1/voices`, {
+      method: 'HEAD',
+      mode: 'no-cors',
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+    const latency = performance.now() - start;
+
+    let quality: NetworkQuality;
+    if (latency < MEDIUM_NETWORK_LATENCY_THRESHOLD) {
+      quality = 'good';
+    } else if (latency < WEAK_NETWORK_LATENCY_THRESHOLD) {
+      quality = 'medium';
+    } else {
+      quality = 'weak';
+    }
+
+    connectivityCheckResult = true;
+    lastConnectivityCheck = now;
+    lastNetworkQuality = { quality, latency, timestamp: now };
+
+    console.log(`🔊 [ElevenLabs] 网络质量: ${quality} | 延迟: ${Math.round(latency)}ms`);
+    return lastNetworkQuality;
+  } catch {
+    connectivityCheckResult = false;
+    lastConnectivityCheck = now;
+    lastNetworkQuality = { quality: 'offline', latency: Infinity, timestamp: now };
+    return lastNetworkQuality;
+  }
+};
+
+const checkConnectivity = async (): Promise<boolean> => {
+  const snapshot = await measureNetworkQuality();
+  return snapshot.quality !== 'offline';
+};
+
+const getAdaptiveTimeout = (quality: NetworkQuality): number => {
+  switch (quality) {
+    case 'good': return BASE_SPEAK_TIMEOUT;
+    case 'medium': return BASE_SPEAK_TIMEOUT * 2;
+    case 'weak': return BASE_SPEAK_TIMEOUT * 3;
+    case 'offline': return BASE_SPEAK_TIMEOUT;
+  }
+};
+
+const getAdaptiveRetries = (quality: NetworkQuality): number => {
+  switch (quality) {
+    case 'good': return MAX_RETRIES;
+    case 'medium': return MAX_RETRIES + 1;
+    case 'weak': return MAX_RETRIES + 2;
+    case 'offline': return 0;
+  }
+};
+
+const processPendingRequests = () => {
+  const requests = pendingRequests.splice(0, MAX_PENDING_REQUESTS);
+  for (const req of requests) {
+    elevenLabsService.speak(req.text, req.apiKey, req.voiceId, req.loop, req.modelId, req.rate)
+      .then(req.resolve);
+  }
+};
 
 const POPULAR_VOICES: ElevenLabsVoice[] = [
   { voice_id: 'JBFqnCBsd6RMkjVDRZzb', name: 'George', labels: { accent: 'american', gender: 'male' } },
@@ -53,65 +195,206 @@ const POPULAR_VOICES: ElevenLabsVoice[] = [
   { voice_id: 'XB0fDUnXU5powFXDhCwa', name: 'Charlotte', labels: { accent: 'british', gender: 'female' } },
 ];
 
-const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: number = 1): Promise<void> => {
-  return new Promise((resolve, reject) => {
+const stopCurrentAudio = (): void => {
+  activePlaybackAudio = null;
+  if (currentAudioElement) {
     try {
-      const gen = ++audioGeneration;
-
-      if (currentAudioElement) {
-        currentAudioElement.pause();
-        currentAudioElement.src = '';
-        currentAudioElement.load();
-        currentAudioElement = null;
-      }
-
-      const url = URL.createObjectURL(audioBlob);
-      const audio = new Audio(url);
-      audio.loop = loop;
-      audio.playbackRate = rate;
-      currentAudioElement = audio;
-
-      const isCurrentGen = () => gen === audioGeneration;
-
-      const cleanup = () => {
-        URL.revokeObjectURL(url);
-        if (currentAudioElement === audio) currentAudioElement = null;
-      };
-
-      audio.oncanplaythrough = () => {
-        if (!isCurrentGen()) { cleanup(); resolve(); return; }
-        audio.play().then(() => {
-          if (loop) resolve();
-        }).catch((err) => {
-          cleanup();
-          reject(new Error(err.name === 'NotAllowedError' ? '请先点击页面后重试' : '播放被阻止'));
-        });
-      };
-
-      if (!loop) {
-        audio.onended = () => {
-          if (!isCurrentGen()) return;
-          cleanup();
-          resolve();
-        };
-      }
-
-      audio.onpause = () => {
-        if (loop && currentAudioElement !== audio) {
-          cleanup();
-          resolve();
-        }
-      };
-
-      audio.onerror = () => {
-        cleanup();
-        reject(new Error('音频解码失败'));
-      };
-
-      audio.load();
-    } catch (err) {
-      reject(err instanceof Error ? err : new Error(String(err)));
+      currentAudioElement.pause();
+      currentAudioElement.removeAttribute('src');
+      currentAudioElement.load();
+    } catch {
+      // ignore
     }
+    currentAudioElement = null;
+  }
+};
+
+const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: number = 1): Promise<void> => {
+  const gen = ++audioGeneration;
+  const isCurrentGen = () => gen === audioGeneration;
+
+  stopCurrentAudio();
+
+  if (!audioBlob || audioBlob.size === 0) {
+    throw new Error('音频数据为空');
+  }
+
+  const mimeType = audioBlob.type || 'audio/mpeg';
+  const url = URL.createObjectURL(new Blob([audioBlob], { type: mimeType }));
+  const audio = new Audio();
+  audio.preload = 'auto';
+  audio.loop = loop;
+  audio.playbackRate = rate;
+  currentAudioElement = audio;
+
+  const cleanup = () => {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      // ignore
+    }
+    if (currentAudioElement === audio) {
+      currentAudioElement = null;
+    }
+    if (activePlaybackAudio === audio) {
+      activePlaybackAudio = null;
+    }
+  };
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let playbackRetryCount = 0;
+
+    const doReject = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    const doResolve = () => {
+      if (settled) return;
+      settled = true;
+      if (loop && audio && !audio.paused) {
+        activePlaybackAudio = audio;
+        if (currentAudioElement === audio) {
+          currentAudioElement = null;
+        }
+        try {
+          URL.revokeObjectURL(url);
+        } catch {
+          // ignore
+        }
+      } else {
+        cleanup();
+      }
+      resolve();
+    };
+
+    const attemptPlay = () => {
+      if (!isCurrentGen() || settled) return;
+
+      audio.play().then(() => {
+        if (!loop) return;
+        if (settled) return;
+        doResolve();
+      }).catch((playErr: DOMException) => {
+        if (!isCurrentGen() || settled) return;
+
+        if (playErr.name === 'NotAllowedError') {
+          if (isIOS() && playbackRetryCount < IOS_PLAYBACK_RETRIES) {
+            playbackRetryCount++;
+            console.warn(`🔊 [ElevenLabs] iOS 播放被阻止，第 ${playbackRetryCount}/${IOS_PLAYBACK_RETRIES} 次重试...`);
+            setTimeout(attemptPlay, IOS_PLAYBACK_DELAY * playbackRetryCount);
+            return;
+          }
+          doReject(new Error('请先点击页面后重试（浏览器安全策略）'));
+          return;
+        }
+
+        if (playErr.name === 'AbortError') {
+          if (isIOS() && playbackRetryCount < IOS_PLAYBACK_RETRIES) {
+            playbackRetryCount++;
+            console.warn(`🔊 [ElevenLabs] iOS 播放中断，第 ${playbackRetryCount}/${IOS_PLAYBACK_RETRIES} 次重试...`);
+            setTimeout(attemptPlay, IOS_PLAYBACK_DELAY * playbackRetryCount);
+            return;
+          }
+          doReject(new Error('播放被中断'));
+          return;
+        }
+
+        doReject(new Error(`播放失败: ${playErr.message || playErr.name}`));
+      });
+    };
+
+    audio.oncanplay = () => {
+      if (!isCurrentGen() || settled) return;
+      attemptPlay();
+    };
+
+    audio.onloadeddata = () => {
+      if (!isCurrentGen() || settled) return;
+
+      if (isIOS()) {
+        setTimeout(() => {
+          if (!isCurrentGen() || settled) return;
+          attemptPlay();
+        }, 100);
+      }
+    };
+
+    if (!loop) {
+      audio.onended = () => {
+        if (!isCurrentGen()) return;
+        doResolve();
+      };
+    }
+
+    audio.onerror = () => {
+      if (!isCurrentGen() || settled) return;
+
+      const mediaError = audio.error;
+      let errorMsg = '音频解码失败';
+
+      if (mediaError) {
+        switch (mediaError.code) {
+          case MediaError.MEDIA_ERR_ABORTED:
+            errorMsg = '音频加载被中断';
+            break;
+          case MediaError.MEDIA_ERR_NETWORK:
+            errorMsg = '音频网络加载失败';
+            break;
+          case MediaError.MEDIA_ERR_DECODE:
+            errorMsg = '音频解码失败（格式可能不受此浏览器支持）';
+            break;
+          case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+            errorMsg = '音频格式不受支持';
+            break;
+        }
+      }
+
+      if (isIOS() && playbackRetryCount < IOS_PLAYBACK_RETRIES) {
+        playbackRetryCount++;
+        console.warn(`🔊 [ElevenLabs] iOS 音频错误，第 ${playbackRetryCount}/${IOS_PLAYBACK_RETRIES} 次重试: ${errorMsg}`);
+
+        const retryUrl = URL.createObjectURL(new Blob([audioBlob], { type: mimeType }));
+        audio.src = retryUrl;
+        audio.load();
+        return;
+      }
+
+      doReject(new Error(errorMsg));
+    };
+
+    audio.onpause = () => {
+      if (loop && currentAudioElement !== audio && !settled) {
+        if (activePlaybackAudio === audio) {
+          activePlaybackAudio = null;
+        }
+        doResolve();
+      }
+    };
+
+    audio.src = url;
+
+    if (isIOS()) {
+      setTimeout(() => {
+        if (!isCurrentGen() || settled) return;
+        if (audio.readyState >= 3) {
+          attemptPlay();
+        } else {
+          audio.load();
+        }
+      }, 50);
+    } else {
+      audio.load();
+    }
+
+    setTimeout(() => {
+      if (!settled && isCurrentGen()) {
+        doReject(new Error('音频播放超时'));
+      }
+    }, loop ? 120000 : BASE_SPEAK_TIMEOUT);
   });
 };
 
@@ -142,32 +425,165 @@ export const elevenLabsService = {
     }
 
     try {
+      const networkSnapshot = await measureNetworkQuality();
+      const networkQuality = networkSnapshot.quality;
+
       const cachedBlob = await elevenLabsCacheService.get(trimmedText, voiceId, modelId);
       if (cachedBlob) {
-        console.log(`🔊 [ElevenLabs] 缓存命中，跳过API调用 | [语音] ${voiceId}`);
-        await playAudioBlob(cachedBlob, loop, rate);
-        return { success: true, fromCache: true };
+        console.log(`🔊 [ElevenLabs] 本地缓存命中，跳过API调用 | [语音] ${voiceId}`);
+        try {
+          await playAudioBlob(cachedBlob, loop, rate);
+          return { success: true, fromCache: true };
+        } catch (playErr) {
+          const msg = playErr instanceof Error ? playErr.message : String(playErr);
+          console.warn(`🔊 [ElevenLabs] 缓存音频播放失败: ${msg}，重新请求API`);
+        }
       }
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), SPEAK_TIMEOUT);
+      if (networkQuality === 'weak' || networkQuality === 'medium') {
+        const staleBlob = await elevenLabsCacheService.getStale(trimmedText, voiceId, modelId);
+        if (staleBlob) {
+          console.log(`🔊 [ElevenLabs] 弱网环境，使用陈旧缓存播放 | [质量] ${networkQuality}`);
+          try {
+            await playAudioBlob(staleBlob, loop, rate);
+            return { success: true, fromCache: true };
+          } catch (playErr) {
+            console.warn(`🔊 [ElevenLabs] 陈旧缓存播放失败，尝试API请求`);
+          }
+        }
+      }
 
-      const response = await fetch(`${API_BASE}/v1/text-to-speech/${voiceId}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'xi-api-key': apiKey.trim(),
-          Accept: 'audio/mpeg',
-        },
-        body: JSON.stringify({
-          text: trimmedText,
-          model_id: modelId,
-          output_format: DEFAULT_OUTPUT_FORMAT,
-        }),
-        signal: controller.signal,
-      });
+      if (networkQuality === 'offline') {
+        const staleBlob = await elevenLabsCacheService.getStale(trimmedText, voiceId, modelId);
+        if (staleBlob) {
+          console.log(`🔊 [ElevenLabs] 离线状态，使用陈旧缓存播放`);
+          try {
+            await playAudioBlob(staleBlob, loop, rate);
+            return { success: true, fromCache: true };
+          } catch (playErr) {
+            return { success: false, error: '离线状态且缓存音频无法播放，请连接网络后重试' };
+          }
+        }
+
+        if (pendingRequests.length < MAX_PENDING_REQUESTS) {
+          return new Promise<SpeakResult>((resolve) => {
+            pendingRequests.push({ text: trimmedText, apiKey, voiceId, loop, modelId, rate, resolve });
+            console.log(`🔊 [ElevenLabs] 离线状态，请求已加入待重试队列 (${pendingRequests.length}/${MAX_PENDING_REQUESTS})`);
+          });
+        }
+
+        return { success: false, error: '当前处于离线状态，且无可用缓存。请连接网络后重试' };
+      }
+
+      if (networkQuality === 'weak') {
+        const cloudBlob = await ttsCloudCacheService.get(trimmedText, voiceId, 'elevenlabs');
+        if (cloudBlob) {
+          console.log(`🔊 [ElevenLabs] 弱网环境，优先使用云端缓存 | [语音] ${voiceId}`);
+          elevenLabsCacheService.put(trimmedText, voiceId, modelId, cloudBlob).catch(() => {});
+          try {
+            await playAudioBlob(cloudBlob, loop, rate);
+            return { success: true, fromCache: true };
+          } catch (playErr) {
+            console.warn(`🔊 [ElevenLabs] 云端缓存播放失败，尝试API请求`);
+          }
+        }
+      } else {
+        const cloudBlob = await ttsCloudCacheService.get(trimmedText, voiceId, 'elevenlabs');
+        if (cloudBlob) {
+          console.log(`🔊 [ElevenLabs] 云端缓存命中，下载播放 | [语音] ${voiceId}`);
+          elevenLabsCacheService.put(trimmedText, voiceId, modelId, cloudBlob).then(() => {
+            console.log(`🔊 [ElevenLabs] 云端音频已同步到本地缓存`);
+          }).catch(() => {});
+          try {
+            await playAudioBlob(cloudBlob, loop, rate);
+            return { success: true, fromCache: true };
+          } catch (playErr) {
+            const msg = playErr instanceof Error ? playErr.message : String(playErr);
+            console.warn(`🔊 [ElevenLabs] 云端缓存音频播放失败: ${msg}，重新请求API`);
+          }
+        }
+      }
+
+      console.log(`🔊 [ElevenLabs] 本地/云端缓存均未命中，调用API | [语音] ${voiceId} | [网络] ${networkQuality}`);
+
+      const adaptiveTimeout = getAdaptiveTimeout(networkQuality);
+      const adaptiveRetries = getAdaptiveRetries(networkQuality);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), adaptiveTimeout);
+
+      let response: Response | undefined;
+      let lastError: unknown = null;
+
+      for (let attempt = 0; attempt < adaptiveRetries; attempt++) {
+        try {
+          if (attempt > 0) {
+            console.log(`🔊 [ElevenLabs] 第 ${attempt + 1}/${adaptiveRetries} 次请求...`);
+          }
+
+          response = await fetch(`${API_BASE}/v1/text-to-speech/${voiceId}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'xi-api-key': apiKey.trim(),
+              Accept: 'audio/mpeg',
+            },
+            body: JSON.stringify({
+              text: trimmedText,
+              model_id: modelId,
+              output_format: DEFAULT_OUTPUT_FORMAT,
+            }),
+            signal: controller.signal,
+          });
+          break;
+        } catch (fetchErr) {
+          lastError = fetchErr;
+          if (fetchErr instanceof DOMException && fetchErr.name === 'AbortError') {
+            break;
+          }
+          if (attempt < adaptiveRetries - 1) {
+            const delay = RETRY_BASE_DELAY * Math.pow(2, attempt);
+            console.log(`🔊 [ElevenLabs] 请求失败，${delay}ms 后第 ${attempt + 2}/${adaptiveRetries} 次重试...`);
+            await new Promise(r => setTimeout(r, delay));
+
+            const currentQuality = await measureNetworkQuality();
+            if (currentQuality.quality === 'offline') {
+              console.log(`🔊 [ElevenLabs] 请求期间网络断开`);
+              const staleBlob = await elevenLabsCacheService.getStale(trimmedText, voiceId, modelId);
+              if (staleBlob) {
+                try {
+                  await playAudioBlob(staleBlob, loop, rate);
+                  return { success: true, fromCache: true };
+                } catch {
+                  // continue to error
+                }
+              }
+              break;
+            }
+          }
+        }
+      }
 
       clearTimeout(timeoutId);
+
+      if (!response) {
+        if (lastError instanceof DOMException && (lastError as DOMException).name === 'AbortError') {
+          const staleBlob = await elevenLabsCacheService.getStale(trimmedText, voiceId, modelId);
+          if (staleBlob) {
+            try {
+              await playAudioBlob(staleBlob, loop, rate);
+              return { success: true, fromCache: true };
+            } catch {
+              // continue to error
+            }
+          }
+          return { success: false, error: `请求超时（${adaptiveTimeout / 1000}秒），请检查网络连接` };
+        }
+        if (lastError instanceof TypeError && (lastError as TypeError).message.includes('Failed to fetch')) {
+          return { success: false, error: '网络连接失败，请检查网络或代理设置' };
+        }
+        const message = lastError instanceof Error ? (lastError as Error).message : String(lastError);
+        return { success: false, error: `请求失败（已重试${adaptiveRetries}次）: ${message}` };
+      }
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
@@ -192,26 +608,29 @@ export const elevenLabsService = {
 
       const audioBlob = await response.blob();
 
-      if (audioBlob.size === 0) {
+      if (!audioBlob || audioBlob.size === 0) {
         return { success: false, error: '未收到音频数据' };
       }
 
+      console.log(`🔊 [ElevenLabs] 合成完成 | [大小] ${elevenLabsCacheService.formatSize(audioBlob.size)} | [类型] ${audioBlob.type}`);
+
       elevenLabsCacheService.put(trimmedText, voiceId, modelId, audioBlob).then((saved) => {
         if (saved) {
-          console.log(`🔊 [ElevenLabs] 音频已缓存 | [大小] ${elevenLabsCacheService.formatSize(audioBlob.size)}`);
+          console.log(`🔊 [ElevenLabs] 音频已缓存到本地`);
         }
-      });
+      }).catch(() => {});
 
-      await playAudioBlob(audioBlob, loop);
+      ttsCloudCacheService.put(trimmedText, voiceId, 'elevenlabs', audioBlob).then((uploaded) => {
+        if (uploaded) {
+          console.log(`🔊 [ElevenLabs] 音频已上传到云端`);
+        }
+      }).catch(() => {});
+
+      await playAudioBlob(audioBlob, loop, rate);
       return { success: true, fromCache: false };
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        return { success: false, error: '请求超时，请检查网络连接' };
-      }
-      if (err instanceof TypeError && err.message.includes('Failed to fetch')) {
-        return { success: false, error: '网络连接失败，可能存在跨域限制' };
-      }
       const message = err instanceof Error ? err.message : String(err);
+      console.error('🔊 [ElevenLabs] 合成失败:', message);
       return { success: false, error: `播放失败: ${message}` };
     }
   },
@@ -376,17 +795,15 @@ export const elevenLabsService = {
 
   stop(): void {
     audioGeneration++;
-    if (currentAudioElement) {
-      currentAudioElement.pause();
-      currentAudioElement.src = '';
-      currentAudioElement.load();
-      currentAudioElement = null;
-    }
+    stopCurrentAudio();
   },
 
   setPlaybackRate(rate: number): void {
     if (currentAudioElement) {
       currentAudioElement.playbackRate = rate;
+    }
+    if (activePlaybackAudio) {
+      activePlaybackAudio.playbackRate = rate;
     }
   },
 
@@ -396,6 +813,18 @@ export const elevenLabsService = {
 
   clearValidationCache(): void {
     validationCache = null;
+  },
+
+  getNetworkQuality(): NetworkQuality {
+    return lastNetworkQuality?.quality ?? (networkOnline ? 'good' : 'offline');
+  },
+
+  getPendingRequestCount(): number {
+    return pendingRequests.length;
+  },
+
+  clearPendingRequests(): void {
+    pendingRequests = [];
   },
 };
 

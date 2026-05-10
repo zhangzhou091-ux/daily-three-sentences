@@ -6,7 +6,10 @@ import { syncQueueService } from '../services/syncQueueService';
 import { geminiService } from '../services/geminiService';
 import { elevenLabsService, ElevenLabsVoice } from '../services/elevenLabsService';
 import { elevenLabsCacheService } from '../services/elevenLabsCacheService';
-import { kokoroTtsService, KokoroVoice, setUseLocalModels, getUseLocalModels } from '../services/kokoroTtsService';
+import { ttsMakerService, TTSMakerVoice } from '../services/ttsMakerService';
+import { minimaxTtsService, MiniMaxVoice } from '../services/minimaxTtsService';
+import { edgeTtsService, POPULAR_VOICES as EdgePopularVoices } from '../services/edgeTtsService';
+import { ttsCloudCacheService } from '../services/ttsCloudCacheService';
 import { UserSettings } from '../types';
 import EnvCheckPanel from '../components/EnvCheckPanel';
 import SupabaseConfigPanel from '../components/SupabaseConfigPanel';
@@ -32,12 +35,19 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
   const [elevenLabsKeyStatus, setElevenLabsKeyStatus] = useState<'idle' | 'valid' | 'invalid'>('idle');
   const [showElevenLabsKey, setShowElevenLabsKey] = useState(false);
   const [elevenLabsCacheStats, setElevenLabsCacheStats] = useState<{ count: number; totalSize: number } | null>(null);
-  const [kokoroVoices] = useState<KokoroVoice[]>(kokoroTtsService.getVoices());
-  const [kokoroCacheStats, setKokoroCacheStats] = useState<{ count: number; totalSize: number } | null>(null);
-  const [kokoroModelStatus, setKokoroModelStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
-  const [kokoroLoadProgress, setKokoroLoadProgress] = useState<number>(0);
-  const [kokoroUseLocal, setKokoroUseLocal] = useState<boolean>(settings.kokoroUseLocal ?? getUseLocalModels());
-  const [showLocalModelHelp, setShowLocalModelHelp] = useState<boolean>(false);
+  const [ttsMakerVoices, setTtsMakerVoices] = useState<TTSMakerVoice[]>(ttsMakerService.getVoices());
+  const [ttsMakerCacheStats, setTtsMakerCacheStats] = useState<{ count: number; totalSize: number } | null>(null);
+  const [ttsMakerTokenValidating, setTtsMakerTokenValidating] = useState(false);
+  const [ttsMakerTokenStatus, setTtsMakerTokenStatus] = useState<'idle' | 'valid' | 'invalid' | 'exhausted'>('idle');
+  const [ttsMakerTokenInfo, setTtsMakerTokenInfo] = useState<string>('');
+  const [showTtsMakerToken, setShowTtsMakerToken] = useState(false);
+  const [minimaxVoices] = useState<MiniMaxVoice[]>(minimaxTtsService.getVoices());
+  const [minimaxCacheStats, setMiniMaxCacheStats] = useState<{ count: number; totalSize: number } | null>(null);
+  const [minimaxKeyValidating, setMiniMaxKeyValidating] = useState(false);
+  const [minimaxKeyStatus, setMiniMaxKeyStatus] = useState<'idle' | 'valid' | 'invalid'>('idle');
+  const [showMiniMaxKey, setShowMiniMaxKey] = useState(false);
+  const [cloudCacheStats, setCloudCacheStats] = useState<Awaited<ReturnType<typeof ttsCloudCacheService.getStats>> | null>(null);
+  const [cloudCacheLoading, setCloudCacheLoading] = useState(false);
   const isSyncingRef = useRef(false);
   const isResettingRef = useRef(false);
   const prevUserNameRef = useRef<string>(settings.userName);
@@ -93,11 +103,11 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
       const engineInfo = geminiService.getCurrentEngineInfo();
       const voiceName = engineInfo.voiceName || '默认';
       setTestVoiceName(`${engineInfo.engine} - ${voiceName}`);
-      await geminiService.speak('Hello, this is a voice test. How are you doing today?', undefined, false);
+      await geminiService.speak('Hello, this is a voice test. How are you doing today?', false);
     } catch {
       setTestVoiceName('播放失败');
     }
-  }, [settings.ttsEngine, settings.elevenLabsApiKey, settings.elevenLabsVoiceId, settings.kokoroVoice, settings.webSpeechVoice, settings.speechRate]);
+  }, [settings.ttsEngine, settings.elevenLabsApiKey, settings.elevenLabsVoiceId, settings.webSpeechVoice, settings.speechRate]);
 
   const handleValidateElevenLabsKey = useCallback(async (apiKey: string) => {
     if (!apiKey || !apiKey.trim()) {
@@ -137,48 +147,54 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
     setMessage({ text: `已清理 ${count} 条音频缓存`, type: 'success' });
   }, []);
 
-  const loadKokoroCacheStats = useCallback(async () => {
+  const loadTtsMakerCacheStats = useCallback(async () => {
     try {
-      const stats = await kokoroTtsService.getCacheStats();
-      setKokoroCacheStats({ count: stats.count, totalSize: stats.totalSize });
+      const stats = await ttsMakerService.getCacheStats();
+      setTtsMakerCacheStats({ count: stats.count, totalSize: stats.totalSize });
     } catch {
-      setKokoroCacheStats(null);
+      setTtsMakerCacheStats(null);
     }
   }, []);
 
-  const handleClearKokoroCache = useCallback(async () => {
-    const count = await kokoroTtsService.clearCache();
-    setKokoroCacheStats(null);
-    setMessage({ text: `已清理 ${count} 条 Kokoro 音频缓存`, type: 'success' });
+  const handleClearTtsMakerCache = useCallback(async () => {
+    const count = await ttsMakerService.clearCache();
+    setTtsMakerCacheStats(null);
+    setMessage({ text: `已清理 ${count} 条 TTSMaker 音频缓存`, type: 'success' });
   }, []);
 
-  const handleLoadKokoroModel = useCallback(async () => {
-    setKokoroModelStatus('loading');
-    setKokoroLoadProgress(0);
-    const progressTimer = setInterval(() => {
-      setKokoroLoadProgress(kokoroTtsService.getLoadProgress());
-    }, 500);
-    const result = await kokoroTtsService.loadModel();
-    clearInterval(progressTimer);
-    setKokoroLoadProgress(kokoroTtsService.getLoadProgress());
-    setKokoroModelStatus(result.loaded ? 'loaded' : 'error');
-    if (result.loaded) {
-      setMessage({ text: kokoroUseLocal ? 'Kokoro 本地模型加载成功' : 'Kokoro 模型加载成功', type: 'success' });
-    } else {
-      setMessage({ text: `模型加载失败: ${result.error}`, type: 'error' });
+  const handleValidateTtsMakerToken = useCallback(async (token: string) => {
+    if (!token || !token.trim()) {
+      setTtsMakerTokenStatus('idle');
+      setTtsMakerTokenInfo('');
+      return;
     }
-  }, [kokoroUseLocal]);
-
-  const handleToggleKokoroLocal = useCallback((enabled: boolean) => {
-    setKokoroUseLocal(enabled);
-    setUseLocalModels(enabled);
-    setKokoroModelStatus('idle');
-    setSettings(prev => {
-      const updated = { ...prev, kokoroUseLocal: enabled, updatedAt: Date.now() };
-      storageService.saveSettings(updated);
-      return updated;
-    });
-    setMessage({ text: enabled ? '已切换为本地模型模式' : '已切换为在线下载模式', type: 'info' });
+    setTtsMakerTokenValidating(true);
+    setTtsMakerTokenStatus('idle');
+    setTtsMakerTokenInfo('');
+    try {
+      const result = await ttsMakerService.validateToken(token);
+      if (result.valid && result.availableCharacters !== undefined && result.availableCharacters <= 0) {
+        setTtsMakerTokenStatus('exhausted');
+        setTtsMakerTokenInfo(result.error || `配额已用完，约 ${Math.ceil(result.resetDays || 0)} 天后重置`);
+        setMessage({ text: result.error || 'Token 配额已用完', type: 'error' });
+      } else if (result.valid) {
+        setTtsMakerTokenStatus('valid');
+        const info = result.availableCharacters !== undefined
+          ? `可用 ${result.availableCharacters.toLocaleString()} / ${result.maxCharacters?.toLocaleString()} 字符`
+          : '';
+        setTtsMakerTokenInfo(info);
+        setMessage({ text: `TTSMaker Token 验证通过${info ? ' · ' + info : ''}`, type: 'success' });
+      } else {
+        setTtsMakerTokenStatus('invalid');
+        setTtsMakerTokenInfo(result.error || '');
+        setMessage({ text: `Token 验证失败: ${result.error}`, type: 'error' });
+      }
+    } catch {
+      setTtsMakerTokenStatus('invalid');
+      setMessage({ text: 'Token 验证失败，请检查网络连接', type: 'error' });
+    } finally {
+      setTtsMakerTokenValidating(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -192,10 +208,6 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
   }, []);
 
   useEffect(() => {
-    setKokoroUseLocal(settings.kokoroUseLocal ?? getUseLocalModels());
-  }, [settings.kokoroUseLocal]);
-
-  useEffect(() => {
     const handleSettingsChange = (e: Event) => {
       const detail = (e as CustomEvent<UserSettings>).detail;
       if (detail && isMountedRef.current) {
@@ -205,6 +217,27 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
     window.addEventListener('settingsChanged', handleSettingsChange);
     return () => window.removeEventListener('settingsChanged', handleSettingsChange);
   }, []);
+
+  useEffect(() => {
+    if (settings.ttsEngine === 'ttsMaker' || settings.ttsEngine === 'auto') {
+      const token = settings.ttsMakerToken || ttsMakerService.getDemoToken();
+      ttsMakerService.fetchVoices(token).then(voices => {
+        if (isMountedRef.current) setTtsMakerVoices(voices);
+      });
+      if (!settings.ttsMakerToken) {
+        ttsMakerService.checkDemoTokenStatus().then(status => {
+          if (!isMountedRef.current) return;
+          if (status.valid && status.availableCharacters !== undefined && status.availableCharacters <= 0) {
+            setTtsMakerTokenStatus('exhausted');
+            setTtsMakerTokenInfo(status.error || `演示 Token 配额已用完，约 ${Math.ceil(status.resetDays || 0)} 天后重置`);
+          } else if (status.valid) {
+            setTtsMakerTokenStatus('valid');
+            setTtsMakerTokenInfo(`演示 Token 可用 ${status.availableCharacters?.toLocaleString()} / ${status.maxCharacters?.toLocaleString()} 字符`);
+          }
+        }).catch(() => {});
+      }
+    }
+  }, [settings.ttsEngine, settings.ttsMakerToken]);
 
   useEffect(() => {
     const unsubscribeStatus = supabaseService.onStatusChange(setIsSyncReady);
@@ -562,13 +595,15 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                 <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">TTS 引擎</label>
                 <select
                   value={settings.ttsEngine || 'auto'}
-                  onChange={(e) => handleUpdate('ttsEngine', e.target.value as 'auto' | 'elevenlabs' | 'kokoro' | 'webSpeech')}
+                  onChange={(e) => handleUpdate('ttsEngine', e.target.value as 'auto' | 'elevenlabs' | 'minimax' | 'ttsMaker' | 'edgeTts' | 'webSpeech')}
                   className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-blue-100 w-full cursor-pointer"
                   disabled={loading}
                 >
-                  <option value="auto">自动选择 (ElevenLabs → Kokoro → 浏览器原生)</option>
+                  <option value="auto">自动选择 (ElevenLabs → MiniMax → TTSMaker → EdgeTTS → 浏览器原生)</option>
                   <option value="elevenlabs">ElevenLabs (最高质量，缓存后不消耗额度)</option>
-                  <option value="kokoro">Kokoro-82M (本地运行，免费无限使用)</option>
+                  <option value="minimax">MiniMax (直连 API，高质量多语言)</option>
+                  <option value="ttsMaker">TTSMaker (免费 TTS 服务，需 Token)</option>
+                  <option value="edgeTts">EdgeTTS (微软免费语音，无需密钥)</option>
                   <option value="webSpeech">浏览器原生语音 (无需下载)</option>
                 </select>
                 <p className="text-[10px] text-gray-500">自动模式按优先级回退；手动选择某引擎时，失败仍会回退到浏览器原生语音</p>
@@ -694,194 +729,346 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                   </div>
                 </div>
               )}
-              {(settings.ttsEngine === 'kokoro' || settings.ttsEngine === 'auto') && (
-                <div className="space-y-4 p-4 bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl">
+              {(settings.ttsEngine === 'minimax' || settings.ttsEngine === 'auto') && (
+                <div className="space-y-4 p-4 bg-gradient-to-br from-purple-50 to-violet-50 rounded-2xl">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="text-sm">🤖</span>
-                    <h4 className="text-xs font-black text-emerald-700 uppercase tracking-widest">Kokoro-82M 配置</h4>
+                    <span className="text-sm">🎯</span>
+                    <h4 className="text-xs font-black text-purple-700 uppercase tracking-widest">MiniMax 配置</h4>
                   </div>
                   <div className="flex flex-col gap-2">
-                    <div className="flex items-center justify-between">
-                      <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">模型来源</label>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => handleToggleKokoroLocal(false)}
-                          className={`text-[10px] font-bold px-3 py-1 rounded-full transition-colors ${!kokoroUseLocal ? 'bg-emerald-500 text-white' : 'bg-gray-200 text-gray-600'}`}
-                        >
-                          在线下载
-                        </button>
-                        <button
-                          onClick={() => handleToggleKokoroLocal(true)}
-                          className={`text-[10px] font-bold px-3 py-1 rounded-full transition-colors ${kokoroUseLocal ? 'bg-emerald-500 text-white' : 'bg-gray-200 text-gray-600'}`}
-                        >
-                          本地加载
-                        </button>
-                      </div>
-                    </div>
-                    {kokoroUseLocal && (
-                      <div className="bg-white rounded-xl p-3 border border-emerald-200">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-[10px] font-black text-emerald-700 uppercase tracking-widest">本地模型说明</span>
-                          <button
-                            onClick={() => setShowLocalModelHelp(!showLocalModelHelp)}
-                            className="text-[10px] font-bold text-emerald-500 hover:text-emerald-700"
-                          >
-                            {showLocalModelHelp ? '收起' : '查看下载说明'}
-                          </button>
-                        </div>
-                        {showLocalModelHelp ? (
-                          <div className="text-[10px] text-gray-600 space-y-2 mt-2">
-                            <p className="font-bold text-gray-800">1. 下载模型文件</p>
-                            <p>从以下任一地址下载（需科学上网）：</p>
-                            <div className="bg-gray-50 rounded-lg p-2 font-mono text-[9px] break-all">
-                              <p>https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/tree/main</p>
-                              <p className="mt-1">https://hf-mirror.com/onnx-community/Kokoro-82M-v1.0-ONNX/tree/main</p>
-                            </div>
-                            <p className="font-bold text-gray-800 mt-2">2. 需要下载的文件</p>
-                            <div className="bg-gray-50 rounded-lg p-2 font-mono text-[9px] space-y-0.5">
-                              <p>config.json</p>
-                              <p>tokenizer.json</p>
-                              <p>tokenizer_config.json</p>
-                              <p>special_tokens_map.json</p>
-                              <p>onnx/model_q8.onnx (~82MB)</p>
-                              <p>voices/af_heart.bin</p>
-                              <p>voices/af_bella.bin</p>
-                              <p>voices/af_nicole.bin</p>
-                              <p>voices/am_michael.bin</p>
-                              <p>...（其他需要的语音 .bin 文件）</p>
-                            </div>
-                            <p className="font-bold text-gray-800 mt-2">3. 放置到项目目录</p>
-                            <div className="bg-gray-50 rounded-lg p-2 font-mono text-[9px]">
-                              <p>public/models/onnx-community/Kokoro-82M-v1.0-ONNX/</p>
-                              <p>├── config.json</p>
-                              <p>├── tokenizer.json</p>
-                              <p>├── tokenizer_config.json</p>
-                              <p>├── special_tokens_map.json</p>
-                              <p>├── onnx/</p>
-                              <p>│   └── model_q8.onnx</p>
-                              <p>└── voices/</p>
-                              <p>    ├── af_heart.bin</p>
-                              <p>    ├── af_bella.bin</p>
-                              <p>    └── ...</p>
-                            </div>
-                            <p className="font-bold text-gray-800 mt-2">4. 重新构建部署</p>
-                            <div className="bg-gray-50 rounded-lg p-2 font-mono text-[9px]">
-                              <p>npm run build</p>
-                              <p>git add . && git commit -m "add local model"</p>
-                              <p>git push</p>
-                            </div>
-                          </div>
-                        ) : (
-                          <p className="text-[10px] text-gray-500">
-                            将模型文件下载到 <code className="bg-gray-100 px-1 rounded">public/models/</code> 目录，无需网络即可加载。点击"查看下载说明"获取详细步骤。
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <div className="flex items-center justify-between">
-                      <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">模型状态</label>
-                      <div className="flex items-center gap-2">
-                        {kokoroModelStatus === 'loaded' && (
-                          <span className="text-[10px] font-bold text-green-600 bg-green-100 px-2 py-0.5 rounded-full">✓ 已加载</span>
-                        )}
-                        {kokoroModelStatus === 'loading' && (
-                          <span className="text-[10px] font-bold text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full">⏳ 加载中...</span>
-                        )}
-                        {kokoroModelStatus === 'error' && (
-                          <span className="text-[10px] font-bold text-red-600 bg-red-100 px-2 py-0.5 rounded-full">✗ 加载失败</span>
-                        )}
-                      </div>
+                    <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">API 密钥</label>
+                    <div className="relative">
+                      <input
+                        type={showMiniMaxKey ? 'text' : 'password'}
+                        value={settings.minimaxApiKey || ''}
+                        onChange={(e) => handleUpdate('minimaxApiKey', e.target.value)}
+                        placeholder="输入 MiniMax API 密钥"
+                        className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 pr-10 border-none focus:ring-2 focus:ring-purple-100 w-full"
+                        disabled={loading}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowMiniMaxKey(!showMiniMaxKey)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                      >
+                        {showMiniMaxKey ? '🙈' : '👁️'}
+                      </button>
                     </div>
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={handleLoadKokoroModel}
-                        disabled={kokoroModelStatus === 'loading'}
-                        className="flex-1 text-sm font-bold text-white bg-emerald-500 hover:bg-emerald-600 disabled:bg-gray-300 rounded-xl px-4 py-2 transition-colors"
+                        onClick={async () => {
+                          if (!settings.minimaxApiKey?.trim()) {
+                            setMessage({ text: '请先输入 MiniMax API 密钥', type: 'error' });
+                            return;
+                          }
+                          setMiniMaxKeyValidating(true);
+                          setMiniMaxKeyStatus('idle');
+                          try {
+                            const result = await minimaxTtsService.validateApiKey(settings.minimaxApiKey!);
+                            setMiniMaxKeyStatus(result.valid ? 'valid' : 'invalid');
+                            setMessage({
+                              text: result.valid ? 'MiniMax API 密钥验证通过' : `验证失败: ${result.error}`,
+                              type: result.valid ? 'success' : 'error',
+                            });
+                          } catch (err) {
+                            setMiniMaxKeyStatus('invalid');
+                            setMessage({ text: `验证失败: ${err instanceof Error ? err.message : String(err)}`, type: 'error' });
+                          } finally {
+                            setMiniMaxKeyValidating(false);
+                          }
+                        }}
+                        disabled={minimaxKeyValidating || !settings.minimaxApiKey?.trim()}
+                        className="text-[10px] font-bold text-purple-600 hover:text-purple-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                       >
-                        {kokoroModelStatus === 'loading' ? `加载中... ${kokoroLoadProgress}%` : kokoroModelStatus === 'loaded' ? '重新加载模型' : kokoroUseLocal ? '加载本地模型' : '加载模型 (~82MB)'}
+                        {minimaxKeyValidating ? '验证中...' : '验证密钥'}
                       </button>
+                      {minimaxKeyStatus === 'valid' && (
+                        <span className="text-[10px] font-bold text-green-600 bg-green-100 px-2 py-0.5 rounded-full">✓ 有效</span>
+                      )}
+                      {minimaxKeyStatus === 'invalid' && (
+                        <span className="text-[10px] font-bold text-red-600 bg-red-100 px-2 py-0.5 rounded-full">✗ 无效</span>
+                      )}
                     </div>
-                    {kokoroModelStatus === 'loading' && (
-                      <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
-                        <div
-                          className="bg-emerald-500 h-full rounded-full transition-all duration-300 ease-out"
-                          style={{ width: `${kokoroLoadProgress}%` }}
-                        />
-                      </div>
-                    )}
                     <p className="text-[10px] text-gray-500">
-                      {kokoroUseLocal
-                        ? '从项目 public/models/ 目录加载模型，无需网络连接'
-                        : '首次加载需下载约 82MB 模型文件，后续自动缓存。Safari/iOS 自动使用 WASM 兼容模式。'
-                      }
+                      在 <a href="https://platform.minimaxi.com/" target="_blank" rel="noopener noreferrer" className="text-purple-500 underline">platform.minimaxi.com</a> 获取 API 密钥，MiniMax 提供免费额度
                     </p>
                   </div>
                   <div className="flex flex-col gap-2">
-                    <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Kokoro 语音</label>
+                    <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">MiniMax 语音</label>
                     <select
-                      value={settings.kokoroVoice || 'af_heart'}
-                      onChange={(e) => handleUpdate('kokoroVoice', e.target.value)}
-                      className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-emerald-100 w-full cursor-pointer"
+                      value={settings.minimaxVoiceId || minimaxTtsService.getDefaultVoiceId()}
+                      onChange={(e) => handleUpdate('minimaxVoiceId', e.target.value)}
+                      className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-purple-100 w-full cursor-pointer"
                       disabled={loading}
                     >
-                      <optgroup label="🇺🇸 美式英语 - 女声（推荐）">
-                        {kokoroVoices.filter(v => v.accent === 'american' && v.gender === 'female').map(v => (
-                          <option key={v.id} value={v.id}>{v.name} ({v.id}) - 评级: {v.grade}</option>
-                        ))}
-                      </optgroup>
-                      <optgroup label="🇺🇸 美式英语 - 男声">
-                        {kokoroVoices.filter(v => v.accent === 'american' && v.gender === 'male').map(v => (
-                          <option key={v.id} value={v.id}>{v.name} ({v.id}) - 评级: {v.grade}</option>
-                        ))}
-                      </optgroup>
-                      <optgroup label="🇬🇧 英式英语 - 女声">
-                        {kokoroVoices.filter(v => v.accent === 'british' && v.gender === 'female').map(v => (
-                          <option key={v.id} value={v.id}>{v.name} ({v.id}) - 评级: {v.grade}</option>
-                        ))}
-                      </optgroup>
-                      <optgroup label="🇬🇧 英式英语 - 男声">
-                        {kokoroVoices.filter(v => v.accent === 'british' && v.gender === 'male').map(v => (
-                          <option key={v.id} value={v.id}>{v.name} ({v.id}) - 评级: {v.grade}</option>
-                        ))}
-                      </optgroup>
+                      {minimaxVoices.map(v => (
+                        <option key={v.id} value={v.id}>{v.title} - {v.description}</option>
+                      ))}
                     </select>
                     <p className="text-[10px] text-gray-500">
-                      af_heart (评级 A) 和 af_bella (评级 A-) 音质最佳
+                      Expressive Narrator 为推荐英语女声，音质清晰自然；也支持中文等多种语言
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">缓存管理</label>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={async () => {
+                          const stats = await minimaxTtsService.getCacheStats();
+                          setMiniMaxCacheStats(stats);
+                        }}
+                        className="text-[10px] font-bold text-purple-600 hover:text-purple-800 transition-colors"
+                      >
+                        查看缓存
+                      </button>
+                      {minimaxCacheStats && (
+                        <span className="text-[10px] text-gray-500">
+                          {minimaxCacheStats.count} 条 · {minimaxTtsService.formatSize(minimaxCacheStats.totalSize)}
+                        </span>
+                      )}
+                      {minimaxCacheStats && minimaxCacheStats.count > 0 && (
+                        <button
+                          onClick={async () => {
+                            const count = await minimaxTtsService.clearCache();
+                            setMiniMaxCacheStats({ count: 0, totalSize: 0 });
+                            setMessage({ text: `已清理 ${count} 条 MiniMax 音频缓存`, type: 'success' });
+                          }}
+                          className="text-[10px] font-bold text-red-500 hover:text-red-700 transition-colors"
+                        >
+                          清理缓存
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-gray-500">
+                      MiniMax 生成的音频会自动缓存，再次朗读相同内容直接使用缓存
+                    </p>
+                  </div>
+                </div>
+              )}
+              {(settings.ttsEngine === 'ttsMaker' || settings.ttsEngine === 'auto') && (
+                <div className="space-y-4 p-4 bg-gradient-to-br from-teal-50 to-emerald-50 rounded-2xl">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-sm">🔊</span>
+                    <h4 className="text-xs font-black text-teal-700 uppercase tracking-widest">TTSMaker 配置</h4>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">API Token</label>
+                    <div className="relative">
+                      <input
+                        type={showTtsMakerToken ? 'text' : 'password'}
+                        value={settings.ttsMakerToken || ''}
+                        onChange={(e) => {
+                          handleUpdate('ttsMakerToken', e.target.value);
+                          setTtsMakerTokenStatus('idle');
+                          setTtsMakerTokenInfo('');
+                        }}
+                        placeholder="输入 TTSMaker Token（留空使用演示 Token）"
+                        className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 pr-20 border-none focus:ring-2 focus:ring-teal-100 w-full"
+                        disabled={loading}
+                      />
+                      <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                        <button
+                          onClick={() => setShowTtsMakerToken(!showTtsMakerToken)}
+                          className="text-[10px] font-bold text-gray-400 hover:text-gray-600 px-2 py-1"
+                        >
+                          {showTtsMakerToken ? '隐藏' : '显示'}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        onClick={() => {
+                          const token = settings.ttsMakerToken || ttsMakerService.getDemoToken();
+                          handleValidateTtsMakerToken(token);
+                          ttsMakerService.fetchVoices(token, true).then(voices => {
+                            if (isMountedRef.current) setTtsMakerVoices(voices);
+                          });
+                        }}
+                        disabled={ttsMakerTokenValidating}
+                        className="text-[10px] font-bold text-teal-600 hover:text-teal-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {ttsMakerTokenValidating ? '验证中...' : '验证并刷新语音列表'}
+                      </button>
+                      {ttsMakerTokenStatus === 'valid' && (
+                        <span className="text-[10px] font-bold text-green-600 bg-green-100 px-2 py-0.5 rounded-full">✓ 有效</span>
+                      )}
+                      {ttsMakerTokenStatus === 'invalid' && (
+                        <span className="text-[10px] font-bold text-red-600 bg-red-100 px-2 py-0.5 rounded-full">✗ 无效</span>
+                      )}
+                      {ttsMakerTokenStatus === 'exhausted' && (
+                        <span className="text-[10px] font-bold text-orange-600 bg-orange-100 px-2 py-0.5 rounded-full">⚠️ 配额用尽</span>
+                      )}
+                    </div>
+                    {ttsMakerTokenInfo && (
+                      <p className={`text-[10px] font-bold px-2 py-1 rounded ${
+                        ttsMakerTokenStatus === 'exhausted' ? 'text-orange-600 bg-orange-50' :
+                        ttsMakerTokenStatus === 'valid' ? 'text-teal-600 bg-teal-50' :
+                        'text-red-600 bg-red-50'
+                      }`}>
+                        {ttsMakerTokenInfo}
+                      </p>
+                    )}
+                    <p className="text-[10px] text-gray-500">
+                      在 <a href="https://ttsmaker.cn" target="_blank" rel="noopener noreferrer" className="text-teal-600 underline">ttsmaker.cn</a> 注册获取 Token。留空自动使用演示 Token（仅供测试）
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">TTSMaker 语音</label>
+                    <select
+                      value={settings.ttsMakerVoiceId || ttsMakerService.getDefaultVoiceId()}
+                      onChange={(e) => handleUpdate('ttsMakerVoiceId', Number(e.target.value))}
+                      className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-teal-100 w-full cursor-pointer"
+                      disabled={loading}
+                    >
+                      {ttsMakerVoices.map(v => (
+                        <option key={v.id} value={v.id}>{v.name} - 限制 {v.limitText.toLocaleString()} 字符</option>
+                      ))}
+                    </select>
+                    <p className="text-[10px] text-gray-500">
+                      长文本语音适合段落朗读，快速语音响应更快
                     </p>
                   </div>
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center justify-between">
                       <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">音频缓存</label>
                       <button
-                        onClick={loadKokoroCacheStats}
-                        className="text-[10px] font-bold text-emerald-500 hover:text-emerald-700 transition-colors"
+                        onClick={loadTtsMakerCacheStats}
+                        className="text-[10px] font-bold text-teal-500 hover:text-teal-700 transition-colors"
                       >
                         🔄 刷新统计
                       </button>
                     </div>
                     <div className="flex items-center justify-between bg-white rounded-xl px-4 py-3 border border-gray-200">
                       <div>
-                        {kokoroCacheStats ? (
+                        {ttsMakerCacheStats ? (
                           <p className="text-sm font-bold text-gray-900">
-                            {kokoroCacheStats.count} 条缓存 · {elevenLabsCacheService.formatSize(kokoroCacheStats.totalSize)}
+                            {ttsMakerCacheStats.count} 条缓存 · {ttsMakerService.formatSize(ttsMakerCacheStats.totalSize)}
                           </p>
                         ) : (
                           <p className="text-sm text-gray-400">点击刷新查看缓存统计</p>
                         )}
                       </div>
                       <button
-                        onClick={handleClearKokoroCache}
-                        disabled={!kokoroCacheStats || kokoroCacheStats.count === 0}
+                        onClick={handleClearTtsMakerCache}
+                        disabled={!ttsMakerCacheStats || ttsMakerCacheStats.count === 0}
                         className="text-[10px] font-bold text-red-500 hover:text-red-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                       >
                         清理缓存
                       </button>
                     </div>
                     <p className="text-[10px] text-gray-500">
-                      Kokoro 生成的音频会自动缓存，再次朗读相同内容直接使用缓存
+                      TTSMaker 生成的音频会自动缓存，再次朗读相同内容直接使用缓存
                     </p>
+                  </div>
+                </div>
+              )}
+              {(settings.ttsEngine === 'edgeTts' || settings.ttsEngine === 'auto') && (
+                <div className="space-y-4 p-4 bg-gradient-to-br from-sky-50 to-blue-50 rounded-2xl">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-sm">🌐</span>
+                    <h4 className="text-xs font-black text-sky-700 uppercase tracking-widest">EdgeTTS 配置</h4>
+                  </div>
+                  <p className="text-[10px] text-gray-500">
+                    微软 Edge 免费语音合成，无需注册和密钥，高质量自然语音。通过 WebSocket 直连微软服务器，可能受网络环境影响
+                  </p>
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">EdgeTTS 语音</label>
+                    <select
+                      value={settings.edgeTtsVoiceId || edgeTtsService.getDefaultVoice()}
+                      onChange={(e) => handleUpdate('edgeTtsVoiceId', e.target.value)}
+                      className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-sky-100 w-full cursor-pointer"
+                      disabled={loading}
+                    >
+                      {EdgePopularVoices.map(v => (
+                        <option key={v.shortName} value={v.shortName}>{v.friendlyName} ({v.gender === 'Female' ? '女' : '男'})</option>
+                      ))}
+                    </select>
+                    <p className="text-[10px] text-gray-500">
+                      支持美式英语和英式英语的多种自然语音
+                    </p>
+                  </div>
+                </div>
+              )}
+              {(settings.ttsEngine === 'elevenlabs' || settings.ttsEngine === 'minimax' || settings.ttsEngine === 'auto') && (
+                <div className="space-y-4 p-4 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-sm">☁️</span>
+                    <h4 className="text-xs font-black text-amber-700 uppercase tracking-widest">云端缓存 (Supabase Storage)</h4>
+                  </div>
+                  <p className="text-[10px] text-gray-500">
+                    ElevenLabs、MiniMax 生成的音频会自动上传到 Supabase 云端存储，实现跨设备共享。再次请求相同语音时优先从云端下载，避免重复调用 API
+                  </p>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={async () => {
+                          setCloudCacheLoading(true);
+                          try {
+                            const bucketResult = await ttsCloudCacheService.ensureBucket();
+                            if (!bucketResult.success) {
+                              setMessage({ text: bucketResult.message, type: 'error' });
+                              setCloudCacheLoading(false);
+                              return;
+                            }
+                            const stats = await ttsCloudCacheService.getStats();
+                            setCloudCacheStats(stats);
+                          } catch (err) {
+                            setMessage({ text: `获取云端缓存信息失败: ${err instanceof Error ? err.message : String(err)}`, type: 'error' });
+                          } finally {
+                            setCloudCacheLoading(false);
+                          }
+                        }}
+                        disabled={cloudCacheLoading}
+                        className="text-[10px] font-bold text-amber-600 hover:text-amber-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {cloudCacheLoading ? '加载中...' : '查看云端缓存'}
+                      </button>
+                      {!ttsCloudCacheService.isAvailable() && (
+                        <span className="text-[10px] font-bold text-orange-600 bg-orange-100 px-2 py-0.5 rounded-full">⚠️ Supabase 未连接</span>
+                      )}
+                    </div>
+                    {cloudCacheStats && (
+                      <div className="space-y-2 p-3 bg-white/60 rounded-xl">
+                        <div className="grid grid-cols-2 gap-2 text-center">
+                          <div className="p-2 bg-indigo-50 rounded-lg">
+                            <div className="text-[10px] font-bold text-indigo-600">ElevenLabs</div>
+                            <div className="text-xs font-black text-indigo-800">{cloudCacheStats.elevenlabs.count} 条</div>
+                            <div className="text-[10px] text-indigo-500">{ttsCloudCacheService.formatSize(cloudCacheStats.elevenlabs.totalSize)}</div>
+                          </div>
+                          <div className="p-2 bg-purple-50 rounded-lg">
+                            <div className="text-[10px] font-bold text-purple-600">MiniMax</div>
+                            <div className="text-xs font-black text-purple-800">{cloudCacheStats.minimax.count} 条</div>
+                            <div className="text-[10px] text-purple-500">{ttsCloudCacheService.formatSize(cloudCacheStats.minimax.totalSize)}</div>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between pt-1 border-t border-amber-200">
+                          <span className="text-[10px] text-gray-500">
+                            合计 {cloudCacheStats.total.count} 条 · {ttsCloudCacheService.formatSize(cloudCacheStats.total.totalSize)}
+                          </span>
+                          {cloudCacheStats.total.count > 0 && (
+                            <button
+                              onClick={async () => {
+                                setCloudCacheLoading(true);
+                                try {
+                                  const result = await ttsCloudCacheService.clearAll();
+                                  const total = result.elevenlabs + result.minimax;
+                                  setCloudCacheStats(null);
+                                  setMessage({ text: `已清理云端缓存 ${total} 个文件`, type: 'success' });
+                                } catch (err) {
+                                  setMessage({ text: `清理失败: ${err instanceof Error ? err.message : String(err)}`, type: 'error' });
+                                } finally {
+                                  setCloudCacheLoading(false);
+                                }
+                              }}
+                              disabled={cloudCacheLoading}
+                              className="text-[10px] font-bold text-red-500 hover:text-red-700 disabled:opacity-30 transition-colors"
+                            >
+                              清理全部云端缓存
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

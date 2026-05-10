@@ -1,13 +1,16 @@
 /**
- * Gemini Service with ElevenLabs + Kokoro + Web Speech API
+ * Gemini Service with ElevenLabs + MiniMax + TTSMaker + EdgeTTS + Web Speech API
  * 
  * TTS 调度策略：
  * 1. 优先使用 ElevenLabs API（最高质量，缓存后不消耗额度）
- * 2. ElevenLabs 失败时降级到 Kokoro-82M（本地运行，免费无限使用）
- * 3. Kokoro 不可用时降级到浏览器原生语音（iOS 自动选择最佳音质）
+ * 2. ElevenLabs 失败时降级到 MiniMax（直连 API，高质量多语言）
+ * 3. MiniMax 不可用时降级到 TTSMaker（免费 TTS 服务）
+ * 4. TTSMaker 不可用时降级到 EdgeTTS（微软免费语音，无需密钥）
+ * 5. EdgeTTS 不可用时降级到浏览器原生语音（iOS 自动选择最佳音质）
  */
 
 import { elevenLabsService } from './elevenLabsService';
+import { edgeTtsService } from './edgeTtsService';
 import { storageService } from './storage';
 
 const SPEAK_TIMEOUT = 10000;
@@ -204,10 +207,6 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
 
   window.speechSynthesis.cancel();
 
-  if (window.speechSynthesis.paused) {
-    window.speechSynthesis.resume();
-  }
-
   if (isIOS()) {
     await new Promise(resolve => setTimeout(resolve, 150));
   }
@@ -354,7 +353,7 @@ const processQueue = async () => {
 };
 
 export const geminiService = {
-  async speak(text: string, voice?: string, loop: boolean = false): Promise<SpeakResult> {
+  async speak(text: string, loop: boolean = false): Promise<SpeakResult> {
     const settings = storageService.getSettings();
     const ttsEngine = settings.ttsEngine || 'auto';
     const speechRate = settings.speechRate ?? 1;
@@ -378,18 +377,55 @@ export const geminiService = {
       }
     };
 
-    const tryKokoro = async (): Promise<SpeakResult> => {
+    const tryMiniMax = async (): Promise<SpeakResult> => {
       try {
-        const { kokoroTtsService: kokoro } = await import('./kokoroTtsService');
-        const kokoroVoice = settings.kokoroVoice || kokoro.getDefaultVoiceId();
-        console.log(`🔊 [引擎] Kokoro-82M | [语音] ${kokoroVoice} | [循环] ${loop} | [语速] ${speechRate}`);
-        const result = await kokoro.speak(text, kokoroVoice, loop, speechRate);
+        const { minimaxTtsService } = await import('./minimaxTtsService');
+        const apiKey = settings.minimaxApiKey || '';
+        if (!apiKey.trim()) {
+          return { success: false, error: '未配置 MiniMax API 密钥' };
+        }
+        const voiceId = settings.minimaxVoiceId || minimaxTtsService.getDefaultVoiceId();
+        console.log(`🔊 [引擎] MiniMax | [语音] ${voiceId} | [循环] ${loop} | [语速] ${speechRate}`);
+        const result = await minimaxTtsService.speak(text, apiKey, voiceId, loop, speechRate);
         if (result.success) return { success: true };
-        console.warn('🔊 Kokoro 播放失败:', result.error);
+        console.warn('🔊 MiniMax 播放失败:', result.error);
         return { success: false, error: result.error };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.warn('🔊 Kokoro 出错:', msg);
+        console.warn('🔊 MiniMax 出错:', msg);
+        return { success: false, error: msg };
+      }
+    };
+
+    const tryTtsMaker = async (): Promise<SpeakResult> => {
+      try {
+        const { ttsMakerService } = await import('./ttsMakerService');
+        const token = settings.ttsMakerToken || ttsMakerService.getDemoToken();
+        const voiceId = settings.ttsMakerVoiceId || ttsMakerService.getDefaultVoiceId();
+        console.log(`🔊 [引擎] TTSMaker | [语音] ${voiceId} | [循环] ${loop} | [语速] ${speechRate}`);
+        const result = await ttsMakerService.speak(text, token, voiceId, loop, speechRate);
+        if (result.success) return { success: true };
+        console.warn('🔊 TTSMaker 播放失败:', result.error);
+        return { success: false, error: result.error };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('🔊 TTSMaker 出错:', msg);
+        return { success: false, error: msg };
+      }
+    };
+
+    const tryEdgeTts = async (): Promise<SpeakResult> => {
+      try {
+        const voice = settings.edgeTtsVoiceId || edgeTtsService.getDefaultVoice();
+        const rateSSML = edgeTtsService.speechRateToSSML(speechRate);
+        console.log(`🔊 [引擎] EdgeTTS | [语音] ${voice} | [循环] ${loop} | [语速] ${rateSSML}`);
+        const result = await edgeTtsService.speak(text, voice, rateSSML, loop);
+        if (result.success) return { success: true };
+        console.warn('🔊 EdgeTTS 播放失败:', result.error);
+        return { success: false, error: result.error };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('🔊 EdgeTTS 出错:', msg);
         return { success: false, error: msg };
       }
     };
@@ -406,15 +442,19 @@ export const geminiService = {
     if (ttsEngine === 'auto') {
       const elResult = await tryElevenLabs();
       if (elResult.success) return elResult;
-      console.warn('🔊 [auto] ElevenLabs 不可用，回退到 Kokoro');
+      console.warn('🔊 [auto] ElevenLabs 不可用，回退到 MiniMax');
 
-      if (!isIOS()) {
-        const kokoroResult = await tryKokoro();
-        if (kokoroResult.success) return kokoroResult;
-        console.warn('🔊 [auto] Kokoro 不可用，回退到 Web Speech API');
-      } else {
-        console.warn('🔊 [auto] iOS 设备，跳过 Kokoro，直接使用 Web Speech API');
-      }
+      const mmResult = await tryMiniMax();
+      if (mmResult.success) return mmResult;
+      console.warn('🔊 [auto] MiniMax 不可用，回退到 TTSMaker');
+
+      const tmResult = await tryTtsMaker();
+      if (tmResult.success) return tmResult;
+      console.warn('🔊 [auto] TTSMaker 不可用，回退到 EdgeTTS');
+
+      const edgeResult = await tryEdgeTts();
+      if (edgeResult.success) return edgeResult;
+      console.warn('🔊 [auto] EdgeTTS 不可用，回退到 Web Speech API');
 
       return tryWebSpeech();
     }
@@ -422,21 +462,46 @@ export const geminiService = {
     if (ttsEngine === 'elevenlabs') {
       const result = await tryElevenLabs();
       if (result.success) return result;
-      console.warn('🔊 ElevenLabs 失败，回退到 Kokoro');
-      if (!isIOS()) {
-        const kokoroResult = await tryKokoro();
-        if (kokoroResult.success) return kokoroResult;
-        console.warn('🔊 Kokoro 失败，回退到 Web Speech API');
-      } else {
-        console.warn('🔊 iOS 设备，跳过 Kokoro，直接使用 Web Speech API');
-      }
+      console.warn('🔊 ElevenLabs 失败，回退到 MiniMax');
+      const mmResult = await tryMiniMax();
+      if (mmResult.success) return mmResult;
+      console.warn('🔊 MiniMax 失败，回退到 TTSMaker');
+      const tmResult = await tryTtsMaker();
+      if (tmResult.success) return tmResult;
+      console.warn('🔊 TTSMaker 失败，回退到 EdgeTTS');
+      const edgeResult = await tryEdgeTts();
+      if (edgeResult.success) return edgeResult;
+      console.warn('🔊 EdgeTTS 失败，回退到 Web Speech API');
       return tryWebSpeech();
     }
 
-    if (ttsEngine === 'kokoro') {
-      const result = await tryKokoro();
+    if (ttsEngine === 'minimax') {
+      const result = await tryMiniMax();
       if (result.success) return result;
-      console.warn('🔊 Kokoro 失败，回退到 Web Speech API');
+      console.warn('🔊 MiniMax 失败，回退到 TTSMaker');
+      const tmResult = await tryTtsMaker();
+      if (tmResult.success) return tmResult;
+      console.warn('🔊 TTSMaker 失败，回退到 EdgeTTS');
+      const edgeResult = await tryEdgeTts();
+      if (edgeResult.success) return edgeResult;
+      console.warn('🔊 EdgeTTS 失败，回退到 Web Speech API');
+      return tryWebSpeech();
+    }
+
+    if (ttsEngine === 'ttsMaker') {
+      const result = await tryTtsMaker();
+      if (result.success) return result;
+      console.warn('🔊 TTSMaker 失败，回退到 EdgeTTS');
+      const edgeResult = await tryEdgeTts();
+      if (edgeResult.success) return edgeResult;
+      console.warn('🔊 EdgeTTS 失败，回退到 Web Speech API');
+      return tryWebSpeech();
+    }
+
+    if (ttsEngine === 'edgeTts') {
+      const result = await tryEdgeTts();
+      if (result.success) return result;
+      console.warn('🔊 EdgeTTS 失败，回退到 Web Speech API');
       return tryWebSpeech();
     }
 
@@ -451,11 +516,10 @@ export const geminiService = {
     speakGeneration++;
     loopActiveFlag = false;
     elevenLabsService.stop();
-    import('./kokoroTtsService').then(({ kokoroTtsService }) => kokoroTtsService.stop()).catch(() => {});
+    edgeTtsService.stop();
+    import('./minimaxTtsService').then(({ minimaxTtsService }) => minimaxTtsService.stop()).catch(() => {});
+    import('./ttsMakerService').then(({ ttsMakerService }) => ttsMakerService.stop()).catch(() => {});
     window.speechSynthesis.cancel();
-    if (window.speechSynthesis.paused) {
-      window.speechSynthesis.resume();
-    }
     currentUtterance = null;
     taskQueue = [];
     isProcessing = false;
@@ -464,7 +528,8 @@ export const geminiService = {
   setPlaybackRate(rate: number): void {
     const clampedRate = Math.max(0.1, Math.min(10, rate));
     elevenLabsService.setPlaybackRate(clampedRate);
-    import('./kokoroTtsService').then(({ kokoroTtsService }) => kokoroTtsService.setPlaybackRate(clampedRate)).catch(() => {});
+    import('./minimaxTtsService').then(({ minimaxTtsService }) => minimaxTtsService.setPlaybackRate(clampedRate)).catch(() => {});
+    import('./ttsMakerService').then(({ ttsMakerService }) => ttsMakerService.setPlaybackRate(clampedRate)).catch(() => {});
     if (currentUtterance) {
       currentUtterance.rate = clampedRate;
       currentUtterance.pitch = getPitchForRate(clampedRate);
@@ -481,11 +546,11 @@ export const geminiService = {
     if (ttsEngine === 'auto') {
       const apiKey = settings.elevenLabsApiKey;
       if (apiKey && apiKey.trim()) {
-        const voiceId = settings.elevenLabsVoiceId || 'JBFqnCBsd6RMkjVzb';
+        const voiceId = settings.elevenLabsVoiceId || 'JBFqnCBsd6RMkjVDRZzb';
         const popularVoice = elevenLabsService.getPopularVoices().find(v => v.voice_id === voiceId);
-        return { engine: '自动 (ElevenLabs → Kokoro → Web Speech)', voiceName: popularVoice?.name || voiceId, isLocal: false };
+        return { engine: '自动 (ElevenLabs → MiniMax → TTSMaker → EdgeTTS → Web Speech)', voiceName: popularVoice?.name || voiceId, isLocal: false };
       }
-      return { engine: '自动 (Kokoro → Web Speech)', voiceName: settings.kokoroVoice || 'af_heart', isLocal: true };
+      return { engine: '自动 (MiniMax → TTSMaker → EdgeTTS → Web Speech)', voiceName: settings.minimaxVoiceId || 'English_expressive_narrator', isLocal: false };
     }
     if (ttsEngine === 'elevenlabs') {
       const voiceId = settings.elevenLabsVoiceId || 'JBFqnCBsd6RMkjVDRZzb';
@@ -496,9 +561,21 @@ export const geminiService = {
       const popularVoice = elevenLabsService.getPopularVoices().find(v => v.voice_id === voiceId);
       return { engine: 'ElevenLabs', voiceName: popularVoice?.name || voiceId, isLocal: false };
     }
-    if (ttsEngine === 'kokoro') {
-      const voiceId = settings.kokoroVoice || 'af_heart';
-      return { engine: 'Kokoro-82M', voiceName: voiceId, isLocal: true };
+    if (ttsEngine === 'minimax') {
+      const voiceId = settings.minimaxVoiceId || 'English_expressive_narrator';
+      if (!settings.minimaxApiKey || !settings.minimaxApiKey.trim()) {
+        return { engine: 'MiniMax (未配置，将回退)', voiceName: '未配置', isLocal: false };
+      }
+      return { engine: 'MiniMax (直连)', voiceName: voiceId, isLocal: false };
+    }
+    if (ttsEngine === 'ttsMaker') {
+      const voiceId = settings.ttsMakerVoiceId || 663;
+      return { engine: 'TTSMaker', voiceName: String(voiceId), isLocal: false };
+    }
+    if (ttsEngine === 'edgeTts') {
+      const voice = settings.edgeTtsVoiceId || edgeTtsService.getDefaultVoice();
+      const edgeVoice = edgeTtsService.getVoices().find(v => v.shortName === voice);
+      return { engine: 'EdgeTTS', voiceName: edgeVoice?.friendlyName || voice, isLocal: false };
     }
     return { engine: 'Web Speech API', voiceName: settings.webSpeechVoice || '自动选择', isLocal: true };
   },

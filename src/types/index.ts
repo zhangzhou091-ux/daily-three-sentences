@@ -48,13 +48,12 @@ export type ViewType = 'study' | 'manage' | 'achievements' | 'settings';
 // 学习步骤类型
 export type StudyStep = 'learn' | 'review' | 'dictation';
 
-export type TTSEngine = 'elevenlabs' | 'kokoro' | 'webSpeech' | 'auto';
+export type TTSEngine = 'elevenlabs' | 'minimax' | 'ttsMaker' | 'edgeTts' | 'webSpeech' | 'auto';
 
 export interface UserSettings {
   dailyTarget: number;
   dailyLearnTarget: number;
   dailyReviewTarget: number;
-  voiceName: 'Kore' | 'Puck' | 'Charon' | 'Zephyr' | 'Fenrir';
   webSpeechVoice: string;
   ttsEngine: TTSEngine;
   speechRate: number;
@@ -65,8 +64,11 @@ export interface UserSettings {
   updatedAt: number;
   elevenLabsApiKey?: string;
   elevenLabsVoiceId?: string;
-  kokoroVoice?: string;
-  kokoroUseLocal?: boolean;
+  minimaxApiKey?: string;
+  minimaxVoiceId?: string;
+  ttsMakerToken?: string;
+  ttsMakerVoiceId?: number;
+  edgeTtsVoiceId?: string;
 }
 
 // 用户统计接口

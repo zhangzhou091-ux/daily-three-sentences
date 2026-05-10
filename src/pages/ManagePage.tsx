@@ -763,10 +763,14 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
             className="w-full p-6 bg-gray-50 rounded-[1.8rem] border-none focus:ring-2 focus:ring-gray-200 outline-none text-lg font-bold" 
             rows={2} 
           />
-          <div className="grid grid-cols-2 gap-4">
-            <input value={newZh} onChange={(e) => setNewZh(e.target.value)} placeholder="中文翻译" className="px-6 py-4 bg-gray-50 rounded-2xl border-none focus:ring-2 focus:ring-gray-200 outline-none text-sm font-medium" />
-            <input value={newTags} onChange={(e) => setNewTags(e.target.value)} placeholder="标签 (用逗号分隔)" className="px-6 py-4 bg-gray-50 rounded-2xl border-none focus:ring-2 focus:ring-gray-200 outline-none text-sm font-medium" />
-          </div>
+          <textarea 
+            value={newZh} 
+            onChange={(e) => setNewZh(e.target.value)} 
+            placeholder="中文翻译..." 
+            className="w-full p-6 bg-gray-50 rounded-[1.8rem] border-none focus:ring-2 focus:ring-gray-200 outline-none text-lg font-bold" 
+            rows={2} 
+          />
+          <input value={newTags} onChange={(e) => setNewTags(e.target.value)} placeholder="标签 (用逗号分隔)" className="px-6 py-4 bg-gray-50 rounded-2xl border-none focus:ring-2 focus:ring-gray-200 outline-none text-sm font-medium" />
           
           {duplicateWarning.show && duplicateWarning.existing && (
             <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">

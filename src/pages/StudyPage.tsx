@@ -245,7 +245,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     if (loop) setSpeakingText(text);
 
     try {
-      await geminiService.speak(text, undefined, loop);
+      await geminiService.speak(text, loop);
       if (!loop) setSpeakingText(null);
     } catch (err: unknown) {
       setSpeakingText(null);

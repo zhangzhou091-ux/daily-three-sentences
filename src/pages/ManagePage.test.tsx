@@ -53,7 +53,7 @@ describe('ManagePage duplicate guard', () => {
     fireEvent.change(screen.getByPlaceholderText('录入精彩英文句子...'), {
       target: { value: 'Hello World' }
     });
-    fireEvent.change(screen.getByPlaceholderText('中文翻译'), {
+    fireEvent.change(screen.getByPlaceholderText('中文翻译...'), {
       target: { value: '新的翻译' }
     });
     fireEvent.click(screen.getByText('保存单条到数据库'));
