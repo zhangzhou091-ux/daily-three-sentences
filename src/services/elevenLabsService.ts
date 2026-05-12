@@ -73,6 +73,7 @@ let activePlaybackAudio: HTMLAudioElement | null = null;
 let voicesCache: { voices: ElevenLabsVoice[]; timestamp: number } | null = null;
 let validationCache: { key: string; valid: boolean; timestamp: number } | null = null;
 let audioGeneration = 0;
+let activeLoopUrls: string[] = [];
 
 let networkOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
 let lastConnectivityCheck = 0;
@@ -195,8 +196,24 @@ const POPULAR_VOICES: ElevenLabsVoice[] = [
   { voice_id: 'XB0fDUnXU5powFXDhCwa', name: 'Charlotte', labels: { accent: 'british', gender: 'female' } },
 ];
 
+const revokeAllLoopUrls = (): void => {
+  for (const url of activeLoopUrls) {
+    try { URL.revokeObjectURL(url); } catch { /* ignore */ }
+  }
+  activeLoopUrls = [];
+};
+
 const stopCurrentAudio = (): void => {
-  activePlaybackAudio = null;
+  if (activePlaybackAudio) {
+    try {
+      activePlaybackAudio.pause();
+      activePlaybackAudio.removeAttribute('src');
+      activePlaybackAudio.load();
+    } catch {
+      // ignore
+    }
+    activePlaybackAudio = null;
+  }
   if (currentAudioElement) {
     try {
       currentAudioElement.pause();
@@ -207,6 +224,7 @@ const stopCurrentAudio = (): void => {
     }
     currentAudioElement = null;
   }
+  revokeAllLoopUrls();
 };
 
 const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: number = 1): Promise<void> => {
@@ -228,17 +246,17 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
   currentAudioElement = audio;
 
   const cleanup = () => {
-    try {
-      URL.revokeObjectURL(url);
-    } catch {
-      // ignore
-    }
     if (currentAudioElement === audio) {
       currentAudioElement = null;
     }
     if (activePlaybackAudio === audio) {
       activePlaybackAudio = null;
     }
+    if (loop) {
+      const idx = activeLoopUrls.indexOf(url);
+      if (idx >= 0) activeLoopUrls.splice(idx, 1);
+    }
+    try { URL.revokeObjectURL(url); } catch { /* ignore */ }
   };
 
   return new Promise((resolve, reject) => {
@@ -260,10 +278,8 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
         if (currentAudioElement === audio) {
           currentAudioElement = null;
         }
-        try {
-          URL.revokeObjectURL(url);
-        } catch {
-          // ignore
+        if (!activeLoopUrls.includes(url)) {
+          activeLoopUrls.push(url);
         }
       } else {
         cleanup();
@@ -476,7 +492,7 @@ export const elevenLabsService = {
       }
 
       if (networkQuality === 'weak') {
-        const cloudBlob = await ttsCloudCacheService.get(trimmedText, voiceId, 'elevenlabs');
+        const cloudBlob = await ttsCloudCacheService.get(trimmedText, voiceId, 'elevenlabs', modelId);
         if (cloudBlob) {
           console.log(`🔊 [ElevenLabs] 弱网环境，优先使用云端缓存 | [语音] ${voiceId}`);
           elevenLabsCacheService.put(trimmedText, voiceId, modelId, cloudBlob).catch(() => {});
@@ -488,7 +504,7 @@ export const elevenLabsService = {
           }
         }
       } else {
-        const cloudBlob = await ttsCloudCacheService.get(trimmedText, voiceId, 'elevenlabs');
+        const cloudBlob = await ttsCloudCacheService.get(trimmedText, voiceId, 'elevenlabs', modelId);
         if (cloudBlob) {
           console.log(`🔊 [ElevenLabs] 云端缓存命中，下载播放 | [语音] ${voiceId}`);
           elevenLabsCacheService.put(trimmedText, voiceId, modelId, cloudBlob).then(() => {
@@ -620,7 +636,7 @@ export const elevenLabsService = {
         }
       }).catch(() => {});
 
-      ttsCloudCacheService.put(trimmedText, voiceId, 'elevenlabs', audioBlob).then((uploaded) => {
+      ttsCloudCacheService.put(trimmedText, voiceId, 'elevenlabs', audioBlob, modelId).then((uploaded) => {
         if (uploaded) {
           console.log(`🔊 [ElevenLabs] 音频已上传到云端`);
         }

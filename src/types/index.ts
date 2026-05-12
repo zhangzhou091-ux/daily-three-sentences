@@ -32,6 +32,8 @@ export interface Sentence {
   scheduledDays?: number;
   isPendingFirstReview?: boolean;
   learnedAt?: number;
+  ttsAudioPathEl?: string;
+  ttsAudioPathMm?: string;
 }
 
 // 默写记录接口
@@ -48,7 +50,7 @@ export type ViewType = 'study' | 'manage' | 'achievements' | 'settings';
 // 学习步骤类型
 export type StudyStep = 'learn' | 'review' | 'dictation';
 
-export type TTSEngine = 'elevenlabs' | 'minimax' | 'ttsMaker' | 'edgeTts' | 'webSpeech' | 'auto';
+export type TTSEngine = 'elevenlabs' | 'minimax' | 'edgeTts' | 'webSpeech' | 'auto';
 
 export interface UserSettings {
   dailyTarget: number;
@@ -66,8 +68,6 @@ export interface UserSettings {
   elevenLabsVoiceId?: string;
   minimaxApiKey?: string;
   minimaxVoiceId?: string;
-  ttsMakerToken?: string;
-  ttsMakerVoiceId?: number;
   edgeTtsVoiceId?: string;
 }
 

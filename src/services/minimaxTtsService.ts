@@ -1,8 +1,13 @@
 const CACHE_DB_NAME = 'D3S_MiniMax_Cache';
 const CACHE_STORE_NAME = 'audio_cache';
-const CACHE_DB_VERSION = 1;
+const CACHE_DB_VERSION = 2;
+const MAX_CACHE_SIZE = 100 * 1024 * 1024;
+const CACHE_TTL = 30 * 24 * 60 * 60 * 1000;
+const IOS_PLAYBACK_RETRIES = 3;
+const IOS_PLAYBACK_DELAY = 200;
 
 import { ttsCloudCacheService } from './ttsCloudCacheService';
+import { isIOSAudio } from './audioUnlockService';
 
 export interface MiniMaxVoice {
   id: string;
@@ -16,6 +21,18 @@ export interface MiniMaxSpeakResult {
   success: boolean;
   error?: string;
   fromCache?: boolean;
+}
+
+interface CacheRecord {
+  key: string;
+  audioData: ArrayBuffer;
+  audioType: string;
+  textPreview: string;
+  voice: string;
+  createdAt: number;
+  size: number;
+  hitCount: number;
+  lastHitAt: number;
 }
 
 const API_BASE = 'https://api.minimaxi.com';
@@ -42,43 +59,111 @@ const RECOMMENDED_VOICES: MiniMaxVoice[] = [
 
 let audioGeneration = 0;
 let currentAudioElement: HTMLAudioElement | null = null;
+let activePlaybackAudio: HTMLAudioElement | null = null;
+let activeLoopUrls: string[] = [];
 
-const generateCacheKey = (text: string, voice: string, rate: number): string => {
-  const raw = `${text.trim()}|minimax|${voice}|${rate}`;
-  let hash = 0;
+const blobToArrayBuffer = (blob: Blob): Promise<ArrayBuffer> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (reader.result instanceof ArrayBuffer) {
+        resolve(reader.result);
+      } else {
+        reject(new Error('FileReader 未返回 ArrayBuffer'));
+      }
+    };
+    reader.onerror = () => reject(new Error('Blob 转 ArrayBuffer 失败'));
+    reader.readAsArrayBuffer(blob);
+  });
+};
+
+const arrayBufferToBlob = (buffer: ArrayBuffer, type: string): Blob => {
+  return new Blob([buffer], { type });
+};
+
+const generateCacheKey = (text: string, voice: string): string => {
+  const raw = `${text.trim()}|minimax|${voice}`;
+  let hash = 5381;
   for (let i = 0; i < raw.length; i++) {
-    const char = raw.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash |= 0;
+    hash = ((hash << 5) + hash) + raw.charCodeAt(i);
+    hash = hash & hash;
   }
   return `mm_${Math.abs(hash).toString(36)}_${raw.length}`;
 };
 
+let dbInstance: IDBDatabase | null = null;
+let dbInitPromise: Promise<IDBDatabase> | null = null;
+
 const getCacheDB = (): Promise<IDBDatabase> => {
-  return new Promise((resolve, reject) => {
+  if (dbInstance) return Promise.resolve(dbInstance);
+  if (dbInitPromise) return dbInitPromise;
+
+  dbInitPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(CACHE_DB_NAME, CACHE_DB_VERSION);
-    request.onerror = () => reject(new Error('MiniMax缓存数据库打开失败'));
-    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => {
+      dbInitPromise = null;
+      reject(new Error('MiniMax缓存数据库打开失败'));
+    };
+    request.onsuccess = () => {
+      dbInstance = request.result;
+      dbInstance.onversionchange = () => {
+        dbInstance?.close();
+        dbInstance = null;
+      };
+      resolve(dbInstance);
+    };
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
+      const oldVersion = event.oldVersion;
       if (!db.objectStoreNames.contains(CACHE_STORE_NAME)) {
-        db.createObjectStore(CACHE_STORE_NAME, { keyPath: 'key' });
+        const store = db.createObjectStore(CACHE_STORE_NAME, { keyPath: 'key' });
+        store.createIndex('voice', 'voice', { unique: false });
+        store.createIndex('createdAt', 'createdAt', { unique: false });
+        store.createIndex('lastHitAt', 'lastHitAt', { unique: false });
+      } else if (oldVersion < 2) {
+        console.log(`🔊 [MiniMax缓存] 数据库升级 v${oldVersion} → v${CACHE_DB_VERSION}，清理旧格式缓存`);
+        const tx = (event.target as IDBOpenDBRequest).transaction;
+        if (tx) {
+          tx.objectStore(CACHE_STORE_NAME).clear();
+        }
       }
     };
+    request.onblocked = () => {
+      dbInitPromise = null;
+    };
   });
+
+  return dbInitPromise;
 };
 
-const getCachedAudio = async (text: string, voice: string, rate: number): Promise<Blob | null> => {
+const getCachedAudio = async (text: string, voice: string): Promise<Blob | null> => {
   try {
     const db = await getCacheDB();
-    const key = generateCacheKey(text, voice, rate);
+    const key = generateCacheKey(text, voice);
     return new Promise((resolve) => {
-      const tx = db.transaction([CACHE_STORE_NAME], 'readonly');
+      const tx = db.transaction([CACHE_STORE_NAME], 'readwrite');
       const store = tx.objectStore(CACHE_STORE_NAME);
       const request = store.get(key);
       request.onsuccess = () => {
-        const record = request.result;
-        resolve(record?.audioBlob || null);
+        const record = request.result as CacheRecord | undefined;
+        if (!record) { resolve(null); return; }
+        if (!record.audioData || !(record.audioData instanceof ArrayBuffer) || record.audioData.byteLength === 0) {
+          store.delete(key);
+          resolve(null);
+          return;
+        }
+        if (Date.now() - record.lastHitAt > CACHE_TTL) {
+          store.delete(key);
+          console.log(`🔊 [MiniMax缓存] 过期清理 | [key] ${key}`);
+          resolve(null);
+          return;
+        }
+        record.hitCount = (record.hitCount || 0) + 1;
+        record.lastHitAt = Date.now();
+        try { store.put(record); } catch { /* ignore */ }
+        const blob = arrayBufferToBlob(record.audioData, record.audioType || 'audio/mpeg');
+        console.log(`🔊 [MiniMax缓存] 命中 | [key] ${key} | [大小] ${formatSize(record.size)} | [命中] ${record.hitCount}次`);
+        resolve(blob);
       };
       request.onerror = () => resolve(null);
     });
@@ -87,40 +172,175 @@ const getCachedAudio = async (text: string, voice: string, rate: number): Promis
   }
 };
 
-const setCachedAudio = async (text: string, voice: string, rate: number, audioBlob: Blob): Promise<void> => {
+const getStaleCachedAudio = async (text: string, voice: string): Promise<Blob | null> => {
   try {
     const db = await getCacheDB();
-    const key = generateCacheKey(text, voice, rate);
+    const key = generateCacheKey(text, voice);
     return new Promise((resolve) => {
-      const tx = db.transaction([CACHE_STORE_NAME], 'readwrite');
+      const tx = db.transaction([CACHE_STORE_NAME], 'readonly');
       const store = tx.objectStore(CACHE_STORE_NAME);
-      store.put({
-        key,
-        audioBlob,
-        textPreview: text.trim().slice(0, 80),
-        voice,
-        createdAt: Date.now(),
-        size: audioBlob.size,
-      });
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
+      const request = store.get(key);
+      request.onsuccess = () => {
+        const record = request.result as CacheRecord | undefined;
+        if (!record || !record.audioData || !(record.audioData instanceof ArrayBuffer) || record.audioData.byteLength === 0) {
+          resolve(null);
+          return;
+        }
+        const blob = arrayBufferToBlob(record.audioData, record.audioType || 'audio/mpeg');
+        const ageDays = Math.round((Date.now() - record.createdAt) / (24 * 60 * 60 * 1000));
+        console.log(`🔊 [MiniMax缓存] 陈旧缓存回退 | [key] ${key} | [大小] ${formatSize(record.size)} | [已缓存] ${ageDays}天`);
+        resolve(blob);
+      };
+      request.onerror = () => resolve(null);
     });
   } catch {
-    // ignore
+    return null;
   }
 };
 
+const verifyCachedAudio = async (key: string): Promise<boolean> => {
+  try {
+    const db = await getCacheDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction([CACHE_STORE_NAME], 'readonly');
+      const store = tx.objectStore(CACHE_STORE_NAME);
+      const request = store.get(key);
+      request.onsuccess = () => {
+        const record = request.result as CacheRecord | undefined;
+        if (!record || !record.audioData || !(record.audioData instanceof ArrayBuffer) || record.audioData.byteLength === 0) {
+          resolve(false);
+          return;
+        }
+        resolve(true);
+      };
+      request.onerror = () => resolve(false);
+    });
+  } catch {
+    return false;
+  }
+};
+
+const setCachedAudio = async (text: string, voice: string, audioBlob: Blob): Promise<boolean> => {
+  try {
+    if (!audioBlob || audioBlob.size === 0) {
+      console.warn('🔊 [MiniMax缓存] 跳过空音频缓存');
+      return false;
+    }
+
+    const audioData = await blobToArrayBuffer(audioBlob);
+    if (!audioData || audioData.byteLength === 0) {
+      console.warn('🔊 [MiniMax缓存] Blob 转 ArrayBuffer 失败，跳过缓存');
+      return false;
+    }
+
+    const db = await getCacheDB();
+    const key = generateCacheKey(text, voice);
+
+    const record: CacheRecord = {
+      key,
+      audioData,
+      audioType: audioBlob.type || 'audio/mpeg',
+      textPreview: text.trim().slice(0, 80),
+      voice,
+      createdAt: Date.now(),
+      size: audioData.byteLength,
+      hitCount: 0,
+      lastHitAt: Date.now(),
+    };
+
+    return new Promise((resolve) => {
+      const tx = db.transaction([CACHE_STORE_NAME], 'readwrite');
+      const store = tx.objectStore(CACHE_STORE_NAME);
+
+      const getAllReq = store.getAll();
+      getAllReq.onsuccess = () => {
+        const records = getAllReq.result as CacheRecord[];
+        let totalSize = 0;
+        for (const r of records) {
+          totalSize += r.size || 0;
+        }
+
+        const existingIdx = records.findIndex(r => r.key === key);
+        if (existingIdx >= 0) {
+          totalSize -= records[existingIdx].size || 0;
+        }
+
+        if (totalSize + record.size > MAX_CACHE_SIZE) {
+          const sorted = [...records]
+            .filter(r => r.key !== key)
+            .sort((a, b) => (a.lastHitAt || a.createdAt) - (b.lastHitAt || b.createdAt));
+
+          let freed = 0;
+          const toDelete: string[] = [];
+          for (const r of sorted) {
+            if (totalSize + record.size - freed <= MAX_CACHE_SIZE * 0.8) break;
+            freed += r.size || 0;
+            toDelete.push(r.key);
+          }
+
+          for (const k of toDelete) {
+            store.delete(k);
+          }
+
+          if (toDelete.length > 0) {
+            console.log(`🔊 [MiniMax缓存] LRU淘汰 ${toDelete.length} 条，释放 ${formatSize(freed)}`);
+          }
+        }
+
+        const putReq = store.put(record);
+        putReq.onsuccess = () => {
+          console.log(`🔊 [MiniMax缓存] 已存储 | [key] ${key} | [大小] ${formatSize(record.size)}`);
+          if (isIOSAudio()) {
+            verifyCachedAudio(key).then((valid) => {
+              if (!valid) {
+                console.warn('🔊 [MiniMax缓存] iOS 写入验证失败，可能存储空间不足');
+              }
+            });
+          }
+          resolve(true);
+        };
+        putReq.onerror = () => {
+          console.warn('🔊 [MiniMax缓存] 写入失败');
+          resolve(false);
+        };
+      };
+      getAllReq.onerror = () => {
+        const putReq = store.put(record);
+        putReq.onsuccess = () => resolve(true);
+        putReq.onerror = () => resolve(false);
+      };
+    });
+  } catch (err) {
+    console.warn('🔊 [MiniMax缓存] put 异常:', err instanceof Error ? err.message : String(err));
+    return false;
+  }
+};
+
+const revokeAllLoopUrls = (): void => {
+  for (const url of activeLoopUrls) {
+    try { URL.revokeObjectURL(url); } catch { /* ignore */ }
+  }
+  activeLoopUrls = [];
+};
+
 const stopCurrentAudio = (): void => {
+  if (activePlaybackAudio) {
+    try {
+      activePlaybackAudio.pause();
+      activePlaybackAudio.removeAttribute('src');
+      activePlaybackAudio.load();
+    } catch { /* ignore */ }
+    activePlaybackAudio = null;
+  }
   if (currentAudioElement) {
     try {
       currentAudioElement.pause();
-      currentAudioElement.src = '';
+      currentAudioElement.removeAttribute('src');
       currentAudioElement.load();
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
     currentAudioElement = null;
   }
+  revokeAllLoopUrls();
 };
 
 const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: number = 1): Promise<void> => {
@@ -129,40 +349,155 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
 
   stopCurrentAudio();
 
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(audioBlob);
-    const audio = new Audio(url);
-    audio.loop = loop;
-    audio.playbackRate = rate;
-    currentAudioElement = audio;
+  if (!audioBlob || audioBlob.size === 0) {
+    throw new Error('音频数据为空');
+  }
 
-    const cleanup = () => {
-      if (currentAudioElement === audio) currentAudioElement = null;
-      try { URL.revokeObjectURL(url); } catch { /* ignore */ }
+  const mimeType = audioBlob.type || 'audio/mpeg';
+  const url = URL.createObjectURL(new Blob([audioBlob], { type: mimeType }));
+  const audio = new Audio();
+  audio.preload = 'auto';
+  audio.loop = loop;
+  audio.playbackRate = rate;
+  currentAudioElement = audio;
+
+  const cleanup = () => {
+    if (currentAudioElement === audio) {
+      currentAudioElement = null;
+    }
+    if (activePlaybackAudio === audio) {
+      activePlaybackAudio = null;
+    }
+    if (loop) {
+      const idx = activeLoopUrls.indexOf(url);
+      if (idx >= 0) activeLoopUrls.splice(idx, 1);
+    }
+    try { URL.revokeObjectURL(url); } catch { /* ignore */ }
+  };
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let playbackRetryCount = 0;
+
+    const doReject = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
     };
 
-    audio.onended = () => {
-      if (!isCurrentGen()) return;
-      cleanup();
+    const doResolve = () => {
+      if (settled) return;
+      settled = true;
+      if (loop && audio && !audio.paused) {
+        activePlaybackAudio = audio;
+        if (currentAudioElement === audio) {
+          currentAudioElement = null;
+        }
+        if (!activeLoopUrls.includes(url)) {
+          activeLoopUrls.push(url);
+        }
+      } else {
+        cleanup();
+      }
       resolve();
     };
 
-    audio.onerror = () => {
-      if (!isCurrentGen()) return;
-      cleanup();
-      reject(new Error('音频播放失败'));
+    const attemptPlay = () => {
+      if (!isCurrentGen() || settled) return;
+
+      audio.play().then(() => {
+        if (!loop) return;
+        if (settled) return;
+        doResolve();
+      }).catch((playErr: DOMException) => {
+        if (!isCurrentGen() || settled) return;
+
+        if (playErr.name === 'NotAllowedError') {
+          if (isIOSAudio() && playbackRetryCount < IOS_PLAYBACK_RETRIES) {
+            playbackRetryCount++;
+            console.warn(`🔊 [MiniMax] iOS 播放被阻止，第 ${playbackRetryCount}/${IOS_PLAYBACK_RETRIES} 次重试...`);
+            setTimeout(attemptPlay, IOS_PLAYBACK_DELAY * playbackRetryCount);
+            return;
+          }
+          doReject(new Error('请先点击页面后重试（浏览器安全策略）'));
+          return;
+        }
+        doReject(playErr instanceof Error ? playErr : new Error(String(playErr)));
+      });
     };
 
-    audio.play().then(() => {
-      if (!isCurrentGen()) { cleanup(); return; }
-      if (loop) {
-        resolve();
+    audio.oncanplay = () => {
+      if (!isCurrentGen() || settled) return;
+      attemptPlay();
+    };
+
+    audio.onloadeddata = () => {
+      if (!isCurrentGen() || settled) return;
+      if (isIOSAudio()) {
+        setTimeout(() => {
+          if (!isCurrentGen() || settled) return;
+          attemptPlay();
+        }, 100);
       }
-    }).catch((err) => {
-      if (!isCurrentGen()) return;
-      cleanup();
-      reject(err);
-    });
+    };
+
+    if (!loop) {
+      audio.onended = () => {
+        if (!isCurrentGen()) return;
+        doResolve();
+      };
+    }
+
+    audio.onerror = () => {
+      if (!isCurrentGen() || settled) return;
+      const mediaError = audio.error;
+      let errorMsg = '音频播放失败';
+      if (mediaError) {
+        switch (mediaError.code) {
+          case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+            errorMsg = '音频格式不支持或资源已被回收';
+            break;
+          case MediaError.MEDIA_ERR_DECODE:
+            errorMsg = '音频解码失败';
+            break;
+          case MediaError.MEDIA_ERR_NETWORK:
+            errorMsg = '音频加载网络错误';
+            break;
+        }
+      }
+      doReject(new Error(errorMsg));
+    };
+
+    audio.onpause = () => {
+      if (loop && currentAudioElement !== audio && !settled) {
+        if (activePlaybackAudio === audio) {
+          activePlaybackAudio = null;
+        }
+        doResolve();
+      }
+    };
+
+    audio.src = url;
+
+    if (isIOSAudio()) {
+      setTimeout(() => {
+        if (!isCurrentGen() || settled) return;
+        if (audio.readyState >= 3) {
+          attemptPlay();
+        } else {
+          audio.load();
+        }
+      }, 50);
+    } else {
+      audio.load();
+    }
+
+    setTimeout(() => {
+      if (!settled && isCurrentGen()) {
+        doReject(new Error('音频播放超时'));
+      }
+    }, loop ? 120000 : 30000);
   });
 };
 
@@ -214,22 +549,48 @@ export const minimaxTtsService = {
       return { success: false, error: '文本过长，请分段播放' };
     }
 
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
     try {
-      const cachedBlob = await getCachedAudio(trimmedText, voiceId, rate);
+      const cachedBlob = await getCachedAudio(trimmedText, voiceId);
       if (cachedBlob) {
         console.log(`🔊 [MiniMax] 本地缓存命中 | [语音] ${voiceId}`);
-        await playAudioBlob(cachedBlob, loop, 1);
-        return { success: true, fromCache: true };
+        try {
+          await playAudioBlob(cachedBlob, loop, rate);
+          return { success: true, fromCache: true };
+        } catch (playErr) {
+          const msg = playErr instanceof Error ? playErr.message : String(playErr);
+          console.warn(`🔊 [MiniMax] 缓存音频播放失败: ${msg}，重新请求API`);
+        }
+      }
+
+      if (isOffline) {
+        const staleBlob = await getStaleCachedAudio(trimmedText, voiceId);
+        if (staleBlob) {
+          console.log(`🔊 [MiniMax] 离线状态，使用陈旧缓存播放`);
+          try {
+            await playAudioBlob(staleBlob, loop, rate);
+            return { success: true, fromCache: true };
+          } catch (playErr) {
+            return { success: false, error: '离线状态且缓存音频无法播放，请连接网络后重试' };
+          }
+        }
+        console.log(`🔊 [MiniMax] 离线状态，跳过云端/API请求`);
+        return { success: false, error: '当前处于离线状态，且无可用缓存。请连接网络后重试' };
       }
 
       const cloudBlob = await ttsCloudCacheService.get(trimmedText, voiceId, 'minimax');
       if (cloudBlob) {
         console.log(`🔊 [MiniMax] 云端缓存命中，下载播放 | [语音] ${voiceId}`);
-        setCachedAudio(trimmedText, voiceId, rate, cloudBlob).then(() => {
+        setCachedAudio(trimmedText, voiceId, cloudBlob).then(() => {
           console.log(`🔊 [MiniMax] 云端音频已同步到本地缓存`);
         });
-        await playAudioBlob(cloudBlob, loop, 1);
-        return { success: true, fromCache: true };
+        try {
+          await playAudioBlob(cloudBlob, loop, rate);
+          return { success: true, fromCache: true };
+        } catch (playErr) {
+          console.warn(`🔊 [MiniMax] 云端缓存播放失败，尝试API请求`);
+        }
       }
 
       console.log(`🔊 [MiniMax] 本地/云端缓存均未命中，请求合成 | [语音] ${voiceId} | [文本] ${trimmedText.slice(0, 40)}...`);
@@ -251,7 +612,7 @@ export const minimaxTtsService = {
             stream: false,
             voice_setting: {
               voice_id: voiceId,
-              speed: Math.max(0.5, Math.min(2.0, rate)),
+              speed: 1,
               vol: 1,
               pitch: 0,
             },
@@ -331,17 +692,15 @@ export const minimaxTtsService = {
 
       console.log(`🔊 [MiniMax] 合成完成 | [大小] ${formatSize(audioBlob.size)}`);
 
-      setCachedAudio(trimmedText, voiceId, rate, audioBlob).then(() => {
-        console.log(`🔊 [MiniMax] 音频已缓存到本地`);
+      setCachedAudio(trimmedText, voiceId, audioBlob).then((saved) => {
+        if (saved) console.log(`🔊 [MiniMax] 音频已缓存到本地`);
       });
 
       ttsCloudCacheService.put(trimmedText, voiceId, 'minimax', audioBlob).then((uploaded) => {
-        if (uploaded) {
-          console.log(`🔊 [MiniMax] 音频已上传到云端`);
-        }
+        if (uploaded) console.log(`🔊 [MiniMax] 音频已上传到云端`);
       });
 
-      await playAudioBlob(audioBlob, loop, 1);
+      await playAudioBlob(audioBlob, loop, rate);
       return { success: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -358,6 +717,9 @@ export const minimaxTtsService = {
   setPlaybackRate(rate: number): void {
     if (currentAudioElement) {
       currentAudioElement.playbackRate = rate;
+    }
+    if (activePlaybackAudio) {
+      activePlaybackAudio.playbackRate = rate;
     }
   },
 

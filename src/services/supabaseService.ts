@@ -39,6 +39,8 @@ export interface CloudSentenceData {
   wrongdictations: number;
   firstreviewpending: boolean;
   learnedat: number | null;
+  tts_audio_path_el?: string | null;
+  tts_audio_path_mm?: string | null;
 }
 
 // 带超时的 fetch 包装器
@@ -943,7 +945,9 @@ class SupabaseService {
       masterylevel: s.masteryLevel || 0,
       wrongdictations: s.wrongDictations || 0,
       firstreviewpending: s.isPendingFirstReview || false,
-      learnedat: s.learnedAt || null
+      learnedat: s.learnedAt || null,
+      tts_audio_path_el: s.ttsAudioPathEl || null,
+      tts_audio_path_mm: s.ttsAudioPathMm || null,
     };
   }
 
@@ -969,7 +973,9 @@ class SupabaseService {
       state: db.state,
       scheduledDays: db.scheduleddays,
       isPendingFirstReview: db.firstreviewpending,
-      learnedAt: db.learnedat || undefined
+      learnedAt: db.learnedat || undefined,
+      ttsAudioPathEl: db.tts_audio_path_el || undefined,
+      ttsAudioPathMm: db.tts_audio_path_mm || undefined,
     };
   }
 

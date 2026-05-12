@@ -3,6 +3,7 @@ import { Sentence, StudyStep } from '../types';
 import { geminiService } from '../services/geminiService';
 import { storageService } from '../services/storage';
 import { syncQueueService } from '../services/syncQueueService';
+import { unlockAudioEngine, isIOSAudio } from '../services/audioUnlockService';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { getLocalDateString } from '../utils/date';
 import { LEARN_XP } from '../constants';
@@ -53,6 +54,21 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     };
     window.addEventListener('settingsChanged', handleSettingsChange);
     return () => window.removeEventListener('settingsChanged', handleSettingsChange);
+  }, []);
+
+  useEffect(() => {
+    if (!isIOSAudio()) return;
+    const unlock = () => {
+      unlockAudioEngine();
+      document.removeEventListener('click', unlock);
+      document.removeEventListener('touchstart', unlock);
+    };
+    document.addEventListener('click', unlock, { once: true });
+    document.addEventListener('touchstart', unlock, { once: true });
+    return () => {
+      document.removeEventListener('click', unlock);
+      document.removeEventListener('touchstart', unlock);
+    };
   }, []);
   
   useEffect(() => {

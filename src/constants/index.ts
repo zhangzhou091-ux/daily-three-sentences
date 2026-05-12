@@ -150,8 +150,6 @@ export const DEFAULT_USER_SETTINGS = {
   elevenLabsVoiceId: 'JBFqnCBsd6RMkjVDRZzb',
   minimaxApiKey: '',
   minimaxVoiceId: 'English_expressive_narrator',
-  ttsMakerToken: '',
-  ttsMakerVoiceId: 663,
   edgeTtsVoiceId: 'en-US-AvaMultilingualNeural',
 };
 

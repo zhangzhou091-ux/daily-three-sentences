@@ -1,12 +1,11 @@
 /**
- * Gemini Service with ElevenLabs + MiniMax + TTSMaker + EdgeTTS + Web Speech API
+ * Gemini Service with ElevenLabs + MiniMax + EdgeTTS + Web Speech API
  * 
  * TTS 调度策略：
  * 1. 优先使用 ElevenLabs API（最高质量，缓存后不消耗额度）
  * 2. ElevenLabs 失败时降级到 MiniMax（直连 API，高质量多语言）
- * 3. MiniMax 不可用时降级到 TTSMaker（免费 TTS 服务）
- * 4. TTSMaker 不可用时降级到 EdgeTTS（微软免费语音，无需密钥）
- * 5. EdgeTTS 不可用时降级到浏览器原生语音（iOS 自动选择最佳音质）
+ * 3. MiniMax 不可用时降级到 EdgeTTS（微软免费语音，无需密钥）
+ * 4. EdgeTTS 不可用时降级到浏览器原生语音（iOS 自动选择最佳音质）
  */
 
 import { elevenLabsService } from './elevenLabsService';
@@ -397,23 +396,6 @@ export const geminiService = {
       }
     };
 
-    const tryTtsMaker = async (): Promise<SpeakResult> => {
-      try {
-        const { ttsMakerService } = await import('./ttsMakerService');
-        const token = settings.ttsMakerToken || ttsMakerService.getDemoToken();
-        const voiceId = settings.ttsMakerVoiceId || ttsMakerService.getDefaultVoiceId();
-        console.log(`🔊 [引擎] TTSMaker | [语音] ${voiceId} | [循环] ${loop} | [语速] ${speechRate}`);
-        const result = await ttsMakerService.speak(text, token, voiceId, loop, speechRate);
-        if (result.success) return { success: true };
-        console.warn('🔊 TTSMaker 播放失败:', result.error);
-        return { success: false, error: result.error };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn('🔊 TTSMaker 出错:', msg);
-        return { success: false, error: msg };
-      }
-    };
-
     const tryEdgeTts = async (): Promise<SpeakResult> => {
       try {
         const voice = settings.edgeTtsVoiceId || edgeTtsService.getDefaultVoice();
@@ -446,11 +428,7 @@ export const geminiService = {
 
       const mmResult = await tryMiniMax();
       if (mmResult.success) return mmResult;
-      console.warn('🔊 [auto] MiniMax 不可用，回退到 TTSMaker');
-
-      const tmResult = await tryTtsMaker();
-      if (tmResult.success) return tmResult;
-      console.warn('🔊 [auto] TTSMaker 不可用，回退到 EdgeTTS');
+      console.warn('🔊 [auto] MiniMax 不可用，回退到 EdgeTTS');
 
       const edgeResult = await tryEdgeTts();
       if (edgeResult.success) return edgeResult;
@@ -465,10 +443,7 @@ export const geminiService = {
       console.warn('🔊 ElevenLabs 失败，回退到 MiniMax');
       const mmResult = await tryMiniMax();
       if (mmResult.success) return mmResult;
-      console.warn('🔊 MiniMax 失败，回退到 TTSMaker');
-      const tmResult = await tryTtsMaker();
-      if (tmResult.success) return tmResult;
-      console.warn('🔊 TTSMaker 失败，回退到 EdgeTTS');
+      console.warn('🔊 MiniMax 失败，回退到 EdgeTTS');
       const edgeResult = await tryEdgeTts();
       if (edgeResult.success) return edgeResult;
       console.warn('🔊 EdgeTTS 失败，回退到 Web Speech API');
@@ -478,20 +453,7 @@ export const geminiService = {
     if (ttsEngine === 'minimax') {
       const result = await tryMiniMax();
       if (result.success) return result;
-      console.warn('🔊 MiniMax 失败，回退到 TTSMaker');
-      const tmResult = await tryTtsMaker();
-      if (tmResult.success) return tmResult;
-      console.warn('🔊 TTSMaker 失败，回退到 EdgeTTS');
-      const edgeResult = await tryEdgeTts();
-      if (edgeResult.success) return edgeResult;
-      console.warn('🔊 EdgeTTS 失败，回退到 Web Speech API');
-      return tryWebSpeech();
-    }
-
-    if (ttsEngine === 'ttsMaker') {
-      const result = await tryTtsMaker();
-      if (result.success) return result;
-      console.warn('🔊 TTSMaker 失败，回退到 EdgeTTS');
+      console.warn('🔊 MiniMax 失败，回退到 EdgeTTS');
       const edgeResult = await tryEdgeTts();
       if (edgeResult.success) return edgeResult;
       console.warn('🔊 EdgeTTS 失败，回退到 Web Speech API');
@@ -518,7 +480,6 @@ export const geminiService = {
     elevenLabsService.stop();
     edgeTtsService.stop();
     import('./minimaxTtsService').then(({ minimaxTtsService }) => minimaxTtsService.stop()).catch(() => {});
-    import('./ttsMakerService').then(({ ttsMakerService }) => ttsMakerService.stop()).catch(() => {});
     window.speechSynthesis.cancel();
     currentUtterance = null;
     taskQueue = [];
@@ -529,7 +490,6 @@ export const geminiService = {
     const clampedRate = Math.max(0.1, Math.min(10, rate));
     elevenLabsService.setPlaybackRate(clampedRate);
     import('./minimaxTtsService').then(({ minimaxTtsService }) => minimaxTtsService.setPlaybackRate(clampedRate)).catch(() => {});
-    import('./ttsMakerService').then(({ ttsMakerService }) => ttsMakerService.setPlaybackRate(clampedRate)).catch(() => {});
     if (currentUtterance) {
       currentUtterance.rate = clampedRate;
       currentUtterance.pitch = getPitchForRate(clampedRate);
@@ -548,9 +508,9 @@ export const geminiService = {
       if (apiKey && apiKey.trim()) {
         const voiceId = settings.elevenLabsVoiceId || 'JBFqnCBsd6RMkjVDRZzb';
         const popularVoice = elevenLabsService.getPopularVoices().find(v => v.voice_id === voiceId);
-        return { engine: '自动 (ElevenLabs → MiniMax → TTSMaker → EdgeTTS → Web Speech)', voiceName: popularVoice?.name || voiceId, isLocal: false };
+        return { engine: '自动 (ElevenLabs → MiniMax → EdgeTTS → Web Speech)', voiceName: popularVoice?.name || voiceId, isLocal: false };
       }
-      return { engine: '自动 (MiniMax → TTSMaker → EdgeTTS → Web Speech)', voiceName: settings.minimaxVoiceId || 'English_expressive_narrator', isLocal: false };
+      return { engine: '自动 (MiniMax → EdgeTTS → Web Speech)', voiceName: settings.minimaxVoiceId || 'English_expressive_narrator', isLocal: false };
     }
     if (ttsEngine === 'elevenlabs') {
       const voiceId = settings.elevenLabsVoiceId || 'JBFqnCBsd6RMkjVDRZzb';
@@ -567,10 +527,6 @@ export const geminiService = {
         return { engine: 'MiniMax (未配置，将回退)', voiceName: '未配置', isLocal: false };
       }
       return { engine: 'MiniMax (直连)', voiceName: voiceId, isLocal: false };
-    }
-    if (ttsEngine === 'ttsMaker') {
-      const voiceId = settings.ttsMakerVoiceId || 663;
-      return { engine: 'TTSMaker', voiceName: String(voiceId), isLocal: false };
     }
     if (ttsEngine === 'edgeTts') {
       const voice = settings.edgeTtsVoiceId || edgeTtsService.getDefaultVoice();

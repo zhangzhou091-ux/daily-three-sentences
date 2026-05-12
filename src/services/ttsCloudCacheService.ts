@@ -3,18 +3,36 @@ import { supabaseService } from './supabaseService';
 export type TTSEngineType = 'elevenlabs' | 'minimax';
 
 const BUCKET_NAME = 'tts-audio-cache';
+const MAX_UPLOAD_CONCURRENCY = 2;
+const MAX_UPLOAD_RETRIES = 2;
+const UPLOAD_RETRY_DELAY = 2000;
+
+interface UploadTask {
+  text: string;
+  voice: string;
+  engine: TTSEngineType;
+  modelId: string;
+  audioBlob: Blob;
+  retryCount: number;
+  resolve: (success: boolean) => void;
+}
+
+let uploadQueue: UploadTask[] = [];
+let activeUploads = 0;
 
 const generateStoragePath = (engine: TTSEngineType, cacheKey: string): string => {
   return `${engine}/${cacheKey}.mp3`;
 };
 
-const generateCloudCacheKey = (text: string, voice: string, engine: TTSEngineType): string => {
-  const raw = `${text.trim()}|${engine}|${voice}`;
-  let hash = 0;
+const generateCloudCacheKey = (text: string, voice: string, engine: TTSEngineType, modelId?: string): string => {
+  let raw = `${text.trim()}|${engine}|${voice}`;
+  if (engine === 'elevenlabs' && modelId) {
+    raw += `|${modelId}`;
+  }
+  let hash = 5381;
   for (let i = 0; i < raw.length; i++) {
-    const char = raw.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash |= 0;
+    hash = ((hash << 5) + hash) + raw.charCodeAt(i);
+    hash = hash & hash;
   }
   return `${engine}_${Math.abs(hash).toString(36)}_${raw.length}`;
 };
@@ -23,18 +41,185 @@ const isSupabaseReady = (): boolean => {
   return supabaseService.isReady && !!supabaseService.client;
 };
 
+const processUploadQueue = (): void => {
+  while (activeUploads < MAX_UPLOAD_CONCURRENCY && uploadQueue.length > 0) {
+    const task = uploadQueue.shift()!;
+    activeUploads++;
+    executeUpload(task).finally(() => {
+      activeUploads--;
+      processUploadQueue();
+    });
+  }
+};
+
+const executeUpload = async (task: UploadTask): Promise<void> => {
+  const { text, voice, engine, modelId, audioBlob, retryCount, resolve } = task;
+
+  if (!isSupabaseReady()) {
+    resolve(false);
+    return;
+  }
+
+  const client = supabaseService.client!;
+  const cacheKey = generateCloudCacheKey(text, voice, engine, engine === 'elevenlabs' ? modelId : undefined);
+  const path = generateStoragePath(engine, cacheKey);
+
+  try {
+    const { error } = await client.storage
+      .from(BUCKET_NAME)
+      .upload(path, audioBlob, {
+        contentType: 'audio/mpeg',
+        upsert: true,
+      });
+
+    if (error) {
+      if (error.message?.includes('Bucket not found') || error.message?.includes('does not exist')) {
+        console.warn(`🔊 [CloudCache] 存储桶 "${BUCKET_NAME}" 不存在，尝试自动创建...`);
+        const createResult = await ensureBucket();
+        if (createResult.success) {
+          const { error: retryError } = await client.storage
+            .from(BUCKET_NAME)
+            .upload(path, audioBlob, {
+              contentType: 'audio/mpeg',
+              upsert: true,
+            });
+          if (!retryError) {
+            await updateSentenceAudioPath(text, voice, engine, modelId, path);
+            console.log(`🔊 [CloudCache] 已上传 | [${engine}] [语音] ${voice} | [大小] ${formatSize(audioBlob.size)}`);
+            resolve(true);
+            return;
+          }
+        }
+      }
+
+      if (retryCount < MAX_UPLOAD_RETRIES) {
+        console.warn(`🔊 [CloudCache] 上传失败 [${engine}]，第 ${retryCount + 1}/${MAX_UPLOAD_RETRIES} 次重试: ${error.message}`);
+        setTimeout(() => {
+          uploadQueue.push({
+            ...task,
+            retryCount: retryCount + 1,
+          });
+          processUploadQueue();
+        }, UPLOAD_RETRY_DELAY * (retryCount + 1));
+        return;
+      }
+
+      console.warn(`🔊 [CloudCache] 上传失败 [${engine}]，已耗尽重试: ${error.message}`);
+      resolve(false);
+      return;
+    }
+
+    await updateSentenceAudioPath(text, voice, engine, modelId, path);
+    console.log(`🔊 [CloudCache] 已上传 | [${engine}] [语音] ${voice} | [大小] ${formatSize(audioBlob.size)}`);
+    resolve(true);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+
+    if (retryCount < MAX_UPLOAD_RETRIES) {
+      console.warn(`🔊 [CloudCache] 上传异常 [${engine}]，第 ${retryCount + 1}/${MAX_UPLOAD_RETRIES} 次重试: ${msg}`);
+      setTimeout(() => {
+        uploadQueue.push({
+          ...task,
+          retryCount: retryCount + 1,
+        });
+        processUploadQueue();
+      }, UPLOAD_RETRY_DELAY * (retryCount + 1));
+      return;
+    }
+
+    console.warn(`🔊 [CloudCache] 上传异常 [${engine}]，已耗尽重试: ${msg}`);
+    resolve(false);
+  }
+};
+
+const updateSentenceAudioPath = async (
+  text: string,
+  voice: string,
+  engine: TTSEngineType,
+  modelId: string,
+  storagePath: string
+): Promise<void> => {
+  if (!isSupabaseReady()) return;
+
+  const client = supabaseService.client!;
+  const userName = supabaseService.userName;
+  if (!userName) return;
+
+  try {
+    const trimmedText = text.trim();
+    const column = engine === 'elevenlabs' ? 'tts_audio_path_el' : 'tts_audio_path_mm';
+
+    const { error } = await client
+      .from('sentences')
+      .update({ [column]: storagePath })
+      .eq('username', userName)
+      .ilike('english', trimmedText);
+
+    if (error) {
+      console.warn(`🔊 [CloudCache] 更新音频路径失败 [${engine}]:`, error.message);
+    } else {
+      console.log(`🔊 [CloudCache] 音频路径已更新到 sentences 表 | [${engine}] | [列] ${column}`);
+    }
+  } catch (err) {
+    console.warn(`🔊 [CloudCache] 更新音频路径异常:`, err instanceof Error ? err.message : String(err));
+  }
+};
+
+const ensureBucket = async (): Promise<{ success: boolean; message: string }> => {
+  if (!isSupabaseReady()) {
+    return { success: false, message: 'Supabase 未配置' };
+  }
+
+  const client = supabaseService.client!;
+
+  try {
+    const { data, error } = await client.storage.listBuckets();
+
+    if (error) {
+      return { success: false, message: `无法列出存储桶: ${error.message}` };
+    }
+
+    const exists = (data || []).some(b => b.name === BUCKET_NAME);
+
+    if (exists) {
+      return { success: true, message: `存储桶 "${BUCKET_NAME}" 已存在` };
+    }
+
+    const { error: createError } = await client.storage.createBucket(BUCKET_NAME, {
+      public: false,
+      fileSizeLimit: 5242880,
+    });
+
+    if (createError) {
+      return { success: false, message: `创建存储桶失败: ${createError.message}` };
+    }
+
+    return { success: true, message: `存储桶 "${BUCKET_NAME}" 创建成功` };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { success: false, message: `检查存储桶异常: ${msg}` };
+  }
+};
+
+const formatSize = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1048576).toFixed(1)} MB`;
+};
+
 export const ttsCloudCacheService = {
   async get(
     text: string,
     voice: string,
-    engine: TTSEngineType
+    engine: TTSEngineType,
+    modelId?: string
   ): Promise<Blob | null> {
     if (!isSupabaseReady()) {
       return null;
     }
 
     const client = supabaseService.client!;
-    const cacheKey = generateCloudCacheKey(text, voice, engine);
+    const cacheKey = generateCloudCacheKey(text, voice, engine, engine === 'elevenlabs' ? modelId : undefined);
     const path = generateStoragePath(engine, cacheKey);
 
     try {
@@ -54,7 +239,7 @@ export const ttsCloudCacheService = {
         return null;
       }
 
-      console.log(`🔊 [CloudCache] 云端命中 | [${engine}] [语音] ${voice} | [大小] ${this.formatSize(data.size)}`);
+      console.log(`🔊 [CloudCache] 云端命中 | [${engine}] [语音] ${voice} | [大小] ${formatSize(data.size)}`);
       return data;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -67,69 +252,39 @@ export const ttsCloudCacheService = {
     text: string,
     voice: string,
     engine: TTSEngineType,
-    audioBlob: Blob
+    audioBlob: Blob,
+    modelId?: string
   ): Promise<boolean> {
     if (!isSupabaseReady()) {
       return false;
     }
 
-    const client = supabaseService.client!;
-    const cacheKey = generateCloudCacheKey(text, voice, engine);
-    const path = generateStoragePath(engine, cacheKey);
-
-    try {
-      const { error } = await client.storage
-        .from(BUCKET_NAME)
-        .upload(path, audioBlob, {
-          contentType: 'audio/mpeg',
-          upsert: true,
-        });
-
-      if (error) {
-        if (error.message?.includes('Bucket not found') || error.message?.includes('does not exist')) {
-          console.warn(`🔊 [CloudCache] 存储桶 "${BUCKET_NAME}" 不存在，正在自动创建...`);
-          const createResult = await this.ensureBucket();
-          if (!createResult.success) {
-            console.warn(`🔊 [CloudCache] 存储桶创建失败: ${createResult.message}`);
-            return false;
-          }
-          console.log(`🔊 [CloudCache] 存储桶 "${BUCKET_NAME}" 创建成功，重新上传...`);
-          const { error: retryError } = await client.storage
-            .from(BUCKET_NAME)
-            .upload(path, audioBlob, {
-              contentType: 'audio/mpeg',
-              upsert: true,
-            });
-          if (retryError) {
-            console.warn(`🔊 [CloudCache] 重新上传失败 [${engine}]:`, retryError.message);
-            return false;
-          }
-        } else {
-          console.warn(`🔊 [CloudCache] 上传失败 [${engine}]:`, error.message);
-          return false;
-        }
-      }
-
-      console.log(`🔊 [CloudCache] 已上传 | [${engine}] [语音] ${voice} | [大小] ${this.formatSize(audioBlob.size)}`);
-      return true;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`🔊 [CloudCache] 上传异常 [${engine}]:`, msg);
-      return false;
-    }
+    return new Promise((resolve) => {
+      uploadQueue.push({
+        text,
+        voice,
+        engine,
+        modelId: modelId || '',
+        audioBlob,
+        retryCount: 0,
+        resolve,
+      });
+      processUploadQueue();
+    });
   },
 
   async delete(
     text: string,
     voice: string,
-    engine: TTSEngineType
+    engine: TTSEngineType,
+    modelId?: string
   ): Promise<boolean> {
     if (!isSupabaseReady()) {
       return false;
     }
 
     const client = supabaseService.client!;
-    const cacheKey = generateCloudCacheKey(text, voice, engine);
+    const cacheKey = generateCloudCacheKey(text, voice, engine, engine === 'elevenlabs' ? modelId : undefined);
     const path = generateStoragePath(engine, cacheKey);
 
     try {
@@ -271,39 +426,7 @@ export const ttsCloudCacheService = {
   },
 
   async ensureBucket(): Promise<{ success: boolean; message: string }> {
-    if (!isSupabaseReady()) {
-      return { success: false, message: 'Supabase 未配置' };
-    }
-
-    const client = supabaseService.client!;
-
-    try {
-      const { data, error } = await client.storage.listBuckets();
-
-      if (error) {
-        return { success: false, message: `无法列出存储桶: ${error.message}` };
-      }
-
-      const exists = (data || []).some(b => b.name === BUCKET_NAME);
-
-      if (exists) {
-        return { success: true, message: `存储桶 "${BUCKET_NAME}" 已存在` };
-      }
-
-      const { error: createError } = await client.storage.createBucket(BUCKET_NAME, {
-        public: false,
-        fileSizeLimit: 5242880,
-      });
-
-      if (createError) {
-        return { success: false, message: `创建存储桶失败: ${createError.message}` };
-      }
-
-      return { success: true, message: `存储桶 "${BUCKET_NAME}" 创建成功` };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { success: false, message: `检查存储桶异常: ${msg}` };
-    }
+    return ensureBucket();
   },
 
   isAvailable(): boolean {
@@ -314,11 +437,15 @@ export const ttsCloudCacheService = {
     return BUCKET_NAME;
   },
 
-  formatSize(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / 1048576).toFixed(1)} MB`;
+  getQueueLength(): number {
+    return uploadQueue.length;
   },
+
+  getActiveUploads(): number {
+    return activeUploads;
+  },
+
+  formatSize,
 };
 
 export default ttsCloudCacheService;
