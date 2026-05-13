@@ -1,4 +1,5 @@
 import { supabaseService } from './supabaseService';
+import { dbService } from './dbService';
 
 export type TTSEngineType = 'elevenlabs' | 'minimax';
 
@@ -13,6 +14,7 @@ interface UploadTask {
   engine: TTSEngineType;
   modelId: string;
   audioBlob: Blob;
+  rate: number;
   retryCount: number;
   resolve: (success: boolean) => void;
 }
@@ -139,6 +141,27 @@ const updateSentenceAudioPath = async (
   modelId: string,
   storagePath: string
 ): Promise<void> => {
+  const trimmedText = text.trim();
+  const column = engine === 'elevenlabs' ? 'tts_audio_path_el' : 'tts_audio_path_mm';
+  const localField = engine === 'elevenlabs' ? 'ttsAudioPathEl' : 'ttsAudioPathMm';
+
+  try {
+    const localSentence = await dbService.findByEnglish(trimmedText);
+    if (localSentence) {
+      const updatedSentence = {
+        ...localSentence,
+        [localField]: storagePath,
+        updatedAt: Date.now(),
+      };
+      await dbService.put(updatedSentence);
+      console.log(`🔊 [CloudCache] 本地句子音频路径已更新 | [${engine}] | [字段] ${localField}`);
+    } else {
+      console.warn(`🔊 [CloudCache] 本地未找到对应句子，跳过本地更新 | [文本] ${trimmedText.slice(0, 30)}`);
+    }
+  } catch (err) {
+    console.warn(`🔊 [CloudCache] 更新本地句子音频路径异常:`, err instanceof Error ? err.message : String(err));
+  }
+
   if (!isSupabaseReady()) return;
 
   const client = supabaseService.client!;
@@ -146,22 +169,19 @@ const updateSentenceAudioPath = async (
   if (!userName) return;
 
   try {
-    const trimmedText = text.trim();
-    const column = engine === 'elevenlabs' ? 'tts_audio_path_el' : 'tts_audio_path_mm';
-
-    const { error } = await client
+    const { error, count } = await client
       .from('sentences')
       .update({ [column]: storagePath })
       .eq('username', userName)
       .ilike('english', trimmedText);
 
     if (error) {
-      console.warn(`🔊 [CloudCache] 更新音频路径失败 [${engine}]:`, error.message);
+      console.warn(`🔊 [CloudCache] 更新云端音频路径失败 [${engine}]:`, error.message);
     } else {
-      console.log(`🔊 [CloudCache] 音频路径已更新到 sentences 表 | [${engine}] | [列] ${column}`);
+      console.log(`🔊 [CloudCache] 云端音频路径已更新到 sentences 表 | [${engine}] | [列] ${column}`);
     }
   } catch (err) {
-    console.warn(`🔊 [CloudCache] 更新音频路径异常:`, err instanceof Error ? err.message : String(err));
+    console.warn(`🔊 [CloudCache] 更新云端音频路径异常:`, err instanceof Error ? err.message : String(err));
   }
 };
 
@@ -253,9 +273,15 @@ export const ttsCloudCacheService = {
     voice: string,
     engine: TTSEngineType,
     audioBlob: Blob,
-    modelId?: string
+    modelId?: string,
+    rate: number = 1
   ): Promise<boolean> {
     if (!isSupabaseReady()) {
+      return false;
+    }
+
+    if (rate !== 1) {
+      console.log(`🔊 [CloudCache] 非原速音频跳过上传 | [语速] ${rate}x`);
       return false;
     }
 
@@ -266,6 +292,7 @@ export const ttsCloudCacheService = {
         engine,
         modelId: modelId || '',
         audioBlob,
+        rate,
         retryCount: 0,
         resolve,
       });

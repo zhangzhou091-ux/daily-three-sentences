@@ -696,7 +696,7 @@ export const minimaxTtsService = {
         if (saved) console.log(`🔊 [MiniMax] 音频已缓存到本地`);
       });
 
-      ttsCloudCacheService.put(trimmedText, voiceId, 'minimax', audioBlob).then((uploaded) => {
+      ttsCloudCacheService.put(trimmedText, voiceId, 'minimax', audioBlob, undefined, rate).then((uploaded) => {
         if (uploaded) console.log(`🔊 [MiniMax] 音频已上传到云端`);
       });
 

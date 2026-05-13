@@ -636,7 +636,7 @@ export const elevenLabsService = {
         }
       }).catch(() => {});
 
-      ttsCloudCacheService.put(trimmedText, voiceId, 'elevenlabs', audioBlob, modelId).then((uploaded) => {
+      ttsCloudCacheService.put(trimmedText, voiceId, 'elevenlabs', audioBlob, modelId, rate).then((uploaded) => {
         if (uploaded) {
           console.log(`🔊 [ElevenLabs] 音频已上传到云端`);
         }
