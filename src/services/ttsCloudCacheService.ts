@@ -21,6 +21,7 @@ interface UploadTask {
 
 let uploadQueue: UploadTask[] = [];
 let activeUploads = 0;
+let bucketEnsured: boolean | null = null;
 
 const generateStoragePath = (engine: TTSEngineType, cacheKey: string): string => {
   return `${engine}/${cacheKey}.mp3`;
@@ -43,6 +44,17 @@ const isSupabaseReady = (): boolean => {
   return supabaseService.isReady && !!supabaseService.client;
 };
 
+const isBucketNotFoundError = (errorMessage: string): boolean => {
+  const lower = errorMessage.toLowerCase();
+  return (
+    lower.includes('bucket not found') ||
+    lower.includes('does not exist') ||
+    lower.includes('not found') ||
+    lower.includes('404') ||
+    lower.includes('no such bucket')
+  );
+};
+
 const processUploadQueue = (): void => {
   while (activeUploads < MAX_UPLOAD_CONCURRENCY && uploadQueue.length > 0) {
     const task = uploadQueue.shift()!;
@@ -62,6 +74,15 @@ const executeUpload = async (task: UploadTask): Promise<void> => {
     return;
   }
 
+  if (bucketEnsured === null) {
+    console.log(`🔊 [CloudCache] 首次上传，主动检查存储桶 "${BUCKET_NAME}"...`);
+    const ensureResult = await ensureBucket();
+    bucketEnsured = ensureResult.success;
+    if (!ensureResult.success) {
+      console.warn(`🔊 [CloudCache] 存储桶检查失败: ${ensureResult.message}`);
+    }
+  }
+
   const client = supabaseService.client!;
   const cacheKey = generateCloudCacheKey(text, voice, engine, engine === 'elevenlabs' ? modelId : undefined);
   const path = generateStoragePath(engine, cacheKey);
@@ -75,10 +96,12 @@ const executeUpload = async (task: UploadTask): Promise<void> => {
       });
 
     if (error) {
-      if (error.message?.includes('Bucket not found') || error.message?.includes('does not exist')) {
-        console.warn(`🔊 [CloudCache] 存储桶 "${BUCKET_NAME}" 不存在，尝试自动创建...`);
+      if (isBucketNotFoundError(error.message)) {
+        console.warn(`🔊 [CloudCache] 存储桶 "${BUCKET_NAME}" 不可用，尝试重新创建...`);
+        bucketEnsured = null;
         const createResult = await ensureBucket();
         if (createResult.success) {
+          bucketEnsured = true;
           const { error: retryError } = await client.storage
             .from(BUCKET_NAME)
             .upload(path, audioBlob, {
@@ -134,6 +157,10 @@ const executeUpload = async (task: UploadTask): Promise<void> => {
   }
 };
 
+const escapeLikePattern = (text: string): string => {
+  return text.replace(/[%_]/g, '\\$&');
+};
+
 const updateSentenceAudioPath = async (
   text: string,
   voice: string,
@@ -169,16 +196,18 @@ const updateSentenceAudioPath = async (
   if (!userName) return;
 
   try {
+    const now = Date.now();
+    const escapedText = escapeLikePattern(trimmedText);
     const { error, count } = await client
       .from('sentences')
-      .update({ [column]: storagePath })
+      .update({ [column]: storagePath, updatedat: now })
       .eq('username', userName)
-      .ilike('english', trimmedText);
+      .ilike('english', escapedText);
 
     if (error) {
       console.warn(`🔊 [CloudCache] 更新云端音频路径失败 [${engine}]:`, error.message);
     } else {
-      console.log(`🔊 [CloudCache] 云端音频路径已更新到 sentences 表 | [${engine}] | [列] ${column}`);
+      console.log(`🔊 [CloudCache] 云端音频路径已更新到 sentences 表 | [${engine}] | [列] ${column} | [匹配行数] ${count ?? 'unknown'}`);
     }
   } catch (err) {
     console.warn(`🔊 [CloudCache] 更新云端音频路径异常:`, err instanceof Error ? err.message : String(err));
@@ -205,14 +234,25 @@ const ensureBucket = async (): Promise<{ success: boolean; message: string }> =>
       return { success: true, message: `存储桶 "${BUCKET_NAME}" 已存在` };
     }
 
+    console.log(`🔊 [CloudCache] 正在创建存储桶 "${BUCKET_NAME}"...`);
     const { error: createError } = await client.storage.createBucket(BUCKET_NAME, {
-      public: false,
+      public: true,
       fileSizeLimit: 5242880,
     });
 
     if (createError) {
+      console.error(`🔊 [CloudCache] 创建存储桶失败: ${createError.message}`);
       return { success: false, message: `创建存储桶失败: ${createError.message}` };
     }
+
+    console.log(`🔊 [CloudCache] 存储桶 "${BUCKET_NAME}" 创建成功（公开读取）`);
+    console.log(`🔊 [CloudCache] ⚠️  请在 Supabase Dashboard → Storage → Policies 中添加以下策略：`);
+    console.log(`   1. 允许上传: INSERT, target: storage.objects, USING (bucket_id = '${BUCKET_NAME}')`);
+    console.log(`   2. 允许下载: SELECT, target: storage.objects, USING (bucket_id = '${BUCKET_NAME}')`);
+    console.log(`   或在 SQL Editor 中执行：`);
+    console.log(`   CREATE POLICY "Allow public read" ON storage.objects FOR SELECT USING (bucket_id = '${BUCKET_NAME}');`);
+    console.log(`   CREATE POLICY "Allow anon upload" ON storage.objects FOR INSERT WITH CHECK (bucket_id = '${BUCKET_NAME}');`);
+    console.log(`   CREATE POLICY "Allow anon update" ON storage.objects FOR UPDATE USING (bucket_id = '${BUCKET_NAME}');`);
 
     return { success: true, message: `存储桶 "${BUCKET_NAME}" 创建成功` };
   } catch (err) {
@@ -453,7 +493,15 @@ export const ttsCloudCacheService = {
   },
 
   async ensureBucket(): Promise<{ success: boolean; message: string }> {
-    return ensureBucket();
+    const result = await ensureBucket();
+    if (result.success) {
+      bucketEnsured = true;
+    }
+    return result;
+  },
+
+  resetBucketState(): void {
+    bucketEnsured = null;
   },
 
   isAvailable(): boolean {

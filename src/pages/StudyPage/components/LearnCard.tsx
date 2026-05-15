@@ -16,9 +16,11 @@ interface LearnCardProps {
 }
 
 const SPEECH_RATE_OPTIONS = [
-  { value: 0.2, label: '0.2x' },
   { value: 0.5, label: '0.5x' },
+  { value: 0.75, label: '0.75x' },
   { value: 1, label: '1x' },
+  { value: 1.25, label: '1.25x' },
+  { value: 1.5, label: '1.5x' },
 ];
 
 export const LearnCard: React.FC<LearnCardProps> = ({
@@ -171,7 +173,7 @@ export const LearnCard: React.FC<LearnCardProps> = ({
 
           <div className="flex-shrink-0 flex justify-center mt-4">
             <div className="px-6 py-2 bg-gray-100 rounded-full text-xs font-black text-gray-600 uppercase tracking-widest">
-              可理解输入，举一反三，场景运用
+              语块学习，可理解输入，举一反三，场景运用
             </div>
           </div>
         </div>

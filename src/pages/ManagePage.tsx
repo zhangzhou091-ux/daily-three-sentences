@@ -3,6 +3,7 @@ import { Sentence } from '../types';
 import { storageService } from '../services/storage';
 import { generateUUID } from '../utils/uuid';
 import { getSafeTags } from '../utils/format';
+import { getLocalDateString } from '../utils/date';
 import { StatisticsSection } from '../components/manage/StatisticsSection';
 import { SentenceList } from '../components/manage/SentenceList';
 
@@ -94,6 +95,11 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
   const [newEn, setNewEn] = useState('');
   const [newZh, setNewZh] = useState('');
   const [newTags, setNewTags] = useState('');
+  const [scheduledDate, setScheduledDate] = useState(() => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return getLocalDateString(tomorrow);
+  });
   const [searchQuery, setSearchQuery] = useState('');
   const deferredQuery = useDeferredValue(searchQuery);
   
@@ -176,6 +182,8 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
       
       await storageService.addSentence(newItem);
       
+      storageService.addSentenceToSelectionByDate(scheduledDate, newItem.id);
+      
       await onUpdate();
       setNewEn('');
       setNewZh('');
@@ -191,7 +199,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
       isAddingSentenceRef.current = false;
       setIsAddingSentence(false);
     }
-  }, [newEn, newZh, newTags, onUpdate]);
+  }, [newEn, newZh, newTags, onUpdate, scheduledDate]);
 
   const deleteSentence = useCallback(async (id: string) => {
     if (!window.confirm('确定要从数据库中永久移除这句话吗？')) return;
@@ -771,6 +779,46 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
             rows={2} 
           />
           <input value={newTags} onChange={(e) => setNewTags(e.target.value)} placeholder="标签 (用逗号分隔)" className="px-6 py-4 bg-gray-50 rounded-2xl border-none focus:ring-2 focus:ring-gray-200 outline-none text-sm font-medium" />
+          
+          <div className="flex items-center gap-3">
+            <label className="text-sm font-bold text-gray-500 shrink-0">学习时间</label>
+            <div className="flex items-center gap-2">
+              {(() => {
+                const today = getLocalDateString();
+                const tomorrow = new Date();
+                tomorrow.setDate(tomorrow.getDate() + 1);
+                const tomorrowStr = getLocalDateString(tomorrow);
+                const dayAfterTomorrow = new Date();
+                dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 2);
+                const dayAfterTomorrowStr = getLocalDateString(dayAfterTomorrow);
+                const options = [
+                  { value: today, label: '今天' },
+                  { value: tomorrowStr, label: '次日' },
+                  { value: dayAfterTomorrowStr, label: '后天' },
+                ];
+                return options.map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setScheduledDate(opt.value)}
+                    className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${
+                      scheduledDate === opt.value
+                        ? 'bg-black text-white shadow-sm'
+                        : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ));
+              })()}
+              <input
+                type="date"
+                value={scheduledDate}
+                onChange={(e) => setScheduledDate(e.target.value)}
+                min={getLocalDateString()}
+                className="px-3 py-2 bg-gray-50 rounded-xl border-none text-xs font-medium text-gray-600 focus:ring-2 focus:ring-gray-200 outline-none"
+              />
+            </div>
+          </div>
           
           {duplicateWarning.show && duplicateWarning.existing && (
             <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">

@@ -753,7 +753,7 @@ class SupabaseService {
           if (localTime > cloudTime) {
             const uploadData = this.mapSentenceToDb(localSentence, this._userName);
             uploadData.id = cloudSentence.id;
-            toUpload.push(uploadData);
+            toUpload.push(this.preserveCloudAudioPaths(uploadData, cloudSentence));
           }
         });
 
@@ -876,7 +876,7 @@ class SupabaseService {
           if (localTime > cloudTime && deviceService.canUploadSync()) {
             const uploadData = this.mapSentenceToDb(localSentence, this._userName);
             uploadData.id = cloudSentence.id;
-            toUpload.push(uploadData);
+            toUpload.push(this.preserveCloudAudioPaths(uploadData, cloudSentence));
           }
         });
 
@@ -949,6 +949,21 @@ class SupabaseService {
       tts_audio_path_el: s.ttsAudioPathEl || null,
       tts_audio_path_mm: s.ttsAudioPathMm || null,
     };
+  }
+
+  private preserveCloudAudioPaths(
+    uploadData: CloudSentenceData,
+    cloudRecord: CloudSentenceData | undefined
+  ): CloudSentenceData {
+    if (!cloudRecord) return uploadData;
+    const result = { ...uploadData };
+    if (!result.tts_audio_path_el && cloudRecord.tts_audio_path_el) {
+      result.tts_audio_path_el = cloudRecord.tts_audio_path_el;
+    }
+    if (!result.tts_audio_path_mm && cloudRecord.tts_audio_path_mm) {
+      result.tts_audio_path_mm = cloudRecord.tts_audio_path_mm;
+    }
+    return result;
   }
 
   private mapDbToSentence(db: CloudSentenceData): Sentence {

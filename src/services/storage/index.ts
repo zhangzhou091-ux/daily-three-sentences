@@ -197,6 +197,9 @@ export const storageService = {
     }
   },
 
+  addSentenceToSelectionByDate: localStorageService.addSentenceToSelectionByDate,
+  getSelectionByDate: localStorageService.getSelectionByDate,
+
   // ==============================================
   // 默写相关方法
   // ==============================================

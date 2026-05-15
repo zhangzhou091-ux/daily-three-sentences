@@ -99,6 +99,32 @@ const generateSSML = (text: string, voice: string, rate: string, pitch: string):
   </speak>`;
 };
 
+const AUDIO_GAIN = 1.5;
+
+let audioContext: AudioContext | null = null;
+let gainNode: GainNode | null = null;
+let currentSource: MediaElementAudioSourceNode | null = null;
+
+const getAudioContext = (): { ctx: AudioContext; gain: GainNode } => {
+  if (!audioContext || audioContext.state === 'closed') {
+    audioContext = new AudioContext();
+    gainNode = audioContext.createGain();
+    gainNode.gain.value = AUDIO_GAIN;
+    gainNode.connect(audioContext.destination);
+  }
+  if (audioContext.state === 'suspended') {
+    audioContext.resume();
+  }
+  return { ctx: audioContext, gain: gainNode! };
+};
+
+const disconnectSource = () => {
+  if (currentSource) {
+    try { currentSource.disconnect(); } catch { /* ignore */ }
+    currentSource = null;
+  }
+};
+
 const findAudioDataOffset = (data: Uint8Array): number => {
   for (let i = 0; i < data.length - 3; i++) {
     if (data[i] === 0x0D && data[i + 1] === 0x0A && data[i + 2] === 0x0D && data[i + 3] === 0x0A) {
@@ -120,14 +146,32 @@ const playAudioBlob = async (audioData: Uint8Array, loop: boolean = false): Prom
         currentAudioElement = null;
       }
 
+      disconnectSource();
+
       const blob = new Blob([audioData.buffer as ArrayBuffer], { type: 'audio/mpeg' });
       const url = URL.createObjectURL(blob);
       
       const audio = new Audio(url);
       audio.loop = loop;
+      audio.crossOrigin = 'anonymous';
       currentAudioElement = audio;
 
       const isCurrentGen = () => gen === audioGeneration;
+
+      let sourceConnected = false;
+
+      const connectToGain = () => {
+        if (sourceConnected) return;
+        try {
+          const { gain } = getAudioContext();
+          const source = getAudioContext().ctx.createMediaElementSource(audio);
+          source.connect(gain);
+          currentSource = source;
+          sourceConnected = true;
+        } catch (e) {
+          console.warn('🔊 [EdgeTTS] Web Audio 增益连接失败，使用原始音量:', e);
+        }
+      };
 
       const cleanup = () => {
         URL.revokeObjectURL(url);
@@ -136,6 +180,7 @@ const playAudioBlob = async (audioData: Uint8Array, loop: boolean = false): Prom
       
       audio.oncanplaythrough = () => {
         if (!isCurrentGen()) { cleanup(); resolve(); return; }
+        connectToGain();
         audio.play().then(() => {
           if (loop) {
             resolve();
@@ -458,11 +503,18 @@ export const edgeTtsService = {
     audioGeneration++;
     taskQueue = [];
     isProcessing = false;
+    disconnectSource();
     if (currentAudioElement) {
       currentAudioElement.pause();
       currentAudioElement.src = '';
       currentAudioElement.load();
       currentAudioElement = null;
+    }
+  },
+
+  setPlaybackRate(rate: number): void {
+    if (currentAudioElement) {
+      currentAudioElement.playbackRate = rate;
     }
   }
 };

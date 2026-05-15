@@ -46,6 +46,7 @@ interface UseReviewLogicProps {
   activeTab: string;
   isMountedRef: RefObject<boolean>;
   onUpdate: () => Promise<void>;
+  trainingIds?: string[];
 }
 
 interface UseReviewLogicReturn {
@@ -69,6 +70,7 @@ export const useReviewLogic = ({
   activeTab,
   isMountedRef,
   onUpdate,
+  trainingIds,
 }: UseReviewLogicProps): UseReviewLogicReturn => {
   const [currentReviewId, setCurrentReviewId] = useState<string | null>(null);
   const [reviewedIds, setReviewedIds] = useState<Set<string>>(() => loadReviewedToday());
@@ -86,6 +88,18 @@ export const useReviewLogic = ({
   const reviewQueue = useMemo(() => {
     if (activeTab !== 'review') {
       return [];
+    }
+
+    if (trainingIds && trainingIds.length > 0) {
+      const sentenceMap = new Map<string, Sentence>();
+      sentences.forEach(s => sentenceMap.set(s.id, s));
+      const trainingQueue: Sentence[] = [];
+      trainingIds.forEach(id => {
+        const s = sentenceMap.get(id);
+        if (s) trainingQueue.push(s);
+      });
+      reviewQueueLengthRef.current = trainingQueue.length;
+      return trainingQueue;
     }
 
     const todayStr = currentDateStr;
@@ -163,7 +177,7 @@ export const useReviewLogic = ({
     reviewQueueLengthRef.current = finalQueue.length;
     
     return finalQueue;
-  }, [sentences, settings.dailyReviewTarget, activeTab, currentDateStr]);
+  }, [sentences, settings.dailyReviewTarget, activeTab, currentDateStr, trainingIds]);
 
   const currentReviewIndex = useMemo(() => {
     if (!currentReviewId) return 0;

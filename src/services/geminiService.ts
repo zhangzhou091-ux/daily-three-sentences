@@ -489,6 +489,7 @@ export const geminiService = {
   setPlaybackRate(rate: number): void {
     const clampedRate = Math.max(0.1, Math.min(10, rate));
     elevenLabsService.setPlaybackRate(clampedRate);
+    edgeTtsService.setPlaybackRate(clampedRate);
     import('./minimaxTtsService').then(({ minimaxTtsService }) => minimaxTtsService.setPlaybackRate(clampedRate)).catch(() => {});
     if (currentUtterance) {
       currentUtterance.rate = clampedRate;

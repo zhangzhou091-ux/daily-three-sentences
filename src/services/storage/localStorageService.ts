@@ -462,6 +462,18 @@ export const localStorageService = {
     localStorage.setItem(STORAGE_KEYS.DAILY_SELECTION, JSON.stringify({ date: today, ids: ids }));
   },
 
+  saveSelectionByDate(date: string, ids: string[]) {
+    localStorage.setItem(`${STORAGE_KEYS.DAILY_SELECTION}_${date}`, JSON.stringify(ids));
+  },
+
+  addSentenceToSelectionByDate(date: string, sentenceId: string) {
+    const existing = this.getSelectionByDate(date);
+    if (!existing.includes(sentenceId)) {
+      existing.push(sentenceId);
+      this.saveSelectionByDate(date, existing);
+    }
+  },
+
   /**
    * UI警告相关方法
    */

@@ -14,9 +14,11 @@ interface ReviewCardProps {
 }
 
 const SPEECH_RATE_OPTIONS = [
-  { value: 0.2, label: '0.2x' },
   { value: 0.5, label: '0.5x' },
+  { value: 0.75, label: '0.75x' },
   { value: 1, label: '1x' },
+  { value: 1.25, label: '1.25x' },
+  { value: 1.5, label: '1.5x' },
 ];
 
 export const ReviewCard: React.FC<ReviewCardProps> = ({
@@ -123,14 +125,33 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({
             paddingBottom: '20px'
           }}
         >
-          <div className="w-full flex items-center justify-between mb-3 opacity-0 pointer-events-none">
-            <p className="text-xs font-black uppercase tracking-[0.2em]">占位</p>
+          <div className="w-full flex items-center justify-between mb-3" onClick={(e) => e.stopPropagation()}>
+            <p className="text-xs font-black text-gray-600 uppercase tracking-[0.2em]">已复习 {reps} 次</p>
             <div className="flex items-center gap-1">
               {SPEECH_RATE_OPTIONS.map(opt => (
-                <span key={opt.value} className="px-2.5 py-0.5 text-[10px]">{opt.label}</span>
+                <button
+                  key={opt.value}
+                  onClick={() => onSpeechRateChange(opt.value)}
+                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold transition-all ${
+                    speechRate === opt.value
+                      ? 'bg-blue-500 text-white shadow-sm'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                  }`}
+                >
+                  {opt.label}
+                </button>
               ))}
             </div>
-            <div className="px-2 py-1">占位</div>
+            <div className="flex flex-col items-end bg-white px-2 py-1 rounded-lg shadow-sm">
+              <span className="text-[8px] font-black text-blue-500 uppercase tracking-widest mb-0.5">下次复习</span>
+              <span className="text-xs font-bold text-gray-700">
+                {scheduledDays
+                  ? scheduledDays === 1
+                    ? '明天'
+                  : `${scheduledDays}天后`
+                : '待定'}
+              </span>
+            </div>
           </div>
 
           <div className="flex-1 flex items-start justify-start overflow-y-auto pr-2 min-h-0">
@@ -157,7 +178,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({
 
           <div className="flex-shrink-0 flex justify-center mt-4">
             <div className="bg-blue-50 text-blue-500 px-6 py-2 rounded-full text-xs font-black uppercase tracking-[0.2em]">
-              可理解输入，举一反三，场景运用
+              语块学习，可理解输入，举一反三，场景运用
             </div>
           </div>
         </div>

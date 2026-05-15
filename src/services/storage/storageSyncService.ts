@@ -32,7 +32,9 @@ function mapCloudToLocal(db: CloudSentenceData): Sentence {
     state: db.state,
     scheduledDays: db.scheduleddays,
     isPendingFirstReview: db.firstreviewpending,
-    learnedAt: db.learnedat || undefined
+    learnedAt: db.learnedat || undefined,
+    ttsAudioPathEl: db.tts_audio_path_el || undefined,
+    ttsAudioPathMm: db.tts_audio_path_mm || undefined,
   };
 }
 

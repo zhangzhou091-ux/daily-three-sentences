@@ -343,11 +343,38 @@ const stopCurrentAudio = (): void => {
   revokeAllLoopUrls();
 };
 
+const AUDIO_GAIN = 1.5;
+
+let audioContext: AudioContext | null = null;
+let gainNode: GainNode | null = null;
+let currentSource: MediaElementAudioSourceNode | null = null;
+
+const getAudioContext = (): { ctx: AudioContext; gain: GainNode } => {
+  if (!audioContext || audioContext.state === 'closed') {
+    audioContext = new AudioContext();
+    gainNode = audioContext.createGain();
+    gainNode.gain.value = AUDIO_GAIN;
+    gainNode.connect(audioContext.destination);
+  }
+  if (audioContext.state === 'suspended') {
+    audioContext.resume();
+  }
+  return { ctx: audioContext, gain: gainNode! };
+};
+
+const disconnectSource = () => {
+  if (currentSource) {
+    try { currentSource.disconnect(); } catch { /* ignore */ }
+    currentSource = null;
+  }
+};
+
 const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: number = 1): Promise<void> => {
   const gen = ++audioGeneration;
   const isCurrentGen = () => gen === audioGeneration;
 
   stopCurrentAudio();
+  disconnectSource();
 
   if (!audioBlob || audioBlob.size === 0) {
     throw new Error('音频数据为空');
@@ -359,7 +386,23 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
   audio.preload = 'auto';
   audio.loop = loop;
   audio.playbackRate = rate;
+  audio.crossOrigin = 'anonymous';
   currentAudioElement = audio;
+
+  let sourceConnected = false;
+
+  const connectToGain = () => {
+    if (sourceConnected) return;
+    try {
+      const { gain } = getAudioContext();
+      const source = getAudioContext().ctx.createMediaElementSource(audio);
+      source.connect(gain);
+      currentSource = source;
+      sourceConnected = true;
+    } catch (e) {
+      console.warn('🔊 [MiniMax] Web Audio 增益连接失败，使用原始音量:', e);
+    }
+  };
 
   const cleanup = () => {
     if (currentAudioElement === audio) {
@@ -429,6 +472,7 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
 
     audio.oncanplay = () => {
       if (!isCurrentGen() || settled) return;
+      connectToGain();
       attemptPlay();
     };
 
@@ -437,6 +481,7 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
       if (isIOSAudio()) {
         setTimeout(() => {
           if (!isCurrentGen() || settled) return;
+          connectToGain();
           attemptPlay();
         }, 100);
       }
@@ -613,14 +658,14 @@ export const minimaxTtsService = {
             voice_setting: {
               voice_id: voiceId,
               speed: 1,
-              vol: 1,
+              vol: 1.5,
               pitch: 0,
             },
             audio_setting: {
-              sample_rate: 32000,
+              sample_rate: 44100,
               bitrate: 128000,
               format: 'mp3',
-              channel: 1,
+              channel: 2,
             },
             language_boost: 'auto',
             output_format: 'hex',
@@ -758,14 +803,14 @@ export const minimaxTtsService = {
           voice_setting: {
             voice_id: RECOMMENDED_VOICES[0].id,
             speed: 1,
-            vol: 1,
+            vol: 1.5,
             pitch: 0,
           },
           audio_setting: {
-            sample_rate: 32000,
+            sample_rate: 44100,
             bitrate: 128000,
             format: 'mp3',
-            channel: 1,
+            channel: 2,
           },
           language_boost: 'auto',
           output_format: 'hex',
