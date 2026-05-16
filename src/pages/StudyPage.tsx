@@ -17,11 +17,9 @@ import { LearnCard } from './StudyPage/components/LearnCard';
 import { ReviewCard } from './StudyPage/components/ReviewCard';
 
 const SPEECH_RATE_OPTIONS = [
-  { value: 0.5, label: '0.5x' },
-  { value: 0.75, label: '0.75x' },
+  { value: 0.2, label: '0.2x' },
+  { value: 0.7, label: '0.7x' },
   { value: 1, label: '1x' },
-  { value: 1.25, label: '1.25x' },
-  { value: 1.5, label: '1.5x' },
 ];
 
 interface StudyPageProps {
@@ -29,8 +27,32 @@ interface StudyPageProps {
   onUpdate: () => Promise<void>;
 }
 
+const STUDY_TAB_KEY = 'd3s_study_tab';
+
+const loadSavedTab = (): StudyStep => {
+  try {
+    const saved = localStorage.getItem(STUDY_TAB_KEY);
+    if (saved) {
+      const { date, tab } = JSON.parse(saved);
+      if (date === getLocalDateString() && ['learn', 'review', 'dictation'].includes(tab)) {
+        return tab as StudyStep;
+      }
+    }
+  } catch { /* ignore */ }
+  return 'learn';
+};
+
+const saveStudyTab = (tab: StudyStep) => {
+  try {
+    localStorage.setItem(STUDY_TAB_KEY, JSON.stringify({
+      date: getLocalDateString(),
+      tab
+    }));
+  } catch { /* ignore */ }
+};
+
 const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
-  const [activeTab, setActiveTab] = useState<StudyStep>('learn');
+  const [activeTab, setActiveTabState] = useState<StudyStep>(() => loadSavedTab());
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   
@@ -56,6 +78,11 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     const d = new Date();
     return d.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
   }, [currentDateStr]);
+
+  const setActiveTab = useCallback((tab: StudyStep) => {
+    setActiveTabState(tab);
+    saveStudyTab(tab);
+  }, []);
   
   useEffect(() => {
     const handleSettingsChange = () => {
@@ -80,20 +107,6 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     };
   }, []);
   
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        const newDate = getLocalDateString();
-        if (newDate !== currentDateStr) {
-          console.log('📅 检测到日期变化，触发复习队列重建');
-          setCurrentDateStr(newDate);
-        }
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [currentDateStr]);
-
   const { 
     dailySelection, 
     setDailySelection, 
@@ -118,7 +131,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     animationTimerRef,
   });
 
-  useProgressRestore({
+  const { currentLearnSentenceRef, saveCurrentLearnProgress } = useProgressRestore({
     activeTab,
     dailySelection,
     currentIndex,
@@ -154,6 +167,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     reviewQueueLengthRef,
     handleReviewFeedback,
     goToReviewIndex,
+    saveCurrentReviewProgress,
   } = useReviewLogic({
     sentences,
     settings,
@@ -190,6 +204,27 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     stopRandomListening,
     REPEATS_PER_SENTENCE,
   } = useRandomListening(dictationPool);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        saveCurrentLearnProgress();
+        saveCurrentReviewProgress();
+      }
+      if (document.visibilityState === 'visible') {
+        const newDate = getLocalDateString();
+        if (newDate !== currentDateStr) {
+          console.log('📅 检测到日期变化，触发复习队列重建');
+          setCurrentDateStr(newDate);
+        }
+        if (window.speechSynthesis && window.speechSynthesis.paused) {
+          window.speechSynthesis.resume();
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [currentDateStr, saveCurrentLearnProgress, saveCurrentReviewProgress]);
 
   const [animatingLearnedId, setAnimatingLearnedIdState] = useState<string | null>(null);
   
@@ -321,7 +356,6 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     if (activeTab !== 'review') return;
 
     if (reviewQueue.length === 0) {
-      setCurrentReviewId(null);
       return;
     }
 

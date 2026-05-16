@@ -947,7 +947,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                 <div className="grid grid-cols-3 gap-2">
                   {[
                     { value: 0.2, label: '0.2x', desc: '慢速' },
-                    { value: 0.5, label: '0.5x', desc: '中速' },
+                    { value: 0.7, label: '0.7x', desc: '中速' },
                     { value: 1, label: '1x', desc: '正常' },
                   ].map(opt => (
                     <button
@@ -964,7 +964,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                     </button>
                   ))}
                 </div>
-                <p className="text-[10px] text-gray-500">0.2x 适合逐词听辨，0.5x 适合跟读，1x 正常语速</p>
+                <p className="text-[10px] text-gray-500">0.2x 适合逐词听辨，0.7x 适合跟读，1x 正常语速</p>
               </div>
             </div>
           </div>

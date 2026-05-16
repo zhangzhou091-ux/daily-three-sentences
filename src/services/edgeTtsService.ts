@@ -59,6 +59,7 @@ let taskQueue: Array<{
 let isProcessing = false;
 let currentAudioElement: HTMLAudioElement | null = null;
 let audioGeneration = 0;
+let currentSSMLNumericRate: number = 1;
 
 export const POPULAR_VOICES: EdgeVoice[] = [
   { name: 'Microsoft Ava Online (Natural) - English (United States)', shortName: 'en-US-AvaMultilingualNeural', gender: 'Female', locale: 'en-US', friendlyName: 'Ava (美式女声)' },
@@ -100,6 +101,12 @@ const generateSSML = (text: string, voice: string, rate: string, pitch: string):
 };
 
 const AUDIO_GAIN = 1.5;
+
+const isIOSAudio = (): boolean => {
+  if (typeof navigator === 'undefined') return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+};
 
 let audioContext: AudioContext | null = null;
 let gainNode: GainNode | null = null;
@@ -162,6 +169,10 @@ const playAudioBlob = async (audioData: Uint8Array, loop: boolean = false): Prom
 
       const connectToGain = () => {
         if (sourceConnected) return;
+        if (isIOSAudio()) {
+          sourceConnected = true;
+          return;
+        }
         try {
           const { gain } = getAudioContext();
           const source = getAudioContext().ctx.createMediaElementSource(audio);
@@ -475,7 +486,7 @@ const processQueue = async () => {
 export const edgeTtsService = {
   speechRateToSSML,
 
-  async speak(text: string, voice: string = DEFAULT_VOICE, rate: string = DEFAULT_RATE, loop: boolean = false): Promise<SpeakResult> {
+  async speak(text: string, voice: string = DEFAULT_VOICE, rate: string = DEFAULT_RATE, loop: boolean = false, numericRate: number = 1): Promise<SpeakResult> {
     if (!text || typeof text !== 'string' || !text.trim()) {
       return { success: false, error: '发音文本为空' };
     }
@@ -484,6 +495,8 @@ export const edgeTtsService = {
     if (trimmedText.length > 2000) {
       return { success: false, error: '文本过长，请分段播放' };
     }
+
+    currentSSMLNumericRate = Math.max(0.1, Math.min(10, numericRate));
     
     return new Promise((resolve, reject) => {
       taskQueue.push({ text: trimmedText, voice, rate, loop, resolve, reject });
@@ -513,8 +526,8 @@ export const edgeTtsService = {
   },
 
   setPlaybackRate(rate: number): void {
-    if (currentAudioElement) {
-      currentAudioElement.playbackRate = rate;
+    if (currentAudioElement && currentSSMLNumericRate > 0) {
+      currentAudioElement.playbackRate = rate / currentSSMLNumericRate;
     }
   }
 };

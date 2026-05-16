@@ -16,11 +16,9 @@ interface LearnCardProps {
 }
 
 const SPEECH_RATE_OPTIONS = [
-  { value: 0.5, label: '0.5x' },
-  { value: 0.75, label: '0.75x' },
+  { value: 0.2, label: '0.2x' },
+  { value: 0.7, label: '0.7x' },
   { value: 1, label: '1x' },
-  { value: 1.25, label: '1.25x' },
-  { value: 1.5, label: '1.5x' },
 ];
 
 export const LearnCard: React.FC<LearnCardProps> = ({
@@ -62,7 +60,17 @@ export const LearnCard: React.FC<LearnCardProps> = ({
             overflow: 'hidden'
           }}
         >
-          <div className="w-full flex justify-center mb-3" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full flex items-center justify-between mb-3" onClick={(e) => e.stopPropagation()}>
+            <div className="flex-shrink-0">
+              {(isCurrentlyLearned || isAnimating) ? (
+                <div className="bg-green-100 text-green-600 text-xs font-black px-3 py-0.5 rounded-full flex items-center gap-1.5 shadow-sm border border-green-200/50">
+                  <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
+                  已进入计划
+                </div>
+              ) : (
+                <div className="w-0" />
+              )}
+            </div>
             <div className="flex items-center gap-1">
               {SPEECH_RATE_OPTIONS.map(opt => (
                 <button
@@ -79,13 +87,6 @@ export const LearnCard: React.FC<LearnCardProps> = ({
               ))}
             </div>
           </div>
-
-          {(isCurrentlyLearned || isAnimating) && (
-            <div className="bg-green-100 text-green-600 text-xs font-black px-4 py-1.5 rounded-full mb-4 flex items-center gap-2 shadow-sm border border-green-200/50">
-              <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
-              已进入计划
-            </div>
-          )}
 
           <div className="mt-[2em] flex flex-col items-center w-full flex-1 overflow-y-auto min-h-0">
             <h3 className="text-lg font-normal text-gray-900 leading-normal w-full break-words whitespace-pre-wrap text-left m-0 p-0">
@@ -125,7 +126,17 @@ export const LearnCard: React.FC<LearnCardProps> = ({
             paddingBottom: '20px'
           }}
         >
-          <div className="w-full flex justify-center mb-3" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full flex items-center justify-between mb-3" onClick={(e) => e.stopPropagation()}>
+            <div className="flex-shrink-0">
+              {(isCurrentlyLearned || isAnimating) ? (
+                <div className="bg-green-100 text-green-600 text-xs font-black px-3 py-0.5 rounded-full flex items-center gap-1.5 shadow-sm border border-green-200/50">
+                  <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
+                  已进入计划
+                </div>
+              ) : (
+                <div className="w-0" />
+              )}
+            </div>
             <div className="flex items-center gap-1">
               {SPEECH_RATE_OPTIONS.map(opt => (
                 <button
@@ -141,12 +152,6 @@ export const LearnCard: React.FC<LearnCardProps> = ({
                 </button>
               ))}
             </div>
-          </div>
-
-          <div className="flex-shrink-0">
-            {(isCurrentlyLearned || isAnimating) && (
-              <div className="opacity-0 mb-4 pointer-events-none">占位</div>
-            )}
           </div>
 
           <div className="flex-1 flex items-start justify-start overflow-y-auto pr-2 min-h-0">

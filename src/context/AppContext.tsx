@@ -25,10 +25,38 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
+const VIEW_STORAGE_KEY = 'd3s_current_view';
+
+const loadSavedView = (): ViewType => {
+  try {
+    const saved = localStorage.getItem(VIEW_STORAGE_KEY);
+    if (saved) {
+      const { date, view } = JSON.parse(saved);
+      if (date && view) {
+        const savedDate = new Date(date);
+        const now = new Date();
+        if (savedDate.toDateString() === now.toDateString() && ['study', 'manage', 'achievements', 'settings'].includes(view)) {
+          return view as ViewType;
+        }
+      }
+    }
+  } catch { /* ignore */ }
+  return 'study';
+};
+
+const saveCurrentView = (view: ViewType) => {
+  try {
+    localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify({
+      date: new Date().toISOString(),
+      view
+    }));
+  } catch { /* ignore */ }
+};
+
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [settings, setSettings] = useState<UserSettings>(storageService.getSettings());
   const [stats, setStats] = useState<UserStats>(localStorageService.getStats());
-  const [currentView, setCurrentView] = useState<ViewType>('study');
+  const [currentView, setCurrentView] = useState<ViewType>(() => loadSavedView());
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState('');
@@ -124,6 +152,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, []);
 
+  const setView = useCallback((view: ViewType) => {
+    setCurrentView(view);
+    saveCurrentView(view);
+  }, []);
+
   return (
     <AppContext.Provider value={{
       settings,
@@ -136,7 +169,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       isConfigured,
       isLoading,
       initError,
-      setView: setCurrentView,
+      setView,
       updateSettings,
       setSyncing: setIsSyncing,
       setSyncMessage,

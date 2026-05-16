@@ -11,6 +11,7 @@
 import { elevenLabsService } from './elevenLabsService';
 import { edgeTtsService } from './edgeTtsService';
 import { storageService } from './storage';
+import { mediaSessionService } from './mediaSessionService';
 
 const SPEAK_TIMEOUT = 10000;
 const SUGGEST_TIMEOUT = 5000;
@@ -33,6 +34,7 @@ let isProcessing = false;
 let currentUtterance: SpeechSynthesisUtterance | null = null;
 let loopActiveFlag = false;
 let speakGeneration = 0;
+let currentWebSpeechRate: number = 1;
 
 const LOCAL_SENTENCE_BANK = [
   { english: "Could you please clarify that point?", chinese: "能请你澄清一下那一点吗？", tags: ["work", "meeting"] },
@@ -211,6 +213,7 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
   }
 
   const gen = ++speakGeneration;
+  currentWebSpeechRate = rate;
 
   const utterance = new SpeechSynthesisUtterance(text);
   currentUtterance = utterance;
@@ -262,7 +265,8 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
         return;
       }
       
-      const pitch = getPitchForRate(rate);
+      const activeRate = currentWebSpeechRate;
+      const pitch = getPitchForRate(activeRate);
       const delay = isIOS() ? 250 : 50;
 
       setTimeout(() => {
@@ -270,7 +274,7 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
           const newUtterance = new SpeechSynthesisUtterance(text);
           newUtterance.voice = utterance.voice;
           newUtterance.lang = utterance.lang;
-          newUtterance.rate = rate;
+          newUtterance.rate = activeRate;
           newUtterance.pitch = pitch;
           newUtterance.volume = 1.0;
           newUtterance.onend = handleEnd;
@@ -353,6 +357,13 @@ const processQueue = async () => {
 
 export const geminiService = {
   async speak(text: string, loop: boolean = false): Promise<SpeakResult> {
+    mediaSessionService.holdAudioFocus();
+    mediaSessionService.updateMetadata(text);
+    mediaSessionService.setActionHandlers({
+      onPause: () => { geminiService.stop(); },
+      onStop: () => { geminiService.stop(); },
+    });
+
     const settings = storageService.getSettings();
     const ttsEngine = settings.ttsEngine || 'auto';
     const speechRate = settings.speechRate ?? 1;
@@ -401,7 +412,7 @@ export const geminiService = {
         const voice = settings.edgeTtsVoiceId || edgeTtsService.getDefaultVoice();
         const rateSSML = edgeTtsService.speechRateToSSML(speechRate);
         console.log(`🔊 [引擎] EdgeTTS | [语音] ${voice} | [循环] ${loop} | [语速] ${rateSSML}`);
-        const result = await edgeTtsService.speak(text, voice, rateSSML, loop);
+        const result = await edgeTtsService.speak(text, voice, rateSSML, loop, speechRate);
         if (result.success) return { success: true };
         console.warn('🔊 EdgeTTS 播放失败:', result.error);
         return { success: false, error: result.error };
@@ -484,10 +495,12 @@ export const geminiService = {
     currentUtterance = null;
     taskQueue = [];
     isProcessing = false;
+    mediaSessionService.stopAll();
   },
 
   setPlaybackRate(rate: number): void {
     const clampedRate = Math.max(0.1, Math.min(10, rate));
+    currentWebSpeechRate = clampedRate;
     elevenLabsService.setPlaybackRate(clampedRate);
     edgeTtsService.setPlaybackRate(clampedRate);
     import('./minimaxTtsService').then(({ minimaxTtsService }) => minimaxTtsService.setPlaybackRate(clampedRate)).catch(() => {});

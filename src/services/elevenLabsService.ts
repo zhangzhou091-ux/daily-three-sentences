@@ -277,6 +277,10 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
 
   const connectToGain = () => {
     if (sourceConnected) return;
+    if (isIOS()) {
+      sourceConnected = true;
+      return;
+    }
     try {
       const { gain } = getAudioContext();
       const source = getAudioContext().ctx.createMediaElementSource(audio);

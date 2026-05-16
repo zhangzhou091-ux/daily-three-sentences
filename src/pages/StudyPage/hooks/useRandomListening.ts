@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { Sentence } from '../../../types';
 import { geminiService } from '../../../services/geminiService';
 import { storageService } from '../../../services/storage';
+import { mediaSessionService } from '../../../services/mediaSessionService';
 
 const REPEATS_PER_SENTENCE = 5;
 
@@ -119,6 +120,7 @@ export const useRandomListening = (dictationPool: Sentence[]) => {
         totalPlayedRef.current++;
 
         if (i < REPEATS_PER_SENTENCE - 1) {
+          mediaSessionService.holdAudioFocus();
           await new Promise<void>(r => setTimeout(r, 800));
         }
       }
@@ -127,6 +129,7 @@ export const useRandomListening = (dictationPool: Sentence[]) => {
 
       setState(prev => ({ ...prev, totalPlayed: totalPlayedRef.current }));
 
+      mediaSessionService.holdAudioFocus();
       await new Promise<void>(r => setTimeout(r, 1200));
     }
   }, [pickRandomSentence, playSentenceOnce]);
