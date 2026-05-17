@@ -203,6 +203,14 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     randomListeningPoolSize,
     toggleRandomListening,
     stopRandomListening,
+    goToPreviousSentence,
+    goToNextSentence,
+    canGoPrevious,
+    canGoNext,
+    toggleBlacklist,
+    isBlacklisted,
+    clearBlacklist,
+    blacklistSize,
     REPEATS_PER_SENTENCE,
   } = useRandomListening(sentences);
 
@@ -811,21 +819,50 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     </button>
                   ))}
                 </div>
-                <span className="text-[10px] font-bold text-gray-400">
-                  {randomListeningPoolSize} 句可用
-                </span>
+                <div className="flex items-center gap-2">
+                  {blacklistSize > 0 && (
+                    <button
+                      onClick={clearBlacklist}
+                      className="text-[10px] font-bold text-gray-400 hover:text-red-500 transition-colors"
+                    >
+                      清除排除({blacklistSize})
+                    </button>
+                  )}
+                  <span className="text-[10px] font-bold text-gray-400">
+                    {randomListeningPoolSize} 句可用
+                  </span>
+                </div>
               </div>
 
               <div className="mt-[1.5em] flex flex-col items-center w-full flex-1 overflow-y-auto min-h-0">
                 {isRandomListeningActive && randomListeningSentence ? (
                   <>
                     <div className="w-full text-left space-y-2">
-                      <h3 className="text-lg font-normal text-gray-900 leading-normal w-full break-words whitespace-pre-wrap">
-                        {randomListeningSentence.english}
-                      </h3>
-                      <p className="text-sm text-gray-400 leading-normal break-words">
-                        {randomListeningSentence.chinese}
-                      </p>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <h3 className={`text-lg font-normal leading-normal w-full break-words whitespace-pre-wrap ${
+                            isBlacklisted(randomListeningSentence.id) ? 'text-gray-300 line-through' : 'text-gray-900'
+                          }`}>
+                            {randomListeningSentence.english}
+                          </h3>
+                          <p className={`text-sm leading-normal break-words ${
+                            isBlacklisted(randomListeningSentence.id) ? 'text-gray-200 line-through' : 'text-gray-400'
+                          }`}>
+                            {randomListeningSentence.chinese}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => toggleBlacklist(randomListeningSentence.id)}
+                          className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs transition-all ${
+                            isBlacklisted(randomListeningSentence.id)
+                              ? 'bg-red-100 text-red-500 hover:bg-red-200'
+                              : 'bg-gray-100 text-gray-400 hover:bg-gray-200 hover:text-gray-600'
+                          }`}
+                          title={isBlacklisted(randomListeningSentence.id) ? '取消排除' : '排除此句'}
+                        >
+                          {isBlacklisted(randomListeningSentence.id) ? '🚫' : '⊘'}
+                        </button>
+                      </div>
                     </div>
                     <div className="mt-auto flex flex-col items-center w-full">
                       <div className="flex items-center gap-2 w-full mb-4">
@@ -839,13 +876,39 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                           {randomListeningRepeat}/{REPEATS_PER_SENTENCE}
                         </span>
                       </div>
-                      <button
-                        onClick={toggleRandomListening}
-                        className="w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all z-20 bg-red-50 text-red-500 hover:scale-110 active:scale-95 animate-pulse"
-                      >
-                        ⏹
-                      </button>
-                      <p className="text-xs font-black text-gray-600 uppercase tracking-widest mt-6">
+                      <div className="flex items-center justify-center gap-4 w-full">
+                        <button
+                          onClick={goToPreviousSentence}
+                          disabled={!canGoPrevious}
+                          className={`w-10 h-10 rounded-full flex items-center justify-center text-lg transition-all ${
+                            canGoPrevious
+                              ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-90'
+                              : 'bg-gray-50 text-gray-300 cursor-not-allowed'
+                          }`}
+                          title="上一句"
+                        >
+                          ⏮
+                        </button>
+                        <button
+                          onClick={toggleRandomListening}
+                          className="w-14 h-14 rounded-full flex items-center justify-center text-2xl transition-all z-20 bg-red-50 text-red-500 hover:scale-110 active:scale-95 animate-pulse"
+                        >
+                          ⏹
+                        </button>
+                        <button
+                          onClick={goToNextSentence}
+                          disabled={!canGoNext}
+                          className={`w-10 h-10 rounded-full flex items-center justify-center text-lg transition-all ${
+                            canGoNext
+                              ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-90'
+                              : 'bg-gray-50 text-gray-300 cursor-not-allowed'
+                          }`}
+                          title="下一句"
+                        >
+                          ⏭
+                        </button>
+                      </div>
+                      <p className="text-xs font-black text-gray-600 uppercase tracking-widest mt-4">
                         第 {randomListeningTotal + 1} 句 · 已朗读 {randomListeningTotal} 遍
                       </p>
                     </div>

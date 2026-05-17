@@ -911,4 +911,109 @@ export const minimaxTtsService = {
   getCachedAudio,
   getStaleCachedAudio,
   setCachedAudio,
+
+  async fetchAudioBlob(
+    text: string,
+    apiKey: string,
+    voiceId: string
+  ): Promise<Blob | null> {
+    if (!text || !text.trim()) return null;
+    if (!apiKey || !apiKey.trim()) return null;
+    if (!voiceId) return null;
+
+    const trimmedText = text.trim();
+
+    try {
+      const cachedBlob = await getCachedAudio(trimmedText, voiceId);
+      if (cachedBlob) {
+        console.log(`🔊 [MiniMax] fetchAudioBlob: 本地缓存命中 | [语音] ${voiceId}`);
+        return cachedBlob;
+      }
+    } catch { /* ignore */ }
+
+    try {
+      const cloudBlob = await ttsCloudCacheService.get(trimmedText, voiceId, 'minimax');
+      if (cloudBlob) {
+        console.log(`🔊 [MiniMax] fetchAudioBlob: 云端缓存命中 | [语音] ${voiceId}`);
+        setCachedAudio(trimmedText, voiceId, cloudBlob).catch(() => {});
+        return cloudBlob;
+      }
+    } catch { /* ignore */ }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), SPEAK_TIMEOUT);
+
+      const response = await fetch(`${API_BASE}/v1/t2a_v2`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey.trim()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'speech-02-hd',
+          text: trimmedText,
+          stream: false,
+          voice_setting: {
+            voice_id: voiceId,
+            speed: 1,
+            vol: 1.5,
+            pitch: 0,
+          },
+          audio_setting: {
+            sample_rate: 44100,
+            bitrate: 128000,
+            format: 'mp3',
+            channel: 2,
+          },
+          language_boost: 'auto',
+          output_format: 'hex',
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        console.warn(`🔊 [MiniMax] fetchAudioBlob: API 返回 ${response.status}`);
+        return null;
+      }
+
+      const result = await response.json();
+
+      if (result?.base_resp?.status_code !== 0) {
+        console.warn('🔊 [MiniMax] fetchAudioBlob: API base_resp 错误:', result?.base_resp?.status_msg);
+        return null;
+      }
+
+      let audioBlob: Blob;
+
+      if (result?.data?.audio) {
+        const audioBytes = hexToBytes(result.data.audio);
+        audioBlob = new Blob([audioBytes], { type: 'audio/mpeg' });
+      } else if (result?.audio_file) {
+        const audioBytes = base64ToBytes(result.audio_file);
+        audioBlob = new Blob([audioBytes], { type: 'audio/mpeg' });
+      } else {
+        console.warn('🔊 [MiniMax] fetchAudioBlob: API 返回空音频数据');
+        return null;
+      }
+
+      if (audioBlob.size === 0) {
+        console.warn('🔊 [MiniMax] fetchAudioBlob: 音频数据为空');
+        return null;
+      }
+
+      console.log(`🔊 [MiniMax] fetchAudioBlob: 合成完成 | [大小] ${formatSize(audioBlob.size)}`);
+
+      setCachedAudio(trimmedText, voiceId, audioBlob).catch(() => {});
+      ttsCloudCacheService.put(trimmedText, voiceId, 'minimax', audioBlob).catch(() => {});
+
+      return audioBlob;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`🔊 [MiniMax] fetchAudioBlob 失败: ${msg}`);
+      return null;
+    }
+  },
 };

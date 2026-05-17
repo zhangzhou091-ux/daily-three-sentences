@@ -891,6 +891,81 @@ export const elevenLabsService = {
   clearPendingRequests(): void {
     pendingRequests = [];
   },
+
+  async fetchAudioBlob(
+    text: string,
+    apiKey: string,
+    voiceId: string,
+    modelId?: string
+  ): Promise<Blob | null> {
+    if (!text || !text.trim()) return null;
+    if (!apiKey || !apiKey.trim()) return null;
+    if (!voiceId) return null;
+
+    const trimmedText = text.trim();
+    const model = modelId || DEFAULT_MODEL;
+
+    try {
+      const cachedBlob = await elevenLabsCacheService.get(trimmedText, voiceId, model);
+      if (cachedBlob) {
+        console.log(`🔊 [ElevenLabs] fetchAudioBlob: 本地缓存命中 | [语音] ${voiceId}`);
+        return cachedBlob;
+      }
+    } catch { /* ignore */ }
+
+    try {
+      const cloudBlob = await ttsCloudCacheService.get(trimmedText, voiceId, 'elevenlabs', model);
+      if (cloudBlob) {
+        console.log(`🔊 [ElevenLabs] fetchAudioBlob: 云端缓存命中 | [语音] ${voiceId}`);
+        elevenLabsCacheService.put(trimmedText, voiceId, model, cloudBlob).catch(() => {});
+        return cloudBlob;
+      }
+    } catch { /* ignore */ }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), BASE_SPEAK_TIMEOUT);
+
+      const response = await fetch(`${API_BASE}/v1/text-to-speech/${voiceId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'xi-api-key': apiKey.trim(),
+          Accept: 'audio/mpeg',
+        },
+        body: JSON.stringify({
+          text: trimmedText,
+          model_id: model,
+          output_format: DEFAULT_OUTPUT_FORMAT,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        console.warn(`🔊 [ElevenLabs] fetchAudioBlob: API 返回 ${response.status}`);
+        return null;
+      }
+
+      const blob = await response.blob();
+      if (!blob || blob.size === 0) {
+        console.warn('🔊 [ElevenLabs] fetchAudioBlob: API 返回空音频');
+        return null;
+      }
+
+      console.log(`🔊 [ElevenLabs] fetchAudioBlob: 合成完成 | [大小] ${(blob.size / 1024).toFixed(1)} KB`);
+
+      elevenLabsCacheService.put(trimmedText, voiceId, model, blob).catch(() => {});
+      ttsCloudCacheService.put(trimmedText, voiceId, 'elevenlabs', blob, model).catch(() => {});
+
+      return blob;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`🔊 [ElevenLabs] fetchAudioBlob 失败: ${msg}`);
+      return null;
+    }
+  },
 };
 
 export default elevenLabsService;

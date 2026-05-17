@@ -106,6 +106,8 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
   const [duplicateWarning, setDuplicateWarning] = useState<{ show: boolean; existing?: Sentence }>({ show: false });
   const [isAddingSentence, setIsAddingSentence] = useState(false);
   const isAddingSentenceRef = useRef(false);
+  const [toast, setToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' }>({ show: false, message: '', type: 'success' });
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   
   const [importProgress, setImportProgress] = useState<ImportProgress>({
@@ -132,6 +134,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     };
   }, []);
 
@@ -144,6 +147,12 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
       return mod;
     });
     return xlsxLoadPromiseRef.current;
+  }, []);
+
+  const showToast = useCallback((message: string, type: 'success' | 'error') => {
+    setToast({ show: true, message, type });
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
   }, []);
 
   const addSentence = useCallback(async () => {
@@ -189,17 +198,19 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
       setNewZh('');
       setNewTags('');
       setDuplicateWarning({ show: false });
+      showToast('✅ 保存成功', 'success');
       
       setTimeout(() => {
         englishInputRef.current?.focus();
       }, 100);
     } catch (error) {
       console.error("保存失败:", error);
+      showToast('❌ 保存失败，请重试', 'error');
     } finally {
       isAddingSentenceRef.current = false;
       setIsAddingSentence(false);
     }
-  }, [newEn, newZh, newTags, onUpdate, scheduledDate]);
+  }, [newEn, newZh, newTags, onUpdate, scheduledDate, showToast]);
 
   const deleteSentence = useCallback(async (id: string) => {
     if (!window.confirm('确定要从数据库中永久移除这句话吗？')) return;
@@ -883,6 +894,14 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
           onDelete={deleteSentence} 
         />
       </div>
+
+      {toast.show && (
+        <div className={`fixed bottom-20 left-4 right-4 z-[100] px-4 py-2 rounded-xl text-sm font-medium shadow-lg animate-fade-in flex items-center justify-center ${
+          toast.type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+        }`}>
+          <span>{toast.message}</span>
+        </div>
+      )}
     </div>
   );
 };

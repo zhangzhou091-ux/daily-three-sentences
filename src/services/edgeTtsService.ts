@@ -529,6 +529,147 @@ export const edgeTtsService = {
     if (currentAudioElement && currentSSMLNumericRate > 0) {
       currentAudioElement.playbackRate = rate / currentSSMLNumericRate;
     }
+  },
+
+  async fetchAudioBlob(text: string, voice: string = DEFAULT_VOICE, rate: string = DEFAULT_RATE): Promise<Blob | null> {
+    if (!text || !text.trim()) return null;
+
+    const trimmedText = text.trim();
+
+    return new Promise((resolve) => {
+      const connectionId = generateConnectionId();
+      const wsUrl = `${EDGE_TTS_URL}?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}&ConnectionId=${connectionId}`;
+      const ws = new WebSocket(wsUrl);
+
+      let audioChunks: Uint8Array[] = [];
+      let isReceivingAudio = false;
+      let isResolved = false;
+
+      const connectTimeoutId = setTimeout(() => {
+        if (!isResolved) {
+          isResolved = true;
+          ws.close();
+          resolve(null);
+        }
+      }, CONNECT_TIMEOUT);
+
+      const audioTimeoutId = setTimeout(() => {
+        if (!isResolved) {
+          isResolved = true;
+          clearTimeout(connectTimeoutId);
+          ws.close();
+          resolve(null);
+        }
+      }, AUDIO_TIMEOUT);
+
+      ws.onopen = () => {
+        clearTimeout(connectTimeoutId);
+        availabilityCache = { available: true, timestamp: Date.now() };
+
+        const requestId = generateRequestId();
+        const timestamp = new Date().toString();
+
+        const speechConfig = `X-Timestamp:${timestamp}\r\n` +
+          `Content-Type:application/json; charset=utf-8\r\n` +
+          `Path:speech.config\r\n` +
+          `\r\n` +
+          JSON.stringify({
+            context: {
+              synthesis: {
+                audio: {
+                  metadataoptions: {
+                    sentenceBoundaryEnabled: 'false',
+                    wordBoundaryEnabled: 'true'
+                  },
+                  outputFormat: 'audio-24khz-48kbitrate-mono-mp3'
+                }
+              }
+            }
+          });
+
+        ws.send(speechConfig);
+
+        const ssml = generateSSML(trimmedText, voice, rate, DEFAULT_PITCH);
+        const synthesisRequest = `X-RequestId:${requestId}\r\n` +
+          `X-Timestamp:${timestamp}\r\n` +
+          `Content-Type:application/ssml+xml\r\n` +
+          `Path:ssml\r\n` +
+          `\r\n` +
+          ssml;
+
+        ws.send(synthesisRequest);
+      };
+
+      ws.onmessage = (event) => {
+        if (isResolved) return;
+
+        if (typeof event.data === 'string') {
+          if (event.data.includes('Path:turn.start')) {
+            isReceivingAudio = true;
+          } else if (event.data.includes('Path:turn.end')) {
+            isReceivingAudio = false;
+            clearTimeout(connectTimeoutId);
+            clearTimeout(audioTimeoutId);
+            ws.close();
+
+            const totalLength = audioChunks.reduce((sum, chunk) => sum + chunk.length, 0);
+            if (totalLength === 0) {
+              isResolved = true;
+              resolve(null);
+              return;
+            }
+
+            const combinedAudio = new Uint8Array(totalLength);
+            let offset = 0;
+            for (const chunk of audioChunks) {
+              combinedAudio.set(chunk, offset);
+              offset += chunk.length;
+            }
+
+            isResolved = true;
+            const blob = new Blob([combinedAudio.buffer as ArrayBuffer], { type: 'audio/mpeg' });
+            console.log(`🔊 [EdgeTTS] fetchAudioBlob: 合成完成 | [大小] ${(blob.size / 1024).toFixed(1)} KB`);
+            resolve(blob);
+          }
+        } else if (event.data instanceof ArrayBuffer) {
+          if (isReceivingAudio) {
+            const rawData = new Uint8Array(event.data);
+            const headerEndIndex = findAudioDataOffset(rawData);
+            if (headerEndIndex >= 0 && headerEndIndex < rawData.length) {
+              audioChunks.push(rawData.slice(headerEndIndex));
+            }
+          }
+        } else if (event.data instanceof Blob) {
+          if (isReceivingAudio) {
+            event.data.arrayBuffer().then(buffer => {
+              const rawData = new Uint8Array(buffer);
+              const headerEndIndex = findAudioDataOffset(rawData);
+              if (headerEndIndex >= 0 && headerEndIndex < rawData.length) {
+                audioChunks.push(rawData.slice(headerEndIndex));
+              }
+            });
+          }
+        }
+      };
+
+      ws.onerror = () => {
+        if (!isResolved) {
+          clearTimeout(connectTimeoutId);
+          clearTimeout(audioTimeoutId);
+          isResolved = true;
+          resolve(null);
+        }
+      };
+
+      ws.onclose = () => {
+        if (!isResolved) {
+          clearTimeout(connectTimeoutId);
+          clearTimeout(audioTimeoutId);
+          isResolved = true;
+          resolve(null);
+        }
+      };
+    });
   }
 };
 

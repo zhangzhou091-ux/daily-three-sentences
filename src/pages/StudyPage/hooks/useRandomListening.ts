@@ -2,6 +2,8 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { Sentence } from '../../../types';
 import { geminiService } from '../../../services/geminiService';
 import { mediaSessionService } from '../../../services/mediaSessionService';
+import { continuousAudioPlayer } from '../../../services/continuousAudioPlayer';
+import { blacklistStorage } from '../../../services/blacklistStorage';
 
 const REPEATS_PER_SENTENCE = 5;
 const INTER_REPEAT_BASE_DELAY = 450;
@@ -15,6 +17,7 @@ const WEIGHT_LOW_STABILITY = 1.5;
 const WEIGHT_WRONG_DICTATIONS = 1.5;
 const WEIGHT_LOW_MASTERY = 1.0;
 const WEIGHT_SESSION_FREQUENCY = 2.0;
+const WEIGHT_HAS_AUDIO = 4.0;
 
 interface RandomListeningState {
   isActive: boolean;
@@ -22,13 +25,28 @@ interface RandomListeningState {
   currentRepeat: number;
   totalPlayed: number;
   errorMessage: string | null;
+  blacklist: Set<string>;
+  history: Sentence[];
+  historyIndex: number;
 }
 
 const jitterDelay = (base: number, jitter: number): number =>
   base + Math.floor(Math.random() * jitter);
 
+const hasAudioCache = (sentence: Sentence): boolean => {
+  return !!(sentence.ttsAudioPathEl || sentence.ttsAudioPathMm);
+};
+
+const isLearned = (sentence: Sentence): boolean => {
+  return !!sentence.learnedAt;
+};
+
 const computeWeight = (sentence: Sentence, sessionCounts: Map<string, number>): number => {
   let weight = 1.0;
+
+  if (hasAudioCache(sentence)) {
+    weight += WEIGHT_HAS_AUDIO;
+  }
 
   const difficulty = sentence.difficulty ?? 0;
   if (difficulty > 0) {
@@ -74,13 +92,16 @@ const weightedRandomPick = (candidates: Sentence[], sessionCounts: Map<string, n
 };
 
 export const useRandomListening = (sentences: Sentence[]) => {
-  const [state, setState] = useState<RandomListeningState>({
+  const [state, setState] = useState<RandomListeningState>(() => ({
     isActive: false,
     currentSentence: null,
     currentRepeat: 0,
     totalPlayed: 0,
     errorMessage: null,
-  });
+    blacklist: blacklistStorage.getBlacklist(),
+    history: [],
+    historyIndex: -1,
+  }));
 
   const isActiveRef = useRef(false);
   const lastSentenceIdRef = useRef<string | null>(null);
@@ -90,28 +111,45 @@ export const useRandomListening = (sentences: Sentence[]) => {
   const recentIdsRef = useRef<string[]>([]);
   const sessionCountsRef = useRef<Map<string, number>>(new Map());
   const RECENT_AVOID_COUNT = 3;
+  const historyRef = useRef<Sentence[]>([]);
+  const historyIndexRef = useRef(-1);
 
   useEffect(() => {
     poolRef.current = sentences;
   }, [sentences]);
 
+  const getEligiblePool = useCallback((): Sentence[] => {
+    const blacklist = state.blacklist;
+    return poolRef.current.filter(s => isLearned(s) && !blacklist.has(s.id));
+  }, [state.blacklist]);
+
   const pickRandomSentence = useCallback((): Sentence | null => {
-    const pool = poolRef.current;
-    if (pool.length === 0) return null;
-    if (pool.length === 1) return pool[0];
+    const eligiblePool = getEligiblePool();
+    if (eligiblePool.length === 0) return null;
+    if (eligiblePool.length === 1) return eligiblePool[0];
 
     const recentSet = new Set(recentIdsRef.current);
-    let candidates = pool.filter(s => !recentSet.has(s.id));
+    let candidates = eligiblePool.filter(s => !recentSet.has(s.id));
 
     if (candidates.length === 0) {
-      candidates = pool.filter(s => s.id !== lastSentenceIdRef.current);
+      candidates = eligiblePool.filter(s => s.id !== lastSentenceIdRef.current);
     }
     if (candidates.length === 0) {
-      candidates = pool;
+      candidates = eligiblePool;
+    }
+
+    const withAudio = candidates.filter(hasAudioCache);
+    const withoutAudio = candidates.filter(s => !hasAudioCache(s));
+
+    if (withAudio.length > 0 && withoutAudio.length > 0) {
+      const audioRatio = withAudio.length / candidates.length;
+      if (Math.random() < audioRatio + 0.3) {
+        return weightedRandomPick(withAudio, sessionCountsRef.current);
+      }
     }
 
     return weightedRandomPick(candidates, sessionCountsRef.current);
-  }, []);
+  }, [getEligiblePool]);
 
   const playSentenceOnce = useCallback(async (
     sentence: Sentence,
@@ -120,6 +158,17 @@ export const useRandomListening = (sentences: Sentence[]) => {
     if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
 
     try {
+      const blob = await geminiService.fetchAudioBlob(sentence.english);
+      if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
+
+      if (blob) {
+        await continuousAudioPlayer.playBlob(blob);
+        if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
+        return true;
+      }
+
+      console.log('🔊 [随机朗读] Blob 获取失败，回退到 geminiService.speak');
+      geminiService.startSpeechSynthesisKeepAlive();
       const result = await geminiService.speak(sentence.english, false);
       if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
       if (!result.success) {
@@ -130,18 +179,59 @@ export const useRandomListening = (sentences: Sentence[]) => {
     } catch (err) {
       if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
       console.warn('🔊 [随机朗读] 播放异常:', err instanceof Error ? err.message : String(err));
+
+      if (continuousAudioPlayer.isActivated()) {
+        try {
+          geminiService.startSpeechSynthesisKeepAlive();
+          const fallbackResult = await geminiService.speak(sentence.english, false);
+          if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
+          return fallbackResult.success;
+        } catch {
+          return false;
+        }
+      }
       return false;
     }
+  }, []);
+
+  const addToHistory = useCallback((sentence: Sentence) => {
+    const currentHistory = historyRef.current;
+    const currentIndex = historyIndexRef.current;
+
+    if (currentIndex >= 0 && currentIndex < currentHistory.length && currentHistory[currentIndex].id === sentence.id) {
+      return;
+    }
+
+    const newHistory = currentHistory.slice(0, currentIndex + 1);
+    newHistory.push(sentence);
+
+    if (newHistory.length > 200) {
+      newHistory.shift();
+    }
+
+    historyRef.current = newHistory;
+    historyIndexRef.current = newHistory.length - 1;
+
+    setState(prev => ({
+      ...prev,
+      history: newHistory,
+      historyIndex: newHistory.length - 1,
+    }));
   }, []);
 
   const runListeningLoop = useCallback(async (gen: number) => {
     while (isActiveRef.current && playGenerationRef.current === gen) {
       const sentence = pickRandomSentence();
       if (!sentence) {
+        const eligiblePool = getEligiblePool();
+        const message = eligiblePool.length === 0
+          ? '没有已学习的句子，请先学习句子后再使用随机朗读'
+          : '没有可用的句子，请先添加句子';
+
         setState(prev => ({
           ...prev,
           isActive: false,
-          errorMessage: '没有可用的句子，请先添加句子',
+          errorMessage: message,
         }));
         isActiveRef.current = false;
         break;
@@ -155,6 +245,8 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
       const currentCount = sessionCountsRef.current.get(sentence.id) ?? 0;
       sessionCountsRef.current.set(sentence.id, currentCount + 1);
+
+      addToHistory(sentence);
 
       setState(prev => ({
         ...prev,
@@ -210,17 +302,24 @@ export const useRandomListening = (sentences: Sentence[]) => {
         setTimeout(r, jitterDelay(INTER_SENTENCE_BASE_DELAY, INTER_SENTENCE_JITTER))
       );
     }
-  }, [pickRandomSentence, playSentenceOnce]);
+  }, [pickRandomSentence, playSentenceOnce, getEligiblePool, addToHistory]);
 
   const startListening = useCallback(() => {
-    const pool = poolRef.current;
-    if (pool.length === 0) {
+    const eligiblePool = getEligiblePool();
+    if (eligiblePool.length === 0) {
+      const totalPool = poolRef.current;
+      const message = totalPool.length === 0
+        ? '暂无可用句子，请先添加或学习句子'
+        : '暂无已学习的句子，请先学习句子后再使用随机朗读';
+
       setState(prev => ({
         ...prev,
-        errorMessage: '暂无可用句子，请先添加或学习句子',
+        errorMessage: message,
       }));
       return;
     }
+
+    continuousAudioPlayer.activate();
 
     isActiveRef.current = true;
     totalPlayedRef.current = 0;
@@ -234,15 +333,20 @@ export const useRandomListening = (sentences: Sentence[]) => {
       currentRepeat: 0,
       totalPlayed: 0,
       errorMessage: null,
+      blacklist: state.blacklist,
+      history: historyRef.current,
+      historyIndex: historyIndexRef.current,
     });
 
     runListeningLoop(gen);
-  }, [runListeningLoop]);
+  }, [runListeningLoop, getEligiblePool, state.blacklist]);
 
   const stopListening = useCallback(() => {
     isActiveRef.current = false;
     playGenerationRef.current++;
     geminiService.stop();
+    geminiService.stopSpeechSynthesisKeepAlive();
+    continuousAudioPlayer.deactivate();
 
     setState(prev => ({
       ...prev,
@@ -259,6 +363,129 @@ export const useRandomListening = (sentences: Sentence[]) => {
     }
   }, [state.isActive, startListening, stopListening]);
 
+  const goToPreviousSentence = useCallback(() => {
+    const idx = historyIndexRef.current;
+    if (idx <= 0) return;
+
+    const wasActive = isActiveRef.current;
+    if (wasActive) {
+      isActiveRef.current = false;
+      playGenerationRef.current++;
+      geminiService.stop();
+    }
+
+    const newIdx = idx - 1;
+    historyIndexRef.current = newIdx;
+    const sentence = historyRef.current[newIdx];
+
+    lastSentenceIdRef.current = sentence.id;
+
+    setState(prev => ({
+      ...prev,
+      currentSentence: sentence,
+      currentRepeat: 0,
+      historyIndex: newIdx,
+      errorMessage: null,
+    }));
+
+    if (wasActive) {
+      const gen = ++playGenerationRef.current;
+      isActiveRef.current = true;
+      runListeningLoop(gen);
+    }
+  }, [runListeningLoop]);
+
+  const goToNextSentence = useCallback(() => {
+    const idx = historyIndexRef.current;
+    const histLen = historyRef.current.length;
+
+    if (idx < histLen - 1) {
+      const wasActive = isActiveRef.current;
+      if (wasActive) {
+        isActiveRef.current = false;
+        playGenerationRef.current++;
+        geminiService.stop();
+      }
+
+      const newIdx = idx + 1;
+      historyIndexRef.current = newIdx;
+      const sentence = historyRef.current[newIdx];
+
+      lastSentenceIdRef.current = sentence.id;
+
+      setState(prev => ({
+        ...prev,
+        currentSentence: sentence,
+        currentRepeat: 0,
+        historyIndex: newIdx,
+        errorMessage: null,
+      }));
+
+      if (wasActive) {
+        const gen = ++playGenerationRef.current;
+        isActiveRef.current = true;
+        runListeningLoop(gen);
+      }
+    } else {
+      if (!isActiveRef.current) {
+        const sentence = pickRandomSentence();
+        if (sentence) {
+          lastSentenceIdRef.current = sentence.id;
+          addToHistory(sentence);
+          setState(prev => ({
+            ...prev,
+            currentSentence: sentence,
+            currentRepeat: 0,
+            errorMessage: null,
+          }));
+        }
+      }
+    }
+  }, [runListeningLoop, pickRandomSentence, addToHistory]);
+
+  const toggleBlacklist = useCallback((sentenceId: string) => {
+    const currentBlacklist = state.blacklist;
+    let newBlacklist: Set<string>;
+
+    if (currentBlacklist.has(sentenceId)) {
+      newBlacklist = blacklistStorage.removeSentence(sentenceId);
+    } else {
+      newBlacklist = blacklistStorage.addSentence(sentenceId);
+    }
+
+    setState(prev => ({
+      ...prev,
+      blacklist: new Set(newBlacklist),
+    }));
+
+    if (state.currentSentence?.id === sentenceId && !newBlacklist.has(sentenceId)) {
+      return;
+    }
+
+    if (state.isActive && newBlacklist.has(sentenceId) && state.currentSentence?.id === sentenceId) {
+      const eligiblePool = poolRef.current.filter(s => isLearned(s) && !newBlacklist.has(s.id));
+      if (eligiblePool.length === 0) {
+        stopListening();
+        setState(prev => ({
+          ...prev,
+          errorMessage: '所有句子已被排除，请取消部分排除后再试',
+        }));
+      }
+    }
+  }, [state.blacklist, state.currentSentence, state.isActive, stopListening]);
+
+  const isBlacklisted = useCallback((sentenceId: string): boolean => {
+    return state.blacklist.has(sentenceId);
+  }, [state.blacklist]);
+
+  const clearBlacklist = useCallback(() => {
+    blacklistStorage.clearBlacklist();
+    setState(prev => ({
+      ...prev,
+      blacklist: new Set(),
+    }));
+  }, []);
+
   useEffect(() => {
     const currentGen = playGenerationRef.current;
     return () => {
@@ -266,9 +493,15 @@ export const useRandomListening = (sentences: Sentence[]) => {
         isActiveRef.current = false;
         playGenerationRef.current = currentGen + 1;
         geminiService.stop();
+        geminiService.stopSpeechSynthesisKeepAlive();
+        continuousAudioPlayer.deactivate();
       }
     };
   }, []);
+
+  const eligibleCount = getEligiblePool().length;
+  const canGoPrevious = state.historyIndex > 0;
+  const canGoNext = state.historyIndex < state.history.length - 1 || state.isActive;
 
   return {
     isRandomListeningActive: state.isActive,
@@ -276,10 +509,18 @@ export const useRandomListening = (sentences: Sentence[]) => {
     randomListeningRepeat: state.currentRepeat,
     randomListeningTotal: state.totalPlayed,
     randomListeningError: state.errorMessage,
-    randomListeningPoolSize: sentences.length,
+    randomListeningPoolSize: eligibleCount,
     toggleRandomListening: toggleListening,
     startRandomListening: startListening,
     stopRandomListening: stopListening,
+    goToPreviousSentence,
+    goToNextSentence,
+    canGoPrevious,
+    canGoNext,
+    toggleBlacklist,
+    isBlacklisted,
+    clearBlacklist,
+    blacklistSize: state.blacklist.size,
     REPEATS_PER_SENTENCE,
   };
 };

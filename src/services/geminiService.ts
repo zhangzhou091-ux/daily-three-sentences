@@ -41,6 +41,7 @@ let speakGeneration = 0;
 let currentWebSpeechRate: number = 1;
 let cachedAudioElement: HTMLAudioElement | null = null;
 let cachedAudioGeneration = 0;
+let speechSynthesisKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
 const playCachedBlob = async (blob: Blob, loop: boolean, rate: number): Promise<boolean> => {
   const gen = ++cachedAudioGeneration;
@@ -770,5 +771,133 @@ export const geminiService = {
         resolve(LOCAL_SENTENCE_BANK.slice(0, 3).map(({ english, chinese }) => ({ english, chinese })));
       }
     });
-  }
+  },
+
+  async fetchAudioBlob(text: string): Promise<Blob | null> {
+    if (!text || !text.trim()) return null;
+
+    const settings = storageService.getSettings();
+    const ttsEngine = settings.ttsEngine || 'auto';
+
+    const tryElevenLabsBlob = async (): Promise<Blob | null> => {
+      const apiKey = settings.elevenLabsApiKey;
+      const voiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
+      if (!apiKey || !apiKey.trim()) return null;
+      try {
+        console.log(`🔊 [fetchBlob] ElevenLabs | [语音] ${voiceId}`);
+        return await elevenLabsService.fetchAudioBlob(text, apiKey, voiceId, undefined);
+      } catch (err) {
+        console.warn('🔊 [fetchBlob] ElevenLabs 失败:', err instanceof Error ? err.message : String(err));
+        return null;
+      }
+    };
+
+    const tryMiniMaxBlob = async (): Promise<Blob | null> => {
+      try {
+        const { minimaxTtsService } = await import('./minimaxTtsService');
+        const apiKey = settings.minimaxApiKey || '';
+        if (!apiKey.trim()) return null;
+        const voiceId = settings.minimaxVoiceId || minimaxTtsService.getDefaultVoiceId();
+        console.log(`🔊 [fetchBlob] MiniMax | [语音] ${voiceId}`);
+        return await minimaxTtsService.fetchAudioBlob(text, apiKey, voiceId);
+      } catch (err) {
+        console.warn('🔊 [fetchBlob] MiniMax 失败:', err instanceof Error ? err.message : String(err));
+        return null;
+      }
+    };
+
+    const tryEdgeTtsBlob = async (): Promise<Blob | null> => {
+      try {
+        const voice = settings.edgeTtsVoiceId || edgeTtsService.getDefaultVoice();
+        const speechRate = settings.speechRate ?? 1;
+        const rateSSML = edgeTtsService.speechRateToSSML(speechRate);
+        console.log(`🔊 [fetchBlob] EdgeTTS | [语音] ${voice}`);
+        return await edgeTtsService.fetchAudioBlob(text, voice, rateSSML);
+      } catch (err) {
+        console.warn('🔊 [fetchBlob] EdgeTTS 失败:', err instanceof Error ? err.message : String(err));
+        return null;
+      }
+    };
+
+    if (isIOS()) {
+      try {
+        const sentence = await dbService.findByEnglish(text.trim());
+        if (sentence) {
+          const cloudPaths: Array<{ path: string; engine: string }> = [];
+          if (sentence.ttsAudioPathEl) cloudPaths.push({ path: sentence.ttsAudioPathEl, engine: 'ElevenLabs' });
+          if (sentence.ttsAudioPathMm) cloudPaths.push({ path: sentence.ttsAudioPathMm, engine: 'MiniMax' });
+
+          for (const { path } of cloudPaths) {
+            try {
+              const cloudBlob = await ttsCloudCacheService.downloadByPath(path);
+              if (cloudBlob) {
+                console.log(`🔊 [fetchBlob] iOS 云端缓存命中 | [路径] ${path}`);
+                return cloudBlob;
+              }
+            } catch { /* ignore */ }
+          }
+        }
+      } catch { /* ignore */ }
+    }
+
+    if (ttsEngine === 'auto') {
+      const elBlob = await tryElevenLabsBlob();
+      if (elBlob) return elBlob;
+
+      const mmBlob = await tryMiniMaxBlob();
+      if (mmBlob) return mmBlob;
+
+      const edgeBlob = await tryEdgeTtsBlob();
+      if (edgeBlob) return edgeBlob;
+
+      return null;
+    }
+
+    if (ttsEngine === 'elevenlabs') {
+      const elBlob = await tryElevenLabsBlob();
+      if (elBlob) return elBlob;
+      const mmBlob = await tryMiniMaxBlob();
+      if (mmBlob) return mmBlob;
+      const edgeBlob = await tryEdgeTtsBlob();
+      if (edgeBlob) return edgeBlob;
+      return null;
+    }
+
+    if (ttsEngine === 'minimax') {
+      const mmBlob = await tryMiniMaxBlob();
+      if (mmBlob) return mmBlob;
+      const edgeBlob = await tryEdgeTtsBlob();
+      if (edgeBlob) return edgeBlob;
+      return null;
+    }
+
+    if (ttsEngine === 'edgeTts') {
+      const edgeBlob = await tryEdgeTtsBlob();
+      if (edgeBlob) return edgeBlob;
+      return null;
+    }
+
+    return null;
+  },
+
+  startSpeechSynthesisKeepAlive(): void {
+    if (speechSynthesisKeepAliveTimer) return;
+    if (!isIOS()) return;
+    if (!('speechSynthesis' in window)) return;
+
+    console.log('🔊 [speechSynthesis] 启动 iOS 保活定时器');
+    speechSynthesisKeepAliveTimer = setInterval(() => {
+      if (window.speechSynthesis.speaking) {
+        window.speechSynthesis.resume();
+      }
+    }, 10000);
+  },
+
+  stopSpeechSynthesisKeepAlive(): void {
+    if (speechSynthesisKeepAliveTimer) {
+      clearInterval(speechSynthesisKeepAliveTimer);
+      speechSynthesisKeepAliveTimer = null;
+      console.log('🔊 [speechSynthesis] 停止 iOS 保活定时器');
+    }
+  },
 };
