@@ -57,7 +57,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({
           }}
         >
           <div className="w-full flex items-center justify-between mb-3" onClick={(e) => e.stopPropagation()}>
-            <p className="text-xs font-black text-gray-600 uppercase tracking-[0.2em]">已复习 {reps} 次</p>
+            <p className="text-xs font-black text-gray-600 uppercase tracking-widest">已复习 {reps} 次</p>
             <div className="flex items-center gap-1">
               {SPEECH_RATE_OPTIONS.map(opt => (
                 <button
@@ -124,7 +124,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({
           }}
         >
           <div className="w-full flex items-center justify-between mb-3" onClick={(e) => e.stopPropagation()}>
-            <p className="text-xs font-black text-gray-600 uppercase tracking-[0.2em]">已复习 {reps} 次</p>
+            <p className="text-xs font-black text-gray-600 uppercase tracking-widest">已复习 {reps} 次</p>
             <div className="flex items-center gap-1">
               {SPEECH_RATE_OPTIONS.map(opt => (
                 <button
@@ -175,7 +175,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({
           </div>
 
           <div className="flex-shrink-0 flex justify-center mt-4">
-            <div className="bg-blue-50 text-blue-500 px-6 py-2 rounded-full text-xs font-black uppercase tracking-[0.2em]">
+            <div className="bg-blue-50 text-blue-500 px-6 py-2 rounded-full text-xs font-black uppercase tracking-widest">
               语块学习，可理解输入，举一反三，场景运用
             </div>
           </div>

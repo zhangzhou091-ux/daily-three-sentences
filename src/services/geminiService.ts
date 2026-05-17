@@ -2,16 +2,20 @@
  * Gemini Service with ElevenLabs + MiniMax + EdgeTTS + Web Speech API
  * 
  * TTS 调度策略：
- * 1. 优先使用 ElevenLabs API（最高质量，缓存后不消耗额度）
- * 2. ElevenLabs 失败时降级到 MiniMax（直连 API，高质量多语言）
- * 3. MiniMax 不可用时降级到 EdgeTTS（微软免费语音，无需密钥）
- * 4. EdgeTTS 不可用时降级到浏览器原生语音（iOS 自动选择最佳音质）
+ * 1. iOS 设备优先使用本地/云端缓存的 ElevenLabs & MiniMax 音频
+ * 2. 优先使用 ElevenLabs API（最高质量，缓存后不消耗额度）
+ * 3. ElevenLabs 失败时降级到 MiniMax（直连 API，高质量多语言）
+ * 4. MiniMax 不可用时降级到 EdgeTTS（微软免费语音，无需密钥）
+ * 5. EdgeTTS 不可用时降级到浏览器原生语音（iOS 自动选择最佳音质）
  */
 
 import { elevenLabsService } from './elevenLabsService';
 import { edgeTtsService } from './edgeTtsService';
 import { storageService } from './storage';
 import { mediaSessionService } from './mediaSessionService';
+import { ttsCloudCacheService } from './ttsCloudCacheService';
+import { dbService } from './dbService';
+import { elevenLabsCacheService } from './elevenLabsCacheService';
 
 const SPEAK_TIMEOUT = 10000;
 const SUGGEST_TIMEOUT = 5000;
@@ -35,6 +39,110 @@ let currentUtterance: SpeechSynthesisUtterance | null = null;
 let loopActiveFlag = false;
 let speakGeneration = 0;
 let currentWebSpeechRate: number = 1;
+let cachedAudioElement: HTMLAudioElement | null = null;
+let cachedAudioGeneration = 0;
+
+const playCachedBlob = async (blob: Blob, loop: boolean, rate: number): Promise<boolean> => {
+  const gen = ++cachedAudioGeneration;
+  const isCurrentGen = () => gen === cachedAudioGeneration;
+
+  if (cachedAudioElement) {
+    cachedAudioElement.pause();
+    cachedAudioElement.src = '';
+    cachedAudioElement = null;
+  }
+
+  const mimeType = blob.type || 'audio/mpeg';
+  const url = URL.createObjectURL(new Blob([blob], { type: mimeType }));
+  const audio = new Audio();
+  audio.preload = 'auto';
+  audio.loop = loop;
+  audio.playbackRate = rate;
+  cachedAudioElement = audio;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let retryCount = 0;
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY = 200;
+
+    const cleanup = () => {
+      if (cachedAudioElement === audio) cachedAudioElement = null;
+      try { URL.revokeObjectURL(url); } catch { /* ignore */ }
+    };
+
+    const attemptPlay = () => {
+      if (!isCurrentGen() || settled) return;
+      audio.play().then(() => {
+        if (loop && !settled) {
+          settled = true;
+          resolve(true);
+        }
+      }).catch((err: DOMException) => {
+        if (!isCurrentGen() || settled) return;
+        if ((err.name === 'NotAllowedError' || err.name === 'AbortError') && isIOS() && retryCount < MAX_RETRIES) {
+          retryCount++;
+          setTimeout(attemptPlay, RETRY_DELAY * retryCount);
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve(false);
+      });
+    };
+
+    audio.oncanplay = () => {
+      if (!isCurrentGen() || settled) return;
+      attemptPlay();
+    };
+
+    audio.onloadeddata = () => {
+      if (!isCurrentGen() || settled) return;
+      if (isIOS()) {
+        setTimeout(() => {
+          if (!isCurrentGen() || settled) return;
+          attemptPlay();
+        }, 100);
+      }
+    };
+
+    if (!loop) {
+      audio.onended = () => {
+        if (!isCurrentGen()) return;
+        settled = true;
+        cleanup();
+        resolve(true);
+      };
+    }
+
+    audio.onerror = () => {
+      if (!isCurrentGen() || settled) return;
+      if (isIOS() && retryCount < MAX_RETRIES) {
+        retryCount++;
+        const retryUrl = URL.createObjectURL(new Blob([blob], { type: mimeType }));
+        audio.src = retryUrl;
+        audio.load();
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(false);
+    };
+
+    audio.src = url;
+
+    if (isIOS()) {
+      setTimeout(() => {
+        if (!isCurrentGen() || settled) return;
+        if (audio.readyState >= 3) {
+          attemptPlay();
+        } else {
+          audio.load();
+        }
+      }, 150);
+    }
+  });
+};
 
 const LOCAL_SENTENCE_BANK = [
   { english: "Could you please clarify that point?", chinese: "能请你澄清一下那一点吗？", tags: ["work", "meeting"] },
@@ -355,6 +463,77 @@ const processQueue = async () => {
   }
 };
 
+const tryIOSCacheFirst = async (
+  text: string,
+  loop: boolean,
+  rate: number,
+  settings: ReturnType<typeof storageService.getSettings>
+): Promise<SpeakResult | null> => {
+  const trimmedText = text.trim();
+  if (!trimmedText) return null;
+
+  const elVoiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
+  const elModelId = 'eleven_multilingual_v2';
+
+  try {
+    const elCached = await elevenLabsCacheService.get(trimmedText, elVoiceId, elModelId);
+    if (elCached) {
+      console.log(`🔊 [iOS缓存优先] ElevenLabs本地缓存命中 | [语音] ${elVoiceId}`);
+      const played = await playCachedBlob(elCached, loop, rate);
+      if (played) return { success: true };
+      console.warn('🔊 [iOS缓存优先] ElevenLabs本地缓存播放失败，继续尝试');
+    }
+  } catch { /* ignore */ }
+
+  try {
+    const { minimaxTtsService } = await import('./minimaxTtsService');
+    const mmVoiceId = settings.minimaxVoiceId || minimaxTtsService.getDefaultVoiceId();
+
+    const mmCached = await minimaxTtsService.getCachedAudio(trimmedText, mmVoiceId);
+    if (mmCached) {
+      console.log(`🔊 [iOS缓存优先] MiniMax本地缓存命中 | [语音] ${mmVoiceId}`);
+      const played = await playCachedBlob(mmCached, loop, rate);
+      if (played) return { success: true };
+      console.warn('🔊 [iOS缓存优先] MiniMax本地缓存播放失败，继续尝试');
+    }
+  } catch { /* ignore */ }
+
+  try {
+    const sentence = await dbService.findByEnglish(trimmedText);
+    if (sentence) {
+      const cloudPaths: Array<{ path: string; engine: string }> = [];
+      if (sentence.ttsAudioPathEl) cloudPaths.push({ path: sentence.ttsAudioPathEl, engine: 'ElevenLabs' });
+      if (sentence.ttsAudioPathMm) cloudPaths.push({ path: sentence.ttsAudioPathMm, engine: 'MiniMax' });
+
+      for (const { path, engine } of cloudPaths) {
+        try {
+          const cloudBlob = await ttsCloudCacheService.downloadByPath(path);
+          if (cloudBlob) {
+            console.log(`🔊 [iOS缓存优先] ${engine}云端缓存命中 | [路径] ${path}`);
+
+            if (engine === 'ElevenLabs') {
+              elevenLabsCacheService.put(trimmedText, elVoiceId, elModelId, cloudBlob).catch(() => {});
+            } else {
+              try {
+                const { minimaxTtsService } = await import('./minimaxTtsService');
+                const mmVoiceId = settings.minimaxVoiceId || minimaxTtsService.getDefaultVoiceId();
+                minimaxTtsService.setCachedAudio?.(trimmedText, mmVoiceId, cloudBlob).catch(() => {});
+              } catch { /* ignore */ }
+            }
+
+            const played = await playCachedBlob(cloudBlob, loop, rate);
+            if (played) return { success: true };
+            console.warn(`🔊 [iOS缓存优先] ${engine}云端缓存播放失败，继续尝试`);
+          }
+        } catch { /* ignore */ }
+      }
+    }
+  } catch { /* ignore */ }
+
+  console.log('🔊 [iOS缓存优先] 本地/云端缓存均未命中，回退到引擎选择');
+  return null;
+};
+
 export const geminiService = {
   async speak(text: string, loop: boolean = false): Promise<SpeakResult> {
     mediaSessionService.holdAudioFocus();
@@ -367,6 +546,11 @@ export const geminiService = {
     const settings = storageService.getSettings();
     const ttsEngine = settings.ttsEngine || 'auto';
     const speechRate = settings.speechRate ?? 1;
+
+    if (isIOS()) {
+      const iosResult = await tryIOSCacheFirst(text, loop, speechRate, settings);
+      if (iosResult) return iosResult;
+    }
 
     const tryElevenLabs = async (): Promise<SpeakResult> => {
       const apiKey = settings.elevenLabsApiKey;
@@ -487,6 +671,7 @@ export const geminiService = {
 
   stop(): void {
     speakGeneration++;
+    cachedAudioGeneration++;
     loopActiveFlag = false;
     elevenLabsService.stop();
     edgeTtsService.stop();
@@ -495,6 +680,11 @@ export const geminiService = {
     currentUtterance = null;
     taskQueue = [];
     isProcessing = false;
+    if (cachedAudioElement) {
+      cachedAudioElement.pause();
+      cachedAudioElement.src = '';
+      cachedAudioElement = null;
+    }
     mediaSessionService.stopAll();
   },
 
@@ -507,6 +697,9 @@ export const geminiService = {
     if (currentUtterance) {
       currentUtterance.rate = clampedRate;
       currentUtterance.pitch = getPitchForRate(clampedRate);
+    }
+    if (cachedAudioElement) {
+      cachedAudioElement.playbackRate = clampedRate;
     }
   },
 

@@ -907,6 +907,8 @@ export const minimaxTtsService = {
   },
 
   formatSize,
-};
 
-export default minimaxTtsService;
+  getCachedAudio,
+  getStaleCachedAudio,
+  setCachedAudio,
+};

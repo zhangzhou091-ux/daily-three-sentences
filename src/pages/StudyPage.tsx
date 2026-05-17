@@ -200,10 +200,11 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     randomListeningRepeat,
     randomListeningTotal,
     randomListeningError,
+    randomListeningPoolSize,
     toggleRandomListening,
     stopRandomListening,
     REPEATS_PER_SENTENCE,
-  } = useRandomListening(dictationPool);
+  } = useRandomListening(sentences);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -787,8 +788,8 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
 
         {activeTab === 'dictation' && (
           <div className="space-y-10 animate-in slide-in-from-left-4 duration-500">
-            <div className="apple-card p-6 relative overflow-hidden" style={{ minHeight: '340px', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left', paddingTop: '20px', paddingBottom: '20px' }}>
-              <div className="w-full flex justify-center mb-3">
+            <div className="apple-card p-6 relative overflow-hidden" style={{ minHeight: '380px', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left', paddingTop: '20px', paddingBottom: '20px' }}>
+              <div className="w-full flex justify-between items-center mb-3">
                 <div className="flex items-center gap-1">
                   {SPEECH_RATE_OPTIONS.map(opt => (
                     <button
@@ -810,14 +811,22 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     </button>
                   ))}
                 </div>
+                <span className="text-[10px] font-bold text-gray-400">
+                  {randomListeningPoolSize} 句可用
+                </span>
               </div>
 
-              <div className="mt-[2em] flex flex-col items-center w-full flex-1 overflow-y-auto min-h-0">
+              <div className="mt-[1.5em] flex flex-col items-center w-full flex-1 overflow-y-auto min-h-0">
                 {isRandomListeningActive && randomListeningSentence ? (
                   <>
-                    <h3 className="text-lg font-normal text-gray-900 leading-normal w-full break-words whitespace-pre-wrap text-left m-0 p-0">
-                      {randomListeningSentence.english}
-                    </h3>
+                    <div className="w-full text-left space-y-2">
+                      <h3 className="text-lg font-normal text-gray-900 leading-normal w-full break-words whitespace-pre-wrap">
+                        {randomListeningSentence.english}
+                      </h3>
+                      <p className="text-sm text-gray-400 leading-normal break-words">
+                        {randomListeningSentence.chinese}
+                      </p>
+                    </div>
                     <div className="mt-auto flex flex-col items-center w-full">
                       <div className="flex items-center gap-2 w-full mb-4">
                         <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
@@ -832,13 +841,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       </div>
                       <button
                         onClick={toggleRandomListening}
-                        className={`w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all z-20 ${
-                          isRandomListeningActive
-                            ? 'bg-red-50 text-red-500 hover:scale-110 active:scale-95 animate-pulse'
-                            : 'bg-blue-50 text-blue-600 hover:scale-110 active:scale-95'
-                        }`}
+                        className="w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all z-20 bg-red-50 text-red-500 hover:scale-110 active:scale-95 animate-pulse"
                       >
-                        {isRandomListeningActive ? '⏹' : '🔊'}
+                        ⏹
                       </button>
                       <p className="text-xs font-black text-gray-600 uppercase tracking-widest mt-6">
                         第 {randomListeningTotal + 1} 句 · 已朗读 {randomListeningTotal} 遍
@@ -855,6 +860,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     </button>
                     <p className="text-xs font-black text-gray-600 uppercase tracking-widest mt-6">
                       点击开始随机朗读
+                    </p>
+                    <p className="text-[10px] text-gray-400 mt-2">
+                      每句连续朗读 {REPEATS_PER_SENTENCE} 遍后自动切换
                     </p>
                   </div>
                 )}

@@ -1,10 +1,20 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Sentence } from '../../../types';
 import { geminiService } from '../../../services/geminiService';
-import { storageService } from '../../../services/storage';
 import { mediaSessionService } from '../../../services/mediaSessionService';
 
 const REPEATS_PER_SENTENCE = 5;
+const INTER_REPEAT_BASE_DELAY = 450;
+const INTER_REPEAT_JITTER = 200;
+const INTER_SENTENCE_BASE_DELAY = 900;
+const INTER_SENTENCE_JITTER = 300;
+const MAX_CONSECUTIVE_ERRORS = 3;
+
+const WEIGHT_DIFFICULTY = 2.0;
+const WEIGHT_LOW_STABILITY = 1.5;
+const WEIGHT_WRONG_DICTATIONS = 1.5;
+const WEIGHT_LOW_MASTERY = 1.0;
+const WEIGHT_SESSION_FREQUENCY = 2.0;
 
 interface RandomListeningState {
   isActive: boolean;
@@ -14,7 +24,56 @@ interface RandomListeningState {
   errorMessage: string | null;
 }
 
-export const useRandomListening = (dictationPool: Sentence[]) => {
+const jitterDelay = (base: number, jitter: number): number =>
+  base + Math.floor(Math.random() * jitter);
+
+const computeWeight = (sentence: Sentence, sessionCounts: Map<string, number>): number => {
+  let weight = 1.0;
+
+  const difficulty = sentence.difficulty ?? 0;
+  if (difficulty > 0) {
+    weight += WEIGHT_DIFFICULTY * (difficulty / 10);
+  }
+
+  const stability = sentence.stability ?? 0;
+  if (stability > 0 && stability < 30) {
+    weight += WEIGHT_LOW_STABILITY * (1 - stability / 30);
+  } else if (stability === 0) {
+    weight += WEIGHT_LOW_STABILITY;
+  }
+
+  const wrongDict = sentence.wrongDictations ?? 0;
+  if (wrongDict > 0) {
+    weight += WEIGHT_WRONG_DICTATIONS * Math.min(wrongDict, 5) / 5;
+  }
+
+  const mastery = sentence.masteryLevel ?? 0;
+  if (mastery < 5) {
+    weight += WEIGHT_LOW_MASTERY * (1 - mastery / 5);
+  }
+
+  const sessionCount = sessionCounts.get(sentence.id) ?? 0;
+  if (sessionCount > 0) {
+    weight *= 1 / (1 + WEIGHT_SESSION_FREQUENCY * sessionCount);
+  }
+
+  return Math.max(weight, 0.1);
+};
+
+const weightedRandomPick = (candidates: Sentence[], sessionCounts: Map<string, number>): Sentence => {
+  const weights = candidates.map(s => computeWeight(s, sessionCounts));
+  const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+
+  let random = Math.random() * totalWeight;
+  for (let i = 0; i < candidates.length; i++) {
+    random -= weights[i];
+    if (random <= 0) return candidates[i];
+  }
+
+  return candidates[candidates.length - 1];
+};
+
+export const useRandomListening = (sentences: Sentence[]) => {
   const [state, setState] = useState<RandomListeningState>({
     isActive: false,
     currentSentence: null,
@@ -26,23 +85,32 @@ export const useRandomListening = (dictationPool: Sentence[]) => {
   const isActiveRef = useRef(false);
   const lastSentenceIdRef = useRef<string | null>(null);
   const playGenerationRef = useRef(0);
-  const poolRef = useRef<Sentence[]>([]);
+  const poolRef = useRef<Sentence[]>(sentences);
   const totalPlayedRef = useRef(0);
+  const recentIdsRef = useRef<string[]>([]);
+  const sessionCountsRef = useRef<Map<string, number>>(new Map());
+  const RECENT_AVOID_COUNT = 3;
 
   useEffect(() => {
-    poolRef.current = dictationPool;
-  }, [dictationPool]);
+    poolRef.current = sentences;
+  }, [sentences]);
 
   const pickRandomSentence = useCallback((): Sentence | null => {
     const pool = poolRef.current;
     if (pool.length === 0) return null;
-
     if (pool.length === 1) return pool[0];
 
-    const candidates = pool.filter(s => s.id !== lastSentenceIdRef.current);
-    if (candidates.length === 0) return pool[Math.floor(Math.random() * pool.length)];
+    const recentSet = new Set(recentIdsRef.current);
+    let candidates = pool.filter(s => !recentSet.has(s.id));
 
-    return candidates[Math.floor(Math.random() * candidates.length)];
+    if (candidates.length === 0) {
+      candidates = pool.filter(s => s.id !== lastSentenceIdRef.current);
+    }
+    if (candidates.length === 0) {
+      candidates = pool;
+    }
+
+    return weightedRandomPick(candidates, sessionCountsRef.current);
   }, []);
 
   const playSentenceOnce = useCallback(async (
@@ -50,9 +118,6 @@ export const useRandomListening = (dictationPool: Sentence[]) => {
     gen: number
   ): Promise<boolean> => {
     if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
-
-    const settings = storageService.getSettings();
-    const speechRate = settings.speechRate ?? 1;
 
     try {
       const result = await geminiService.speak(sentence.english, false);
@@ -76,13 +141,21 @@ export const useRandomListening = (dictationPool: Sentence[]) => {
         setState(prev => ({
           ...prev,
           isActive: false,
-          errorMessage: '没有可用的学习句子',
+          errorMessage: '没有可用的句子，请先添加句子',
         }));
         isActiveRef.current = false;
         break;
       }
 
       lastSentenceIdRef.current = sentence.id;
+      recentIdsRef.current = [
+        sentence.id,
+        ...recentIdsRef.current.slice(0, RECENT_AVOID_COUNT - 1),
+      ];
+
+      const currentCount = sessionCountsRef.current.get(sentence.id) ?? 0;
+      sessionCountsRef.current.set(sentence.id, currentCount + 1);
+
       setState(prev => ({
         ...prev,
         currentSentence: sentence,
@@ -91,18 +164,17 @@ export const useRandomListening = (dictationPool: Sentence[]) => {
       }));
 
       let consecutiveErrors = 0;
+      let completedRepeats = 0;
 
-      for (let i = 0; i < REPEATS_PER_SENTENCE; i++) {
+      while (completedRepeats < REPEATS_PER_SENTENCE) {
         if (!isActiveRef.current || playGenerationRef.current !== gen) return;
-
-        setState(prev => ({ ...prev, currentRepeat: i + 1 }));
 
         const success = await playSentenceOnce(sentence, gen);
         if (!isActiveRef.current || playGenerationRef.current !== gen) return;
 
         if (!success) {
           consecutiveErrors++;
-          if (consecutiveErrors >= 3) {
+          if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
             setState(prev => ({
               ...prev,
               isActive: false,
@@ -112,16 +184,20 @@ export const useRandomListening = (dictationPool: Sentence[]) => {
             return;
           }
           await new Promise<void>(r => setTimeout(r, 1500));
-          i--;
           continue;
         }
 
         consecutiveErrors = 0;
+        completedRepeats++;
         totalPlayedRef.current++;
 
-        if (i < REPEATS_PER_SENTENCE - 1) {
+        setState(prev => ({ ...prev, currentRepeat: completedRepeats }));
+
+        if (completedRepeats < REPEATS_PER_SENTENCE) {
           mediaSessionService.holdAudioFocus();
-          await new Promise<void>(r => setTimeout(r, 800));
+          await new Promise<void>(r =>
+            setTimeout(r, jitterDelay(INTER_REPEAT_BASE_DELAY, INTER_REPEAT_JITTER))
+          );
         }
       }
 
@@ -130,21 +206,26 @@ export const useRandomListening = (dictationPool: Sentence[]) => {
       setState(prev => ({ ...prev, totalPlayed: totalPlayedRef.current }));
 
       mediaSessionService.holdAudioFocus();
-      await new Promise<void>(r => setTimeout(r, 1200));
+      await new Promise<void>(r =>
+        setTimeout(r, jitterDelay(INTER_SENTENCE_BASE_DELAY, INTER_SENTENCE_JITTER))
+      );
     }
   }, [pickRandomSentence, playSentenceOnce]);
 
   const startListening = useCallback(() => {
-    if (dictationPool.length === 0) {
+    const pool = poolRef.current;
+    if (pool.length === 0) {
       setState(prev => ({
         ...prev,
-        errorMessage: '暂无已学习的句子，请先学习后再使用随机朗读',
+        errorMessage: '暂无可用句子，请先添加或学习句子',
       }));
       return;
     }
 
     isActiveRef.current = true;
     totalPlayedRef.current = 0;
+    recentIdsRef.current = [];
+    sessionCountsRef.current = new Map();
     const gen = ++playGenerationRef.current;
 
     setState({
@@ -156,7 +237,7 @@ export const useRandomListening = (dictationPool: Sentence[]) => {
     });
 
     runListeningLoop(gen);
-  }, [dictationPool.length, runListeningLoop]);
+  }, [runListeningLoop]);
 
   const stopListening = useCallback(() => {
     isActiveRef.current = false;
@@ -179,10 +260,11 @@ export const useRandomListening = (dictationPool: Sentence[]) => {
   }, [state.isActive, startListening, stopListening]);
 
   useEffect(() => {
+    const currentGen = playGenerationRef.current;
     return () => {
       if (isActiveRef.current) {
         isActiveRef.current = false;
-        playGenerationRef.current++;
+        playGenerationRef.current = currentGen + 1;
         geminiService.stop();
       }
     };
@@ -194,6 +276,7 @@ export const useRandomListening = (dictationPool: Sentence[]) => {
     randomListeningRepeat: state.currentRepeat,
     randomListeningTotal: state.totalPlayed,
     randomListeningError: state.errorMessage,
+    randomListeningPoolSize: sentences.length,
     toggleRandomListening: toggleListening,
     startRandomListening: startListening,
     stopRandomListening: stopListening,

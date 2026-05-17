@@ -340,6 +340,40 @@ export const ttsCloudCacheService = {
     });
   },
 
+  async downloadByPath(storagePath: string): Promise<Blob | null> {
+    if (!isSupabaseReady()) {
+      return null;
+    }
+
+    if (!storagePath || !storagePath.trim()) {
+      return null;
+    }
+
+    const client = supabaseService.client!;
+
+    try {
+      const { data, error } = await client.storage
+        .from(BUCKET_NAME)
+        .download(storagePath);
+
+      if (error) {
+        console.warn(`🔊 [CloudCache] 路径下载失败: ${storagePath}`, error.message);
+        return null;
+      }
+
+      if (!data || data.size === 0) {
+        return null;
+      }
+
+      console.log(`🔊 [CloudCache] 路径下载成功 | [路径] ${storagePath} | [大小] ${formatSize(data.size)}`);
+      return data;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`🔊 [CloudCache] 路径下载异常: ${storagePath}`, msg);
+      return null;
+    }
+  },
+
   async delete(
     text: string,
     voice: string,
