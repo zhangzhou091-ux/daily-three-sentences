@@ -59,6 +59,23 @@ export const useDailySelection = ({
       
       const now = new Date();
       const todayDateStr = getLocalDateString(now);
+      
+      const filterAndSortAvailable = (pool: Sentence[], excludeIds: Set<string>): Sentence[] => {
+        const available = pool.filter(s => 
+          s.intervalIndex === 0 && 
+          !excludeIds.has(s.id) &&
+          (!s.scheduledDate || s.scheduledDate <= todayDateStr)
+        );
+        const scheduled = available.filter(s => !!s.scheduledDate);
+        const manualNotScheduled = available.filter(s => !s.scheduledDate && s.isManual === true);
+        const importedNotScheduled = available.filter(s => !s.scheduledDate && (s.isManual === false || s.isManual === undefined));
+        return [
+          ...scheduled.sort((a, b) => a.addedAt - b.addedAt),
+          ...manualNotScheduled.sort((a, b) => a.addedAt - b.addedAt),
+          ...importedNotScheduled.sort((a, b) => a.addedAt - b.addedAt),
+        ];
+      };
+
       let retained: Sentence[] = [];
 
       const savedIds = await storageService.getTodaySelection();
@@ -69,6 +86,10 @@ export const useDailySelection = ({
           const sentence = sentenceMap.get(id);
           if (!sentence) {
             console.log(`📚 generateDailySelection: 跳过已删除的句子ID: ${id}`);
+            return;
+          }
+          if (sentence.scheduledDate && sentence.scheduledDate > todayDateStr) {
+            console.log(`📚 generateDailySelection: 跳过预约日期未到的句子: ${id}`);
             return;
           }
           const isLearnedToday = sentence.lastReviewedAt 
@@ -118,6 +139,10 @@ export const useDailySelection = ({
             console.log(`📚 generateDailySelection: 跳过昨日已删除的句子ID: ${id}`);
             return;
           }
+          if (s.scheduledDate && s.scheduledDate > todayDateStr) {
+            console.log(`📚 generateDailySelection: 跳过预约日期未到的继承句子: ${id}`);
+            return;
+          }
           if (s.intervalIndex === 0) {
             retained.push(s);
           }
@@ -139,14 +164,7 @@ export const useDailySelection = ({
         const retainedIdSet = new Set(retained.map(r => r.id));
         
         if (supplementCountFromYesterday > 0) {
-          const available = sentencesSnapshot.filter(s => 
-            s.intervalIndex === 0 && !retainedIdSet.has(s.id)
-          );
-          const manualSentences = available.filter(s => s.isManual === true);
-          const importedSentences = available.filter(s => s.isManual === false || s.isManual === undefined);
-          const sortedManual = manualSentences.sort((a, b) => a.addedAt - b.addedAt);
-          const sortedImported = importedSentences.sort((a, b) => a.addedAt - b.addedAt);
-          const sorted = [...sortedManual, ...sortedImported];
+          const sorted = filterAndSortAvailable(sentencesSnapshot, retainedIdSet);
           
           const supplementList = sorted.slice(0, supplementCountFromYesterday);
           retained.push(...supplementList);
@@ -157,14 +175,7 @@ export const useDailySelection = ({
         }
         
         if (needCount > 0) {
-          const moreAvailable = sentencesSnapshot.filter(s => 
-            s.intervalIndex === 0 && !retainedIdSet.has(s.id)
-          );
-          const manualSentences = moreAvailable.filter(s => s.isManual === true);
-          const importedSentences = moreAvailable.filter(s => s.isManual === false || s.isManual === undefined);
-          const sortedManual = manualSentences.sort((a, b) => a.addedAt - b.addedAt);
-          const sortedImported = importedSentences.sort((a, b) => a.addedAt - b.addedAt);
-          const sortedMore = [...sortedManual, ...sortedImported];
+          const sortedMore = filterAndSortAvailable(sentencesSnapshot, retainedIdSet);
           
           const additional = sortedMore.slice(0, needCount);
           retained.push(...additional);
@@ -175,14 +186,7 @@ export const useDailySelection = ({
         let needCount = LIMIT - retained.length;
         if (needCount > 0) {
           const retainedIdSet = new Set(retained.map(r => r.id));
-          const available = sentencesSnapshot.filter(s => 
-            s.intervalIndex === 0 && !retainedIdSet.has(s.id)
-          );
-          const manualSentences = available.filter(s => s.isManual === true);
-          const importedSentences = available.filter(s => s.isManual === false || s.isManual === undefined);
-          const sortedManual = manualSentences.sort((a, b) => a.addedAt - b.addedAt);
-          const sortedImported = importedSentences.sort((a, b) => a.addedAt - b.addedAt);
-          const sortedAll = [...sortedManual, ...sortedImported];
+          const sortedAll = filterAndSortAvailable(sentencesSnapshot, retainedIdSet);
           
           const supplementSentences = sortedAll.slice(0, needCount);
           retained.push(...supplementSentences);
@@ -190,6 +194,28 @@ export const useDailySelection = ({
       }
 
       const finalSelection = retained.slice(0, LIMIT);
+      
+      const finalIdSet = new Set(finalSelection.map(s => s.id));
+      const missedScheduled = sentencesSnapshot.filter(s => 
+        s.scheduledDate && 
+        s.scheduledDate <= todayDateStr && 
+        s.intervalIndex === 0 && 
+        !finalIdSet.has(s.id)
+      );
+      
+      if (missedScheduled.length > 0) {
+        const tomorrowDate = new Date(now);
+        tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+        const tomorrowStr = getLocalDateString(tomorrowDate);
+        
+        for (const sentence of missedScheduled) {
+          const updated = { ...sentence, scheduledDate: tomorrowStr, updatedAt: Date.now() };
+          await storageService.addSentence(updated, false);
+          storageService.addSentenceToSelectionByDate(tomorrowStr, sentence.id);
+        }
+        
+        console.log(`📚 generateDailySelection: ${missedScheduled.length} 个预约句子顺延至 ${tomorrowStr}`);
+      }
       
       console.log(`📚 generateDailySelection: 最终选择=${finalSelection.length}个句子`);
       

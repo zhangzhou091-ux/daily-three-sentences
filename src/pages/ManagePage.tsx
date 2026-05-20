@@ -186,7 +186,8 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
         wrongDictations: 0,
         tags: tagsArray,
         updatedAt: Date.now(),
-        isManual: true 
+        isManual: true,
+        scheduledDate
       };
       
       await storageService.addSentence(newItem);

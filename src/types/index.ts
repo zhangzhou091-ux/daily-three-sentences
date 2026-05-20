@@ -24,6 +24,7 @@ export interface Sentence {
   tags: string[];
   updatedAt: number;
   isManual?: boolean;
+  scheduledDate?: string;
   stability?: number;
   difficulty?: number;
   reps?: number;
