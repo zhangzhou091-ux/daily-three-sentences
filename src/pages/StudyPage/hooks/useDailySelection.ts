@@ -59,7 +59,13 @@ export const useDailySelection = ({
       
       const now = new Date();
       const todayDateStr = getLocalDateString(now);
-      
+
+      const todayScheduled = sentencesSnapshot.filter(s =>
+        s.scheduledDate === todayDateStr &&
+        s.intervalIndex === 0
+      );
+      console.log(`📚 generateDailySelection: 今日预约句子=${todayScheduled.length}个`);
+
       const filterAndSortAvailable = (pool: Sentence[], excludeIds: Set<string>): Sentence[] => {
         const available = pool.filter(s => 
           s.intervalIndex === 0 && 
@@ -123,6 +129,16 @@ export const useDailySelection = ({
             retained = [];
           }
         }
+
+        if (!forceRegenerate && todayScheduled.length > 0) {
+          const retainedIdSet = new Set(retained.map(r => r.id));
+          const missingScheduled = todayScheduled.filter(s => !retainedIdSet.has(s.id));
+          if (missingScheduled.length > 0) {
+            console.log(`📚 generateDailySelection: 缓存中缺少 ${missingScheduled.length} 个今日预约句子，强制重新生成`);
+            forceRegenerate = true;
+            retained = [];
+          }
+        }
       } else {
         forceRegenerate = true;
       }
@@ -130,63 +146,79 @@ export const useDailySelection = ({
       if (forceRegenerate) {
         retained = [];
         
+        const todayScheduledSorted = [...todayScheduled].sort((a, b) => a.addedAt - b.addedAt);
+        const scheduledCount = Math.min(todayScheduledSorted.length, LIMIT);
+        retained = todayScheduledSorted.slice(0, scheduledCount);
+        console.log(`📚 generateDailySelection: 今日预约句子填入 ${retained.length} 个`);
+
         const yesterdayIds = storageService.getYesterdaySelection();
         console.log(`📚 generateDailySelection: 昨日学习列表=${yesterdayIds.length}个句子`);
         
-        yesterdayIds.forEach(id => {
-          const s = sentenceMap.get(id);
-          if (!s) {
-            console.log(`📚 generateDailySelection: 跳过昨日已删除的句子ID: ${id}`);
-            return;
-          }
-          if (s.scheduledDate && s.scheduledDate > todayDateStr) {
-            console.log(`📚 generateDailySelection: 跳过预约日期未到的继承句子: ${id}`);
-            return;
-          }
-          if (s.intervalIndex === 0) {
-            retained.push(s);
-          }
-        });
-        
-        console.log(`📚 generateDailySelection: 保留昨日未学句子=${retained.length}个`);
-        
-        if (retained.length > LIMIT) {
-          retained = retained.slice(0, LIMIT);
-        }
-        
-        const yesterdayLearnedCount = storageService.getYesterdayLearnedCount();
-        console.log(`📚 generateDailySelection: 昨日完成学习=${yesterdayLearnedCount}个句子`);
-        
-        let needCount = LIMIT - retained.length;
-        
-        let supplementCountFromYesterday = Math.min(needCount, yesterdayLearnedCount);
-        
         const retainedIdSet = new Set(retained.map(r => r.id));
-        
-        if (supplementCountFromYesterday > 0) {
-          const sorted = filterAndSortAvailable(sentencesSnapshot, retainedIdSet);
+
+        if (retained.length < LIMIT) {
+          const yesterdayUnlearned: Sentence[] = [];
+          yesterdayIds.forEach(id => {
+            const s = sentenceMap.get(id);
+            if (!s) {
+              console.log(`📚 generateDailySelection: 跳过昨日已删除的句子ID: ${id}`);
+              return;
+            }
+            if (s.scheduledDate && s.scheduledDate > todayDateStr) {
+              console.log(`📚 generateDailySelection: 跳过预约日期未到的继承句子: ${id}`);
+              return;
+            }
+            if (s.intervalIndex === 0 && !retainedIdSet.has(s.id)) {
+              yesterdayUnlearned.push(s);
+            }
+          });
           
-          const supplementList = sorted.slice(0, supplementCountFromYesterday);
-          retained.push(...supplementList);
-          supplementList.forEach(s => retainedIdSet.add(s.id));
-          needCount = LIMIT - retained.length;
-          
-          console.log(`📚 generateDailySelection: 根据昨日完成数量补充 ${supplementList.length} 个句子`);
+          const inheritCount = Math.min(yesterdayUnlearned.length, LIMIT - retained.length);
+          const inherited = yesterdayUnlearned.slice(0, inheritCount);
+          retained.push(...inherited);
+          inherited.forEach(s => retainedIdSet.add(s.id));
+          console.log(`📚 generateDailySelection: 保留昨日未学句子=${inherited.length}个`);
         }
         
-        if (needCount > 0) {
-          const sortedMore = filterAndSortAvailable(sentencesSnapshot, retainedIdSet);
+        if (retained.length < LIMIT) {
+          const yesterdayLearnedCount = storageService.getYesterdayLearnedCount();
+          let needCount = LIMIT - retained.length;
+          let supplementCountFromYesterday = Math.min(needCount, yesterdayLearnedCount);
           
-          const additional = sortedMore.slice(0, needCount);
-          retained.push(...additional);
+          if (supplementCountFromYesterday > 0) {
+            const sorted = filterAndSortAvailable(sentencesSnapshot, retainedIdSet);
+            
+            const supplementList = sorted.slice(0, supplementCountFromYesterday);
+            retained.push(...supplementList);
+            supplementList.forEach(s => retainedIdSet.add(s.id));
+            needCount = LIMIT - retained.length;
+            
+            console.log(`📚 generateDailySelection: 根据昨日完成数量补充 ${supplementList.length} 个句子`);
+          }
           
-          console.log(`📚 generateDailySelection: 补满到${LIMIT}个，额外补充 ${additional.length} 个句子`);
+          if (needCount > 0) {
+            const sortedMore = filterAndSortAvailable(sentencesSnapshot, retainedIdSet);
+            
+            const additional = sortedMore.slice(0, needCount);
+            retained.push(...additional);
+            
+            console.log(`📚 generateDailySelection: 补满到${LIMIT}个，额外补充 ${additional.length} 个句子`);
+          }
         }
       } else {
+        const retainedIdSet = new Set(retained.map(r => r.id));
+        const missingScheduled = todayScheduled.filter(s => !retainedIdSet.has(s.id));
+        
+        if (missingScheduled.length > 0) {
+          retained = [...missingScheduled.sort((a, b) => a.addedAt - b.addedAt), ...retained];
+          retained = retained.slice(0, LIMIT);
+          console.log(`📚 generateDailySelection: 将 ${missingScheduled.length} 个今日预约句子插入到缓存列表前面`);
+        }
+
         let needCount = LIMIT - retained.length;
         if (needCount > 0) {
-          const retainedIdSet = new Set(retained.map(r => r.id));
-          const sortedAll = filterAndSortAvailable(sentencesSnapshot, retainedIdSet);
+          const updatedRetainedIdSet = new Set(retained.map(r => r.id));
+          const sortedAll = filterAndSortAvailable(sentencesSnapshot, updatedRetainedIdSet);
           
           const supplementSentences = sortedAll.slice(0, needCount);
           retained.push(...supplementSentences);
@@ -211,7 +243,6 @@ export const useDailySelection = ({
         for (const sentence of missedScheduled) {
           const updated = { ...sentence, scheduledDate: tomorrowStr, updatedAt: Date.now() };
           await storageService.addSentence(updated, false);
-          storageService.addSentenceToSelectionByDate(tomorrowStr, sentence.id);
         }
         
         console.log(`📚 generateDailySelection: ${missedScheduled.length} 个预约句子顺延至 ${tomorrowStr}`);

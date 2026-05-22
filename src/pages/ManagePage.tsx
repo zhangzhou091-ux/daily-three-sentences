@@ -192,8 +192,6 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
       
       await storageService.addSentence(newItem);
       
-      storageService.addSentenceToSelectionByDate(scheduledDate, newItem.id);
-      
       await onUpdate();
       setNewEn('');
       setNewZh('');
