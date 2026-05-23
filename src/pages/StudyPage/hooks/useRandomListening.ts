@@ -11,13 +11,15 @@ const INTER_REPEAT_JITTER = 200;
 const INTER_SENTENCE_BASE_DELAY = 900;
 const INTER_SENTENCE_JITTER = 300;
 const MAX_CONSECUTIVE_ERRORS = 3;
+const PLAY_TIMEOUT_MS = 8000;
+const SESSION_RESET_INTERVAL = 14 * 24 * 60 * 60 * 1000;
+const SESSION_RESET_KEY = 'd3s_random_listening_session_reset';
 
 const WEIGHT_DIFFICULTY = 2.0;
 const WEIGHT_LOW_STABILITY = 1.5;
 const WEIGHT_WRONG_DICTATIONS = 1.5;
 const WEIGHT_LOW_MASTERY = 1.0;
-const WEIGHT_SESSION_FREQUENCY = 2.0;
-const WEIGHT_HAS_AUDIO = 4.0;
+const WEIGHT_HAS_AUDIO = 1.0;
 
 interface RandomListeningState {
   isActive: boolean;
@@ -72,7 +74,7 @@ const computeWeight = (sentence: Sentence, sessionCounts: Map<string, number>): 
 
   const sessionCount = sessionCounts.get(sentence.id) ?? 0;
   if (sessionCount > 0) {
-    weight *= 1 / (1 + WEIGHT_SESSION_FREQUENCY * sessionCount);
+    weight *= Math.pow(0.15, sessionCount);
   }
 
   return Math.max(weight, 0.1);
@@ -110,7 +112,6 @@ export const useRandomListening = (sentences: Sentence[]) => {
   const totalPlayedRef = useRef(0);
   const recentIdsRef = useRef<string[]>([]);
   const sessionCountsRef = useRef<Map<string, number>>(new Map());
-  const RECENT_AVOID_COUNT = 3;
   const historyRef = useRef<Sentence[]>([]);
   const historyIndexRef = useRef(-1);
 
@@ -143,8 +144,11 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
     if (withAudio.length > 0 && withoutAudio.length > 0) {
       const audioRatio = withAudio.length / candidates.length;
-      if (Math.random() < audioRatio + 0.3) {
+      const pickAudioProbability = Math.min(0.85, audioRatio + 0.15);
+      if (Math.random() < pickAudioProbability) {
         return weightedRandomPick(withAudio, sessionCountsRef.current);
+      } else {
+        return weightedRandomPick(withoutAudio, sessionCountsRef.current);
       }
     }
 
@@ -153,45 +157,67 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
   const playSentenceOnce = useCallback(async (
     sentence: Sentence,
-    gen: number
+    gen: number,
+    cachedBlob?: Blob | null
   ): Promise<boolean> => {
     if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
 
-    try {
-      const blob = await geminiService.fetchAudioBlob(sentence.english);
-      if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
-
-      if (blob) {
-        await continuousAudioPlayer.playBlob(blob);
+    const doPlay = async (): Promise<boolean> => {
+      if (cachedBlob) {
+        await continuousAudioPlayer.playBlob(cachedBlob);
         if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
         return true;
       }
 
-      console.log('🔊 [随机朗读] Blob 获取失败，回退到 geminiService.speak');
-      geminiService.startSpeechSynthesisKeepAlive();
-      const result = await geminiService.speak(sentence.english, false);
-      if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
-      if (!result.success) {
-        console.warn(`🔊 [随机朗读] 播放失败: ${result.error}`);
-        return false;
-      }
-      return true;
-    } catch (err) {
-      if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
-      console.warn('🔊 [随机朗读] 播放异常:', err instanceof Error ? err.message : String(err));
+      try {
+        const blob = await geminiService.fetchAudioBlob(sentence.english);
+        if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
 
-      if (continuousAudioPlayer.isActivated()) {
-        try {
-          geminiService.startSpeechSynthesisKeepAlive();
-          const fallbackResult = await geminiService.speak(sentence.english, false);
+        if (blob) {
+          await continuousAudioPlayer.playBlob(blob);
           if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
-          return fallbackResult.success;
-        } catch {
+          return true;
+        }
+
+        console.log('🔊 [随机朗读] Blob 获取失败，回退到 geminiService.speak');
+        geminiService.startSpeechSynthesisKeepAlive();
+        const result = await geminiService.speak(sentence.english, false);
+        if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
+        if (!result.success) {
+          console.warn(`🔊 [随机朗读] 播放失败: ${result.error}`);
           return false;
         }
+        return true;
+      } catch (err) {
+        if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
+        console.warn('🔊 [随机朗读] 播放异常:', err instanceof Error ? err.message : String(err));
+
+        if (continuousAudioPlayer.isActivated()) {
+          try {
+            geminiService.startSpeechSynthesisKeepAlive();
+            const fallbackResult = await geminiService.speak(sentence.english, false);
+            if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
+            return fallbackResult.success;
+          } catch {
+            return false;
+          }
+        }
+        return false;
       }
-      return false;
+    };
+
+    const timeoutPromise = new Promise<boolean>((resolve) => {
+      setTimeout(() => resolve(false), PLAY_TIMEOUT_MS);
+    });
+
+    const result = await Promise.race([doPlay(), timeoutPromise]);
+
+    if (!result) {
+      geminiService.stop();
+      continuousAudioPlayer.stop();
     }
+
+    return result;
   }, []);
 
   const addToHistory = useCallback((sentence: Sentence) => {
@@ -238,9 +264,10 @@ export const useRandomListening = (sentences: Sentence[]) => {
       }
 
       lastSentenceIdRef.current = sentence.id;
+      const dynamicAvoidCount = Math.min(Math.floor(getEligiblePool().length * 0.6), 50);
       recentIdsRef.current = [
         sentence.id,
-        ...recentIdsRef.current.slice(0, RECENT_AVOID_COUNT - 1),
+        ...recentIdsRef.current.slice(0, dynamicAvoidCount - 1),
       ];
 
       const currentCount = sessionCountsRef.current.get(sentence.id) ?? 0;
@@ -255,27 +282,33 @@ export const useRandomListening = (sentences: Sentence[]) => {
         errorMessage: null,
       }));
 
+      let audioBlob: Blob | null = null;
+      try {
+        audioBlob = await geminiService.fetchAudioBlob(sentence.english);
+      } catch {
+        audioBlob = null;
+      }
+      if (!isActiveRef.current || playGenerationRef.current !== gen) return;
+
       let consecutiveErrors = 0;
       let completedRepeats = 0;
 
       while (completedRepeats < REPEATS_PER_SENTENCE) {
         if (!isActiveRef.current || playGenerationRef.current !== gen) return;
 
-        const success = await playSentenceOnce(sentence, gen);
+        if (blacklistStorage.isBlacklisted(sentence.id)) {
+          break;
+        }
+
+        const success = await playSentenceOnce(sentence, gen, audioBlob);
         if (!isActiveRef.current || playGenerationRef.current !== gen) return;
 
         if (!success) {
           consecutiveErrors++;
           if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-            setState(prev => ({
-              ...prev,
-              isActive: false,
-              errorMessage: '语音播放连续失败，请检查TTS设置后重试',
-            }));
-            isActiveRef.current = false;
-            return;
+            break;
           }
-          await new Promise<void>(r => setTimeout(r, 1500));
+          await new Promise<void>(r => setTimeout(r, 500));
           continue;
         }
 
@@ -323,8 +356,15 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
     isActiveRef.current = true;
     totalPlayedRef.current = 0;
-    recentIdsRef.current = [];
-    sessionCountsRef.current = new Map();
+
+    const now = Date.now();
+    const lastReset = parseInt(localStorage.getItem(SESSION_RESET_KEY) || '0', 10);
+    if (now - lastReset >= SESSION_RESET_INTERVAL) {
+      recentIdsRef.current = [];
+      sessionCountsRef.current = new Map();
+      localStorage.setItem(SESSION_RESET_KEY, String(now));
+    }
+
     const gen = ++playGenerationRef.current;
 
     setState({
@@ -372,6 +412,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
       isActiveRef.current = false;
       playGenerationRef.current++;
       geminiService.stop();
+      continuousAudioPlayer.stop();
     }
 
     const newIdx = idx - 1;
@@ -405,6 +446,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
         isActiveRef.current = false;
         playGenerationRef.current++;
         geminiService.stop();
+        continuousAudioPlayer.stop();
       }
 
       const newIdx = idx + 1;

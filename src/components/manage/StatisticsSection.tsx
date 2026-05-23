@@ -29,13 +29,16 @@ const PieChartComponent = memo(({ data }: { data: { name: string; value: number;
   </PieChart>
 ));
 
-const BarChartComponent = memo(({ data }: { data: { name: string; value: number }[] }) => (
-  <BarChart width={300} height={150} data={data} layout="vertical" margin={{ left: 0, right: 30 }}>
-    <XAxis type="number" hide />
-    <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={{ fontSize: 11, fontWeight: 700, fill: '#1f2937' }} width={60} />
-    <Bar dataKey="value" fill="#3b82f6" radius={[0, 8, 8, 0]} barSize={12} />
-  </BarChart>
-));
+const BarChartComponent = memo(({ data }: { data: { name: string; value: number }[] }) => {
+  const chartHeight = Math.max(150, data.length * 30);
+  return (
+    <BarChart width={300} height={chartHeight} data={data} layout="vertical" margin={{ left: 0, right: 30 }}>
+      <XAxis type="number" hide />
+      <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={{ fontSize: 11, fontWeight: 700, fill: '#1f2937' }} width={60} />
+      <Bar dataKey="value" fill="#3b82f6" radius={[0, 8, 8, 0]} barSize={12} />
+    </BarChart>
+  );
+});
 
 export const StatisticsSection: React.FC<StatisticsSectionProps> = memo(({ sentences, onImportClick, importStatus }) => {
   const [chartsReady, setChartsReady] = useState(false);
@@ -71,8 +74,7 @@ export const StatisticsSection: React.FC<StatisticsSectionProps> = memo(({ sente
     
     const tagData = Object.entries(tagMap)
       .map(([name, value]) => ({ name, value }))
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 5);
+      .sort((a, b) => b.value - a.value);
     
     return { mastery, tagData };
   }, [sentences]);
@@ -118,7 +120,7 @@ export const StatisticsSection: React.FC<StatisticsSectionProps> = memo(({ sente
           </div>
           <div className="space-y-6 min-w-0">
             <h3 className="text-[11px] font-black text-gray-600 uppercase tracking-widest">HOT KEYWORDS</h3>
-            <div className="h-48 min-h-48 flex justify-center w-full min-w-0">
+            <div className="min-h-48 flex justify-center w-full min-w-0" style={{ height: Math.max(192, stats.tagData.length * 30 + 12) }}>
               {chartsReady && stats.tagData.length > 0 ? (
                 <BarChartComponent data={stats.tagData} />
               ) : stats.tagData.length === 0 ? (

@@ -801,10 +801,13 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
                 const dayAfterTomorrow = new Date();
                 dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 2);
                 const dayAfterTomorrowStr = getLocalDateString(dayAfterTomorrow);
+                const threeDaysLater = new Date();
+                threeDaysLater.setDate(threeDaysLater.getDate() + 3);
+                const threeDaysLaterStr = getLocalDateString(threeDaysLater);
                 const options = [
-                  { value: today, label: '今天' },
                   { value: tomorrowStr, label: '次日' },
                   { value: dayAfterTomorrowStr, label: '后天' },
+                  { value: threeDaysLaterStr, label: '大后天' },
                 ];
                 return options.map(opt => (
                   <button
