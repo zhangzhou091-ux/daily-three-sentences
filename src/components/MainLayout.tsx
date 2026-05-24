@@ -1,6 +1,6 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import Navbar from './Navbar';
-const StudyPage = lazy(() => import('../pages/StudyPage'));
+import StudyPage from '../pages/StudyPage';
 const ManagePage = lazy(() => import('../pages/ManagePage'));
 const AchievementPage = lazy(() => import('../pages/AchievementPage'));
 const SettingsPage = lazy(() => import('../pages/SettingsPage'));

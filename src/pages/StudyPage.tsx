@@ -13,6 +13,7 @@ import { useProgressRestore } from './StudyPage/hooks/useProgressRestore';
 import { useReviewLogic } from './StudyPage/hooks/useReviewLogic';
 import { useDictationLogic } from './StudyPage/hooks/useDictationLogic';
 import { useRandomListening } from './StudyPage/hooks/useRandomListening';
+import { useDictationReading } from './StudyPage/hooks/useDictationReading';
 import { LearnCard } from './StudyPage/components/LearnCard';
 import { ReviewCard } from './StudyPage/components/ReviewCard';
 
@@ -214,6 +215,33 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     REPEATS_PER_SENTENCE,
   } = useRandomListening(sentences);
 
+  const {
+    isDictationReadingActive,
+    dictationReadingSentence,
+    dictationReadingIndex,
+    dictationReadingRepeat,
+    dictationReadingTotal,
+    dictationReadingError,
+    dictationReadingPoolSize,
+    toggleDictationReading,
+    stopDictationReading,
+    goToPrevReadingSentence,
+    goToNextReadingSentence,
+    canGoPrevReadingSentence,
+    canGoNextReadingSentence,
+    REPEATS_PER_SENTENCE: DICTATION_READING_REPEATS,
+  } = useDictationReading(sentences, dailySelection);
+
+  const handleToggleRandomListening = useCallback(() => {
+    if (isDictationReadingActive) stopDictationReading();
+    toggleRandomListening();
+  }, [isDictationReadingActive, stopDictationReading, toggleRandomListening]);
+
+  const handleToggleDictationReading = useCallback(() => {
+    if (isRandomListeningActive) stopRandomListening();
+    toggleDictationReading();
+  }, [isRandomListeningActive, stopRandomListening, toggleDictationReading]);
+
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
@@ -391,20 +419,17 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     }
   }, [dailySelection.length]);
 
-  const sentenceMap = useMemo(() => {
+  const sentenceLookup = useMemo(() => {
     const map = new Map<string, Sentence>();
     sentences.forEach(s => map.set(s.id, s));
     return map;
   }, [sentences]);
 
-  const targetSentence = useMemo(() => 
-    targetDictationId ? sentenceMap.get(targetDictationId) || null : null,
-    [sentenceMap, targetDictationId]
-  );
+  const targetSentence = targetDictationId ? sentenceLookup.get(targetDictationId) || null : null;
   
   const currentSentence = dailySelection[currentIndex] || null;
   const currentSentenceLatest = currentSentence 
-    ? sentenceMap.get(currentSentence.id) || currentSentence 
+    ? sentenceLookup.get(currentSentence.id) || currentSentence 
     : null;
   const isCurrentlyLearned = useMemo(() => {
     if (!currentSentence) return false;
@@ -416,10 +441,10 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     const todayIds = dailySelection.map(s => s.id);
     if (todayIds.length === 0) return false;
     return todayIds.every(id => {
-      const sentence = sentenceMap.get(id);
+      const sentence = sentenceLookup.get(id);
       return sentence ? sentence.intervalIndex > 0 : false;
     });
-  }, [dailySelection, sentenceMap]);
+  }, [dailySelection, sentenceLookup]);
   
   useEffect(() => {
     if (!allLearned) {
@@ -513,7 +538,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
             {(['learn', 'review', 'dictation'] as StudyStep[]).map(tab => (
               <button
                 key={tab}
-                onClick={() => { geminiService.stop(); setSpeakingText(null); if (isRandomListeningActive) stopRandomListening(); setActiveTab(tab); setCurrentIndex(0); setIsFlipped(tab === 'review'); }}
+                onClick={() => { geminiService.stop(); setSpeakingText(null); if (isRandomListeningActive) stopRandomListening(); if (isDictationReadingActive) stopDictationReading(); setActiveTab(tab); setCurrentIndex(0); setIsFlipped(tab === 'review'); }}
                 className={`px-4 py-2 text-[11px] font-black uppercase tracking-wider rounded-[1.2rem] transition-all duration-300 ${
                   activeTab === tab ? 'bg-white shadow-sm text-blue-600' : 'text-gray-600 hover:text-gray-800'
                 }`}
@@ -890,7 +915,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                           ⏮
                         </button>
                         <button
-                          onClick={toggleRandomListening}
+                          onClick={handleToggleRandomListening}
                           className="w-14 h-14 rounded-full flex items-center justify-center text-2xl transition-all z-20 bg-red-50 text-red-500 hover:scale-110 active:scale-95 animate-pulse"
                         >
                           ⏹
@@ -916,7 +941,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 ) : (
                   <div className="flex flex-col items-center justify-center flex-1 w-full">
                     <button
-                      onClick={toggleRandomListening}
+                      onClick={handleToggleRandomListening}
                       className="w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all z-20 bg-blue-50 text-blue-600 hover:scale-110 active:scale-95"
                     >
                       🔊
@@ -934,6 +959,106 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
               {randomListeningError && (
                 <div className="mt-2 p-3 bg-red-50 rounded-xl border border-red-100 w-full">
                   <p className="text-sm text-red-600 font-medium text-center">{randomListeningError}</p>
+                </div>
+              )}
+            </div>
+
+            <div className="apple-card p-6 relative overflow-hidden" style={{ minHeight: '320px', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left', paddingTop: '20px', paddingBottom: '20px' }}>
+              <div className="w-full flex justify-between items-center mb-3">
+                <div>
+                  <h3 className="text-lg font-black text-gray-900 tracking-tight">顺序朗读</h3>
+                  <p className="text-[10px] font-black text-green-500 uppercase tracking-widest mt-0.5">Sequential Reading</p>
+                </div>
+                <span className="text-[10px] font-bold text-gray-400">
+                  {dictationReadingPoolSize} 句可用
+                </span>
+              </div>
+
+              <div className="mt-[1.5em] flex flex-col items-center w-full flex-1 overflow-y-auto min-h-0">
+                {isDictationReadingActive && dictationReadingSentence ? (
+                  <>
+                    <div className="w-full text-left space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <h3 className="text-lg font-normal leading-normal w-full break-words whitespace-pre-wrap text-gray-900">
+                            {dictationReadingSentence.english}
+                          </h3>
+                          <p className="text-sm leading-normal break-words text-gray-400">
+                            {dictationReadingSentence.chinese}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-auto flex flex-col items-center w-full">
+                      <div className="flex items-center gap-2 w-full mb-4">
+                        <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-green-500 rounded-full transition-all duration-500 ease-out"
+                            style={{ width: `${(dictationReadingRepeat / DICTATION_READING_REPEATS) * 100}%` }}
+                          />
+                        </div>
+                        <span className="text-[10px] font-bold text-gray-500 min-w-[2.5rem] text-right">
+                          {dictationReadingRepeat}/{DICTATION_READING_REPEATS}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-center gap-4 w-full">
+                        <button
+                          onClick={goToPrevReadingSentence}
+                          disabled={!canGoPrevReadingSentence}
+                          className={`w-10 h-10 rounded-full flex items-center justify-center text-lg transition-all ${
+                            canGoPrevReadingSentence
+                              ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-90'
+                              : 'bg-gray-50 text-gray-300 cursor-not-allowed'
+                          }`}
+                          title="上一句"
+                        >
+                          ⏮
+                        </button>
+                        <button
+                          onClick={handleToggleDictationReading}
+                          className="w-14 h-14 rounded-full flex items-center justify-center text-2xl transition-all z-20 bg-red-50 text-red-500 hover:scale-110 active:scale-95 animate-pulse"
+                        >
+                          ⏹
+                        </button>
+                        <button
+                          onClick={goToNextReadingSentence}
+                          disabled={!canGoNextReadingSentence}
+                          className={`w-10 h-10 rounded-full flex items-center justify-center text-lg transition-all ${
+                            canGoNextReadingSentence
+                              ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-90'
+                              : 'bg-gray-50 text-gray-300 cursor-not-allowed'
+                          }`}
+                          title="下一句"
+                        >
+                          ⏭
+                        </button>
+                      </div>
+                      <p className="text-xs font-black text-gray-600 uppercase tracking-widest mt-4">
+                        第 {dictationReadingIndex + 1}/{dictationReadingPoolSize} 句 · 已朗读 {dictationReadingTotal} 遍
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex flex-col items-center justify-center flex-1 w-full">
+                    <button
+                      onClick={handleToggleDictationReading}
+                      className="w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all z-20 bg-green-50 text-green-600 hover:scale-110 active:scale-95"
+                    >
+                      📖
+                    </button>
+                    <p className="text-xs font-black text-gray-600 uppercase tracking-widest mt-6">
+                      点击开始顺序朗读
+                    </p>
+                    <p className="text-[10px] text-gray-400 mt-2">
+                      朗读今日学习与复习句子，每句 {DICTATION_READING_REPEATS} 遍后自动切换，循环播放
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {dictationReadingError && (
+                <div className="mt-2 p-3 bg-red-50 rounded-xl border border-red-100 w-full">
+                  <p className="text-sm text-red-600 font-medium text-center">{dictationReadingError}</p>
                 </div>
               )}
             </div>
@@ -979,6 +1104,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                   <button 
                     onClick={() => { 
                       if (isRandomListeningActive) stopRandomListening();
+                      if (isDictationReadingActive) stopDictationReading();
                       if(targetSentence) speak(targetSentence.english); 
                     }} 
                     className="bg-white text-gray-600 py-5 rounded-[2rem] font-bold border border-gray-100 active:scale-95 transition-all"
@@ -1010,7 +1136,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       {targetSentence.english}
                     </p>
                     <button 
-                      onClick={() => { if (isRandomListeningActive) stopRandomListening(); speak(targetSentence.english); }} 
+                      onClick={() => { if (isRandomListeningActive) stopRandomListening(); if (isDictationReadingActive) stopDictationReading(); speak(targetSentence.english); }} 
                       className="mt-4 font-bold text-xs flex items-center gap-1.5 text-blue-500 hover:text-blue-700 transition-colors"
                     >
                       <span>🔊</span> 再次播放
