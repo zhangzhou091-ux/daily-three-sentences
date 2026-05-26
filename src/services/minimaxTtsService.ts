@@ -2,7 +2,6 @@ const CACHE_DB_NAME = 'D3S_MiniMax_Cache';
 const CACHE_STORE_NAME = 'audio_cache';
 const CACHE_DB_VERSION = 2;
 const MAX_CACHE_SIZE = 100 * 1024 * 1024;
-const CACHE_TTL = 30 * 24 * 60 * 60 * 1000;
 const IOS_PLAYBACK_RETRIES = 3;
 const IOS_PLAYBACK_DELAY = 200;
 
@@ -152,12 +151,6 @@ const getCachedAudio = async (text: string, voice: string): Promise<Blob | null>
           resolve(null);
           return;
         }
-        if (Date.now() - record.lastHitAt > CACHE_TTL) {
-          store.delete(key);
-          console.log(`🔊 [MiniMax缓存] 过期清理 | [key] ${key}`);
-          resolve(null);
-          return;
-        }
         record.hitCount = (record.hitCount || 0) + 1;
         record.lastHitAt = Date.now();
         try { store.put(record); } catch { /* ignore */ }
@@ -173,25 +166,41 @@ const getCachedAudio = async (text: string, voice: string): Promise<Blob | null>
 };
 
 const getStaleCachedAudio = async (text: string, voice: string): Promise<Blob | null> => {
+  return getCachedAudio(text, voice);
+};
+
+const findByText = async (text: string): Promise<Blob | null> => {
   try {
     const db = await getCacheDB();
-    const key = generateCacheKey(text, voice);
+    const textPreview = text.trim().slice(0, 80);
+
     return new Promise((resolve) => {
-      const tx = db.transaction([CACHE_STORE_NAME], 'readonly');
+      const tx = db.transaction([CACHE_STORE_NAME], 'readwrite');
       const store = tx.objectStore(CACHE_STORE_NAME);
-      const request = store.get(key);
-      request.onsuccess = () => {
-        const record = request.result as CacheRecord | undefined;
-        if (!record || !record.audioData || !(record.audioData instanceof ArrayBuffer) || record.audioData.byteLength === 0) {
+      const getAllReq = store.getAll();
+
+      getAllReq.onsuccess = () => {
+        const records = getAllReq.result as CacheRecord[];
+        const matching = records
+          .filter(r => r.textPreview === textPreview && r.audioData && r.audioData instanceof ArrayBuffer && r.audioData.byteLength > 0)
+          .sort((a, b) => (b.lastHitAt || b.createdAt) - (a.lastHitAt || a.createdAt));
+
+        if (matching.length === 0) {
           resolve(null);
           return;
         }
+
+        const record = matching[0];
+        record.hitCount = (record.hitCount || 0) + 1;
+        record.lastHitAt = Date.now();
+        try { store.put(record); } catch { /* ignore */ }
+
         const blob = arrayBufferToBlob(record.audioData, record.audioType || 'audio/mpeg');
-        const ageDays = Math.round((Date.now() - record.createdAt) / (24 * 60 * 60 * 1000));
-        console.log(`🔊 [MiniMax缓存] 陈旧缓存回退 | [key] ${key} | [大小] ${formatSize(record.size)} | [已缓存] ${ageDays}天`);
+        console.log(`🔊 [MiniMax缓存] 文本模糊命中 | [voice] ${record.voice} | [命中] ${record.hitCount}次`);
         resolve(blob);
       };
-      request.onerror = () => resolve(null);
+
+      getAllReq.onerror = () => resolve(null);
     });
   } catch {
     return null;
@@ -911,6 +920,7 @@ export const minimaxTtsService = {
   getCachedAudio,
   getStaleCachedAudio,
   setCachedAudio,
+  findByText,
 
   async fetchAudioBlob(
     text: string,

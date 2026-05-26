@@ -1,4 +1,6 @@
-const SILENCE_MP3_BASE64 = 'data:audio/mp3;base64,//OQxAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq';
+import { mediaSessionService } from './mediaSessionService';
+
+const SILENCE_MP3_BASE64 = 'data:audio/mp3;base64,//OQxAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq';
 
 const isIOS = (): boolean => {
   if (typeof navigator === 'undefined') return false;
@@ -8,13 +10,24 @@ const isIOS = (): boolean => {
 
 const IOS_PLAY_RETRIES = 3;
 const IOS_PLAY_RETRY_DELAY = 200;
-const PLAY_TIMEOUT = 60000;
+const PLAY_TIMEOUT = 120000;
+const AUDIO_GAIN = 1.5;
 
 class ContinuousAudioPlayer {
-  private audio: HTMLAudioElement | null = null;
+  private audio: HTMLAudioElement;
+  private audioContext: AudioContext | null = null;
+  private gainNode: GainNode | null = null;
+  private currentSource: MediaElementAudioSourceNode | null = null;
   private active: boolean = false;
   private generation: number = 0;
   private currentBlobUrl: string | null = null;
+  private initialized: boolean = false;
+
+  constructor() {
+    this.audio = new Audio();
+    this.audio.preload = 'auto';
+    this.audio.crossOrigin = 'anonymous';
+  }
 
   isActivated(): boolean {
     return this.active;
@@ -23,23 +36,39 @@ class ContinuousAudioPlayer {
   activate(): boolean {
     if (this.active) return true;
 
+    if (!this.initialized && isIOS()) {
+      this.initialized = true;
+      const unlockSrc = this.audio.src;
+      this.audio.src = SILENCE_MP3_BASE64;
+      this.audio.volume = 0.01;
+      this.audio.play().then(() => {
+        this.audio.pause();
+        this.audio.currentTime = 0;
+        this.audio.volume = 1.0;
+        this.audio.removeAttribute('src');
+        this.audio.load();
+      }).catch(() => {
+        this.audio.volume = 1.0;
+        this.audio.removeAttribute('src');
+      });
+    }
+
     this.active = true;
     this.generation++;
 
-    this.audio = new Audio();
-    this.audio.preload = 'auto';
+    this.setupMediaSession();
 
-    if (isIOS() && this.audio) {
-      const unlockAudio = this.audio;
-      unlockAudio.src = SILENCE_MP3_BASE64;
-      unlockAudio.volume = 0.01;
-      unlockAudio.play().then(() => {
-        unlockAudio.pause();
-        unlockAudio.currentTime = 0;
-        unlockAudio.volume = 1.0;
-        unlockAudio.removeAttribute('src');
-        unlockAudio.load();
-      }).catch(() => {});
+    if (isIOS()) {
+      const handleInterruption = () => {
+        if (this.active && !this.audio.paused) {
+          this.audio.play().catch(() => {});
+        }
+      };
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          handleInterruption();
+        }
+      });
     }
 
     console.log('🔊 [连续播放器] 已激活');
@@ -50,25 +79,24 @@ class ContinuousAudioPlayer {
     this.generation++;
     this.active = false;
 
-    if (this.audio) {
-      try {
-        this.audio.pause();
-        this.audio.onended = null;
-        this.audio.onerror = null;
-        this.audio.oncanplay = null;
-        this.audio.onloadeddata = null;
-        this.audio.removeAttribute('src');
-        this.audio.load();
-      } catch { /* ignore */ }
-      this.audio = null;
-    }
+    try {
+      this.audio.pause();
+      this.audio.onended = null;
+      this.audio.onerror = null;
+      this.audio.oncanplay = null;
+      this.audio.onloadeddata = null;
+      this.audio.onpause = null;
+      this.audio.removeAttribute('src');
+      this.audio.load();
+    } catch { /* ignore */ }
 
     this.revokeCurrentUrl();
+    this.disconnectGain();
     console.log('🔊 [连续播放器] 已停用');
   }
 
   async playBlob(blob: Blob): Promise<void> {
-    if (!this.active || !this.audio) {
+    if (!this.active) {
       throw new Error('播放器未激活');
     }
 
@@ -85,8 +113,7 @@ class ContinuousAudioPlayer {
     const url = URL.createObjectURL(new Blob([blob], { type: mimeType }));
     this.currentBlobUrl = url;
 
-    const audio = this.audio;
-    audio.src = url;
+    this.audio.src = url;
 
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -95,6 +122,7 @@ class ContinuousAudioPlayer {
       const doResolve = () => {
         if (settled) return;
         settled = true;
+        this.revokeCurrentUrl();
         resolve();
       };
 
@@ -108,7 +136,9 @@ class ContinuousAudioPlayer {
       const attemptPlay = () => {
         if (!isCurrentGen() || settled) return;
 
-        audio.play().catch((err: DOMException) => {
+        this.connectGain();
+
+        this.audio.play().catch((err: DOMException) => {
           if (!isCurrentGen() || settled) return;
 
           if ((err.name === 'NotAllowedError' || err.name === 'AbortError') && isIOS() && retryCount < IOS_PLAY_RETRIES) {
@@ -122,15 +152,14 @@ class ContinuousAudioPlayer {
         });
       };
 
-      audio.onended = () => {
+      this.audio.onended = () => {
         if (!isCurrentGen()) return;
-        this.revokeCurrentUrl();
         doResolve();
       };
 
-      audio.onerror = () => {
+      this.audio.onerror = () => {
         if (!isCurrentGen() || settled) return;
-        const mediaError = audio.error;
+        const mediaError = this.audio.error;
         let errorMsg = '音频播放失败';
         if (mediaError) {
           switch (mediaError.code) {
@@ -148,17 +177,17 @@ class ContinuousAudioPlayer {
         doReject(new Error(errorMsg));
       };
 
-      audio.oncanplay = () => {
+      this.audio.oncanplay = () => {
         if (!isCurrentGen() || settled) return;
         attemptPlay();
       };
 
-      audio.onloadeddata = () => {
+      this.audio.onloadeddata = () => {
         if (!isCurrentGen() || settled) return;
         if (isIOS()) {
           setTimeout(() => {
             if (!isCurrentGen() || settled) return;
-            if (audio.readyState >= 3) {
+            if (this.audio.readyState >= 3) {
               attemptPlay();
             }
           }, 100);
@@ -168,14 +197,14 @@ class ContinuousAudioPlayer {
       if (isIOS()) {
         setTimeout(() => {
           if (!isCurrentGen() || settled) return;
-          if (audio.readyState >= 3) {
+          if (this.audio.readyState >= 3) {
             attemptPlay();
           } else {
-            audio.load();
+            this.audio.load();
           }
         }, 50);
       } else {
-        audio.load();
+        this.audio.load();
       }
 
       setTimeout(() => {
@@ -188,18 +217,67 @@ class ContinuousAudioPlayer {
 
   stop(): void {
     this.generation++;
-    if (this.audio) {
-      try {
-        this.audio.pause();
-        this.audio.removeAttribute('src');
-        this.audio.load();
-      } catch { /* ignore */ }
-    }
+    try {
+      this.audio.pause();
+      this.audio.removeAttribute('src');
+      this.audio.load();
+    } catch { /* ignore */ }
     this.revokeCurrentUrl();
+    this.disconnectGain();
   }
 
-  getAudioElement(): HTMLAudioElement | null {
+  getAudioElement(): HTMLAudioElement {
     return this.audio;
+  }
+
+  resumeAudioFocus(): void {
+    if (!this.active) return;
+    if (this.audio.paused && this.audio.src) {
+      this.audio.play().catch(() => {});
+    }
+  }
+
+  private setupMediaSession(): void {
+    mediaSessionService.setActionHandlers({
+      onPause: () => {
+        this.audio.pause();
+      },
+      onPlay: () => {
+        if (this.active && this.audio.src) {
+          this.audio.play().catch(() => {});
+        }
+      },
+      onStop: () => {
+        this.stop();
+      },
+    });
+  }
+
+  private connectGain(): void {
+    if (isIOS()) return;
+    if (this.currentSource) return;
+    try {
+      if (!this.audioContext || this.audioContext.state === 'closed') {
+        this.audioContext = new AudioContext();
+        this.gainNode = this.audioContext.createGain();
+        this.gainNode.gain.value = AUDIO_GAIN;
+        this.gainNode.connect(this.audioContext.destination);
+      }
+      if (this.audioContext.state === 'suspended') {
+        this.audioContext.resume();
+      }
+      this.currentSource = this.audioContext.createMediaElementSource(this.audio);
+      this.currentSource.connect(this.gainNode!);
+    } catch (e) {
+      console.warn('🔊 [连续播放器] Web Audio 增益连接失败，使用原始音量:', e);
+    }
+  }
+
+  private disconnectGain(): void {
+    if (this.currentSource) {
+      try { this.currentSource.disconnect(); } catch { /* ignore */ }
+      this.currentSource = null;
+    }
   }
 
   private revokeCurrentUrl(): void {

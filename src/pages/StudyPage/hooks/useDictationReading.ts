@@ -12,6 +12,30 @@ const INTER_SENTENCE_BASE_DELAY = 900;
 const INTER_SENTENCE_JITTER = 300;
 const MAX_CONSECUTIVE_ERRORS = 3;
 const PLAY_TIMEOUT_MS = 8000;
+const READING_PROGRESS_KEY = 'd3s_dictation_reading_progress';
+const PRELOAD_LOOKAHEAD = 2;
+
+const saveReadingProgress = (sentenceId: string, index: number): void => {
+  try {
+    const today = getLocalDateString();
+    const progress = { sentenceId, index, date: today };
+    localStorage.setItem(READING_PROGRESS_KEY, JSON.stringify(progress));
+  } catch { /* ignore */ }
+};
+
+const loadReadingProgress = (): { sentenceId: string; index: number; date: string } | null => {
+  try {
+    const raw = localStorage.getItem(READING_PROGRESS_KEY);
+    if (!raw) return null;
+    const progress = JSON.parse(raw);
+    if (progress && typeof progress.date === 'string' && typeof progress.index === 'number') {
+      return progress;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
 
 interface DictationReadingState {
   isActive: boolean;
@@ -42,6 +66,10 @@ export const useDictationReading = (
   const sentencesRef = useRef(sentences);
   const dailySelectionRef = useRef(dailySelection);
   const startIdxRef = useRef(0);
+  const preloadCacheRef = useRef<Map<number, Blob>>(new Map());
+  const preloadGenRef = useRef(0);
+  const goToPrevRef = useRef<(() => void) | null>(null);
+  const goToNextRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     sentencesRef.current = sentences;
@@ -147,6 +175,34 @@ export const useDictationReading = (
     return result;
   }, []);
 
+  const preloadNextSentences = useCallback(async (
+    pool: Sentence[],
+    currentIdx: number,
+    gen: number
+  ): Promise<void> => {
+    if (!isActiveRef.current || playGenerationRef.current !== gen) return;
+
+    const preloadStart = currentIdx + 1;
+    const preloadEnd = Math.min(currentIdx + 1 + PRELOAD_LOOKAHEAD, pool.length);
+
+    for (let i = preloadStart; i < preloadEnd; i++) {
+      if (!isActiveRef.current || playGenerationRef.current !== gen) return;
+      if (preloadCacheRef.current.has(i)) continue;
+
+      const sentence = pool[i];
+      try {
+        const blob = await geminiService.fetchAudioBlob(sentence.english);
+        if (!isActiveRef.current || playGenerationRef.current !== gen) return;
+        if (blob) {
+          preloadCacheRef.current.set(i, blob);
+          console.log(`🔊 [默写朗读] 预加载完成: 第 ${i + 1} 句 "${sentence.english.slice(0, 30)}..."`);
+        }
+      } catch {
+        // preload failure is non-critical
+      }
+    }
+  }, []);
+
   const runReadingLoop = useCallback(async (gen: number, fromIndex?: number) => {
     while (isActiveRef.current && playGenerationRef.current === gen) {
       const pool = getReadingPool();
@@ -160,6 +216,8 @@ export const useDictationReading = (
         break;
       }
 
+      preloadCacheRef.current.clear();
+
       const startIndex = fromIndex !== undefined ? fromIndex : startIdxRef.current;
       fromIndex = undefined;
       startIdxRef.current = 0;
@@ -168,6 +226,15 @@ export const useDictationReading = (
         if (!isActiveRef.current || playGenerationRef.current !== gen) return;
 
         const sentence = pool[i];
+        saveReadingProgress(sentence.id, i);
+
+        mediaSessionService.updateMetadata(sentence.english);
+        mediaSessionService.setActionHandlers({
+          onPause: () => { geminiService.stop(); },
+          onStop: () => { geminiService.stop(); },
+          onPrevTrack: () => { goToPrevRef.current?.(); },
+          onNextTrack: () => { goToNextRef.current?.(); },
+        });
 
         setState(prev => ({
           ...prev,
@@ -176,19 +243,31 @@ export const useDictationReading = (
           errorMessage: null,
         }));
 
-        let audioBlob: Blob | null = null;
-        try {
-          audioBlob = await geminiService.fetchAudioBlob(sentence.english);
-        } catch {
-          audioBlob = null;
+        let audioBlob: Blob | null = preloadCacheRef.current.get(i) || null;
+
+        if (!audioBlob) {
+          try {
+            audioBlob = await geminiService.fetchAudioBlob(sentence.english);
+          } catch {
+            audioBlob = null;
+          }
+          if (!isActiveRef.current || playGenerationRef.current !== gen) return;
+        } else {
+          console.log(`🔊 [默写朗读] 使用预加载缓存: 第 ${i + 1} 句`);
+          preloadCacheRef.current.delete(i);
         }
-        if (!isActiveRef.current || playGenerationRef.current !== gen) return;
 
         let consecutiveErrors = 0;
         let completedRepeats = 0;
+        let preloadTriggered = false;
 
         while (completedRepeats < REPEATS_PER_SENTENCE) {
           if (!isActiveRef.current || playGenerationRef.current !== gen) return;
+
+          if (!preloadTriggered) {
+            preloadTriggered = true;
+            preloadNextSentences(pool, i, gen);
+          }
 
           const success = await playSentenceOnce(sentence, gen, audioBlob);
           if (!isActiveRef.current || playGenerationRef.current !== gen) return;
@@ -228,7 +307,7 @@ export const useDictationReading = (
 
       if (!isActiveRef.current || playGenerationRef.current !== gen) return;
     }
-  }, [getReadingPool, playSentenceOnce]);
+  }, [getReadingPool, playSentenceOnce, preloadNextSentences]);
 
   const startReading = useCallback(() => {
     const pool = getReadingPool();
@@ -241,36 +320,57 @@ export const useDictationReading = (
     }
 
     continuousAudioPlayer.activate();
+    mediaSessionService.startSilenceKeepAlive();
 
     isActiveRef.current = true;
     totalPlayedRef.current = 0;
 
     const gen = ++playGenerationRef.current;
 
+    let startIndex = 0;
+    const savedProgress = loadReadingProgress();
+    if (savedProgress && savedProgress.date === getLocalDateString()) {
+      const foundIndex = pool.findIndex(s => s.id === savedProgress.sentenceId);
+      if (foundIndex >= 0) {
+        startIndex = foundIndex;
+        totalPlayedRef.current = savedProgress.index;
+      }
+    }
+
     setState({
       isActive: true,
-      currentIndex: 0,
+      currentIndex: startIndex,
       currentRepeat: 0,
-      totalPlayed: 0,
+      totalPlayed: totalPlayedRef.current,
       errorMessage: null,
     });
 
-    runReadingLoop(gen, 0);
+    startIdxRef.current = startIndex;
+    runReadingLoop(gen, startIndex);
   }, [runReadingLoop, getReadingPool]);
 
   const stopReading = useCallback(() => {
+    if (isActiveRef.current) {
+      const pool = getReadingPool();
+      const currentIdx = state.currentIndex;
+      if (currentIdx >= 0 && currentIdx < pool.length) {
+        saveReadingProgress(pool[currentIdx].id, currentIdx);
+      }
+    }
+
     isActiveRef.current = false;
     playGenerationRef.current++;
     geminiService.stop();
     geminiService.stopSpeechSynthesisKeepAlive();
     continuousAudioPlayer.deactivate();
+    mediaSessionService.stopSilenceKeepAlive();
 
     setState(prev => ({
       ...prev,
       isActive: false,
       currentRepeat: 0,
     }));
-  }, []);
+  }, [state.currentIndex, getReadingPool]);
 
   const toggleReading = useCallback(() => {
     if (state.isActive) {
@@ -294,6 +394,7 @@ export const useDictationReading = (
     }
 
     const newIdx = state.currentIndex > 0 ? state.currentIndex - 1 : pool.length - 1;
+    saveReadingProgress(pool[newIdx].id, newIdx);
 
     setState(prev => ({
       ...prev,
@@ -323,6 +424,7 @@ export const useDictationReading = (
     }
 
     const newIdx = state.currentIndex < pool.length - 1 ? state.currentIndex + 1 : 0;
+    saveReadingProgress(pool[newIdx].id, newIdx);
 
     setState(prev => ({
       ...prev,
@@ -339,6 +441,11 @@ export const useDictationReading = (
   }, [state.isActive, state.currentIndex, getReadingPool, runReadingLoop]);
 
   useEffect(() => {
+    goToPrevRef.current = goToPrevSentence;
+    goToNextRef.current = goToNextSentence;
+  }, [goToPrevSentence, goToNextSentence]);
+
+  useEffect(() => {
     const currentGen = playGenerationRef.current;
     return () => {
       if (isActiveRef.current) {
@@ -347,6 +454,7 @@ export const useDictationReading = (
         geminiService.stop();
         geminiService.stopSpeechSynthesisKeepAlive();
         continuousAudioPlayer.deactivate();
+        mediaSessionService.stopSilenceKeepAlive();
       }
     };
   }, []);

@@ -4,6 +4,7 @@ import { geminiService } from '../services/geminiService';
 import { storageService } from '../services/storage';
 import { syncQueueService } from '../services/syncQueueService';
 import { unlockAudioEngine, isIOSAudio } from '../services/audioUnlockService';
+import { continuousAudioPlayer } from '../services/continuousAudioPlayer';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { getLocalDateString } from '../utils/date';
 import { LEARN_XP } from '../constants';
@@ -257,6 +258,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         if (window.speechSynthesis && window.speechSynthesis.paused) {
           window.speechSynthesis.resume();
         }
+        continuousAudioPlayer.resumeAudioFocus();
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);

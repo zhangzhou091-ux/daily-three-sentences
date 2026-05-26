@@ -14,6 +14,7 @@ const MAX_CONSECUTIVE_ERRORS = 3;
 const PLAY_TIMEOUT_MS = 8000;
 const SESSION_RESET_INTERVAL = 14 * 24 * 60 * 60 * 1000;
 const SESSION_RESET_KEY = 'd3s_random_listening_session_reset';
+const PRELOAD_LOOKAHEAD = 2;
 
 const WEIGHT_DIFFICULTY = 2.0;
 const WEIGHT_LOW_STABILITY = 1.5;
@@ -114,6 +115,9 @@ export const useRandomListening = (sentences: Sentence[]) => {
   const sessionCountsRef = useRef<Map<string, number>>(new Map());
   const historyRef = useRef<Sentence[]>([]);
   const historyIndexRef = useRef(-1);
+  const preloadCacheRef = useRef<Map<string, Blob>>(new Map());
+  const goToPrevRef = useRef<(() => void) | null>(null);
+  const goToNextRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     poolRef.current = sentences;
@@ -275,6 +279,14 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
       addToHistory(sentence);
 
+      mediaSessionService.updateMetadata(sentence.english);
+      mediaSessionService.setActionHandlers({
+        onPause: () => { geminiService.stop(); },
+        onStop: () => { geminiService.stop(); },
+        onPrevTrack: () => { goToPrevRef.current?.(); },
+        onNextTrack: () => { goToNextRef.current?.(); },
+      });
+
       setState(prev => ({
         ...prev,
         currentSentence: sentence,
@@ -282,22 +294,42 @@ export const useRandomListening = (sentences: Sentence[]) => {
         errorMessage: null,
       }));
 
-      let audioBlob: Blob | null = null;
-      try {
-        audioBlob = await geminiService.fetchAudioBlob(sentence.english);
-      } catch {
-        audioBlob = null;
+      let audioBlob: Blob | null = preloadCacheRef.current.get(sentence.id) || null;
+
+      if (audioBlob) {
+        preloadCacheRef.current.delete(sentence.id);
+        console.log(`🔊 [随机朗读] 使用预加载缓存: "${sentence.english.slice(0, 30)}..."`);
+      } else {
+        try {
+          audioBlob = await geminiService.fetchAudioBlob(sentence.english);
+        } catch {
+          audioBlob = null;
+        }
       }
       if (!isActiveRef.current || playGenerationRef.current !== gen) return;
 
       let consecutiveErrors = 0;
       let completedRepeats = 0;
+      let preloadTriggered = false;
 
       while (completedRepeats < REPEATS_PER_SENTENCE) {
         if (!isActiveRef.current || playGenerationRef.current !== gen) return;
 
         if (blacklistStorage.isBlacklisted(sentence.id)) {
           break;
+        }
+
+        if (!preloadTriggered) {
+          preloadTriggered = true;
+          const nextSentence = pickRandomSentence();
+          if (nextSentence && nextSentence.id !== sentence.id) {
+            geminiService.fetchAudioBlob(nextSentence.english).then(blob => {
+              if (blob && isActiveRef.current && playGenerationRef.current === gen) {
+                preloadCacheRef.current.set(nextSentence.id, blob);
+                console.log(`🔊 [随机朗读] 预加载完成: "${nextSentence.english.slice(0, 30)}..."`);
+              }
+            }).catch(() => {});
+          }
         }
 
         const success = await playSentenceOnce(sentence, gen, audioBlob);
@@ -353,6 +385,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
     }
 
     continuousAudioPlayer.activate();
+    mediaSessionService.startSilenceKeepAlive();
 
     isActiveRef.current = true;
     totalPlayedRef.current = 0;
@@ -387,6 +420,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
     geminiService.stop();
     geminiService.stopSpeechSynthesisKeepAlive();
     continuousAudioPlayer.deactivate();
+    mediaSessionService.stopSilenceKeepAlive();
 
     setState(prev => ({
       ...prev,
@@ -485,6 +519,11 @@ export const useRandomListening = (sentences: Sentence[]) => {
     }
   }, [runListeningLoop, pickRandomSentence, addToHistory]);
 
+  useEffect(() => {
+    goToPrevRef.current = goToPreviousSentence;
+    goToNextRef.current = goToNextSentence;
+  }, [goToPreviousSentence, goToNextSentence]);
+
   const toggleBlacklist = useCallback((sentenceId: string) => {
     const currentBlacklist = state.blacklist;
     let newBlacklist: Set<string>;
@@ -537,6 +576,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
         geminiService.stop();
         geminiService.stopSpeechSynthesisKeepAlive();
         continuousAudioPlayer.deactivate();
+        mediaSessionService.stopSilenceKeepAlive();
       }
     };
   }, []);

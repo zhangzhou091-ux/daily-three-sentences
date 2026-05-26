@@ -8,6 +8,7 @@ const isIOSAudio = (): boolean => {
 
 let silenceAudio: HTMLAudioElement | null = null;
 let isHolding = false;
+let isKeepAliveActive = false;
 let currentMetadataText: string | null = null;
 
 const ensureSilenceAudio = (): HTMLAudioElement => {
@@ -34,12 +35,40 @@ export const mediaSessionService = {
     isHolding = false;
   },
 
+  startSilenceKeepAlive(): void {
+    if (!isIOSAudio()) return;
+    if (isKeepAliveActive) return;
+    try {
+      const audio = ensureSilenceAudio();
+      audio.loop = true;
+      audio.play().catch(e => console.warn('无声音频播放失败，可能缺少用户交互', e));
+      isHolding = true;
+      isKeepAliveActive = true;
+      console.log('🔊 [MediaSession] 静音保活已启动');
+    } catch {}
+  },
+
+  stopSilenceKeepAlive(): void {
+    isKeepAliveActive = false;
+    if (silenceAudio) {
+      try {
+        silenceAudio.pause();
+      } catch {}
+    }
+    console.log('🔊 [MediaSession] 静音保活已停止');
+  },
+
+  isKeepAliveActive(): boolean {
+    return isKeepAliveActive;
+  },
+
   stopAll(): void {
     if (silenceAudio) {
       silenceAudio.pause();
       silenceAudio.currentTime = 0;
     }
     isHolding = false;
+    isKeepAliveActive = false;
     currentMetadataText = null;
     if ('mediaSession' in navigator) {
       navigator.mediaSession.metadata = null;
@@ -47,6 +76,8 @@ export const mediaSessionService = {
         navigator.mediaSession.setActionHandler('play', null);
         navigator.mediaSession.setActionHandler('pause', null);
         navigator.mediaSession.setActionHandler('stop', null);
+        navigator.mediaSession.setActionHandler('previoustrack', null);
+        navigator.mediaSession.setActionHandler('nexttrack', null);
       } catch {}
     }
   },
@@ -63,12 +94,14 @@ export const mediaSessionService = {
     } catch {}
   },
 
-  setActionHandlers(handlers: { onPlay?: () => void; onPause?: () => void; onStop?: () => void }): void {
+  setActionHandlers(handlers: { onPlay?: () => void; onPause?: () => void; onStop?: () => void; onPrevTrack?: () => void; onNextTrack?: () => void }): void {
     if (!('mediaSession' in navigator)) return;
     try {
       if (handlers.onPlay) navigator.mediaSession.setActionHandler('play', handlers.onPlay);
       if (handlers.onPause) navigator.mediaSession.setActionHandler('pause', handlers.onPause);
       if (handlers.onStop) navigator.mediaSession.setActionHandler('stop', handlers.onStop);
+      if (handlers.onPrevTrack) navigator.mediaSession.setActionHandler('previoustrack', handlers.onPrevTrack);
+      if (handlers.onNextTrack) navigator.mediaSession.setActionHandler('nexttrack', handlers.onNextTrack);
     } catch {}
   },
 

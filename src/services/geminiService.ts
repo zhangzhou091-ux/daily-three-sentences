@@ -2,8 +2,8 @@
  * Gemini Service with ElevenLabs + MiniMax + EdgeTTS + Web Speech API
  * 
  * TTS 调度策略：
- * 1. iOS 设备优先使用本地/云端缓存的 ElevenLabs & MiniMax 音频
- * 2. 优先使用 ElevenLabs API（最高质量，缓存后不消耗额度）
+ * 1. 全平台统一缓存预检：本地缓存 → 云端缓存，跨引擎查找，命中即播放（不消耗积分）
+ * 2. 缓存未命中时，按用户选择的引擎调用 API
  * 3. ElevenLabs 失败时降级到 MiniMax（直连 API，高质量多语言）
  * 4. MiniMax 不可用时降级到 EdgeTTS（微软免费语音，无需密钥）
  * 5. EdgeTTS 不可用时降级到浏览器原生语音（iOS 自动选择最佳音质）
@@ -13,6 +13,7 @@ import { elevenLabsService } from './elevenLabsService';
 import { edgeTtsService } from './edgeTtsService';
 import { storageService } from './storage';
 import { mediaSessionService } from './mediaSessionService';
+import { continuousAudioPlayer } from './continuousAudioPlayer';
 import { ttsCloudCacheService } from './ttsCloudCacheService';
 import { dbService } from './dbService';
 import { elevenLabsCacheService } from './elevenLabsCacheService';
@@ -44,6 +45,23 @@ let cachedAudioGeneration = 0;
 let speechSynthesisKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
 const playCachedBlob = async (blob: Blob, loop: boolean, rate: number): Promise<boolean> => {
+  if (continuousAudioPlayer.isActivated()) {
+    try {
+      if (loop) {
+        continuousAudioPlayer.getAudioElement().loop = true;
+        continuousAudioPlayer.getAudioElement().playbackRate = rate;
+        await continuousAudioPlayer.playBlob(blob);
+        return true;
+      }
+      continuousAudioPlayer.getAudioElement().loop = false;
+      continuousAudioPlayer.getAudioElement().playbackRate = rate;
+      await continuousAudioPlayer.playBlob(blob);
+      return true;
+    } catch (err) {
+      console.warn('🔊 [playCachedBlob] continuousAudioPlayer 播放失败，回退独立 Audio:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
   const gen = ++cachedAudioGeneration;
   const isCurrentGen = () => gen === cachedAudioGeneration;
 
@@ -464,7 +482,27 @@ const processQueue = async () => {
   }
 };
 
-const tryIOSCacheFirst = async (
+const syncToLocalCache = async (
+  text: string,
+  blob: Blob,
+  engine: 'elevenlabs' | 'minimax',
+  settings: ReturnType<typeof storageService.getSettings>
+): Promise<void> => {
+  const trimmedText = text.trim();
+  if (engine === 'elevenlabs') {
+    const elVoiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
+    const elModelId = 'eleven_multilingual_v2';
+    elevenLabsCacheService.put(trimmedText, elVoiceId, elModelId, blob).catch(() => {});
+  } else {
+    try {
+      const { minimaxTtsService } = await import('./minimaxTtsService');
+      const mmVoiceId = settings.minimaxVoiceId || minimaxTtsService.getDefaultVoiceId();
+      minimaxTtsService.setCachedAudio(trimmedText, mmVoiceId, blob).catch(() => {});
+    } catch { /* ignore */ }
+  }
+};
+
+const tryUnifiedCacheFirst = async (
   text: string,
   loop: boolean,
   rate: number,
@@ -476,62 +514,87 @@ const tryIOSCacheFirst = async (
   const elVoiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
   const elModelId = 'eleven_multilingual_v2';
 
+  // === 第一层：本地缓存精确匹配 ===
   try {
     const elCached = await elevenLabsCacheService.get(trimmedText, elVoiceId, elModelId);
     if (elCached) {
-      console.log(`🔊 [iOS缓存优先] ElevenLabs本地缓存命中 | [语音] ${elVoiceId}`);
+      console.log(`🔊 [统一缓存] ElevenLabs 本地精确命中 | [语音] ${elVoiceId}`);
       const played = await playCachedBlob(elCached, loop, rate);
       if (played) return { success: true };
-      console.warn('🔊 [iOS缓存优先] ElevenLabs本地缓存播放失败，继续尝试');
+      console.warn('🔊 [统一缓存] ElevenLabs 本地缓存播放失败，继续尝试');
     }
   } catch { /* ignore */ }
 
   try {
     const { minimaxTtsService } = await import('./minimaxTtsService');
     const mmVoiceId = settings.minimaxVoiceId || minimaxTtsService.getDefaultVoiceId();
-
     const mmCached = await minimaxTtsService.getCachedAudio(trimmedText, mmVoiceId);
     if (mmCached) {
-      console.log(`🔊 [iOS缓存优先] MiniMax本地缓存命中 | [语音] ${mmVoiceId}`);
+      console.log(`🔊 [统一缓存] MiniMax 本地精确命中 | [语音] ${mmVoiceId}`);
       const played = await playCachedBlob(mmCached, loop, rate);
       if (played) return { success: true };
-      console.warn('🔊 [iOS缓存优先] MiniMax本地缓存播放失败，继续尝试');
+      console.warn('🔊 [统一缓存] MiniMax 本地缓存播放失败，继续尝试');
+    }
+  } catch { /* ignore */ }
+
+  // === 第二层：本地缓存跨语音模糊匹配 ===
+  try {
+    const elFuzzy = await elevenLabsCacheService.findByText(trimmedText);
+    if (elFuzzy) {
+      console.log(`🔊 [统一缓存] ElevenLabs 本地模糊命中（跨语音）`);
+      const played = await playCachedBlob(elFuzzy, loop, rate);
+      if (played) return { success: true };
+      console.warn('🔊 [统一缓存] ElevenLabs 本地模糊缓存播放失败，继续尝试');
     }
   } catch { /* ignore */ }
 
   try {
+    const { minimaxTtsService } = await import('./minimaxTtsService');
+    const mmFuzzy = await minimaxTtsService.findByText(trimmedText);
+    if (mmFuzzy) {
+      console.log(`🔊 [统一缓存] MiniMax 本地模糊命中（跨语音）`);
+      const played = await playCachedBlob(mmFuzzy, loop, rate);
+      if (played) return { success: true };
+      console.warn('🔊 [统一缓存] MiniMax 本地模糊缓存播放失败，继续尝试');
+    }
+  } catch { /* ignore */ }
+
+  // === 第三层：云端缓存（通过本地句子记录的 ttsAudioPath） ===
+  try {
     const sentence = await dbService.findByEnglish(trimmedText);
     if (sentence) {
-      const cloudPaths: Array<{ path: string; engine: string }> = [];
-      if (sentence.ttsAudioPathEl) cloudPaths.push({ path: sentence.ttsAudioPathEl, engine: 'ElevenLabs' });
-      if (sentence.ttsAudioPathMm) cloudPaths.push({ path: sentence.ttsAudioPathMm, engine: 'MiniMax' });
+      const cloudPaths: Array<{ path: string; engine: 'elevenlabs' | 'minimax' }> = [];
+      if (sentence.ttsAudioPathEl) cloudPaths.push({ path: sentence.ttsAudioPathEl, engine: 'elevenlabs' });
+      if (sentence.ttsAudioPathMm) cloudPaths.push({ path: sentence.ttsAudioPathMm, engine: 'minimax' });
 
       for (const { path, engine } of cloudPaths) {
         try {
           const cloudBlob = await ttsCloudCacheService.downloadByPath(path);
           if (cloudBlob) {
-            console.log(`🔊 [iOS缓存优先] ${engine}云端缓存命中 | [路径] ${path}`);
-
-            if (engine === 'ElevenLabs') {
-              elevenLabsCacheService.put(trimmedText, elVoiceId, elModelId, cloudBlob).catch(() => {});
-            } else {
-              try {
-                const { minimaxTtsService } = await import('./minimaxTtsService');
-                const mmVoiceId = settings.minimaxVoiceId || minimaxTtsService.getDefaultVoiceId();
-                minimaxTtsService.setCachedAudio?.(trimmedText, mmVoiceId, cloudBlob).catch(() => {});
-              } catch { /* ignore */ }
-            }
-
+            console.log(`🔊 [统一缓存] 云端路径命中 | [${engine}] | [路径] ${path}`);
+            syncToLocalCache(trimmedText, cloudBlob, engine, settings);
             const played = await playCachedBlob(cloudBlob, loop, rate);
             if (played) return { success: true };
-            console.warn(`🔊 [iOS缓存优先] ${engine}云端缓存播放失败，继续尝试`);
+            console.warn(`🔊 [统一缓存] ${engine} 云端缓存播放失败，继续尝试`);
           }
         } catch { /* ignore */ }
       }
     }
   } catch { /* ignore */ }
 
-  console.log('🔊 [iOS缓存优先] 本地/云端缓存均未命中，回退到引擎选择');
+  // === 第四层：云端缓存跨引擎查找（兜底） ===
+  try {
+    const cloudResult = await ttsCloudCacheService.getAnyEngine(trimmedText);
+    if (cloudResult) {
+      console.log(`🔊 [统一缓存] 云端跨引擎命中 | [${cloudResult.engine}]`);
+      syncToLocalCache(trimmedText, cloudResult.blob, cloudResult.engine, settings);
+      const played = await playCachedBlob(cloudResult.blob, loop, rate);
+      if (played) return { success: true };
+      console.warn(`🔊 [统一缓存] 云端跨引擎缓存播放失败，继续尝试`);
+    }
+  } catch { /* ignore */ }
+
+  console.log('🔊 [统一缓存] 本地/云端缓存均未命中，进入引擎 API 路径');
   return null;
 };
 
@@ -548,10 +611,8 @@ export const geminiService = {
     const ttsEngine = settings.ttsEngine || 'auto';
     const speechRate = settings.speechRate ?? 1;
 
-    if (isIOS()) {
-      const iosResult = await tryIOSCacheFirst(text, loop, speechRate, settings);
-      if (iosResult) return iosResult;
-    }
+    const cacheResult = await tryUnifiedCacheFirst(text, loop, speechRate, settings);
+    if (cacheResult) return cacheResult;
 
     const tryElevenLabs = async (): Promise<SpeakResult> => {
       const apiKey = settings.elevenLabsApiKey;
@@ -777,6 +838,76 @@ export const geminiService = {
     if (!text || !text.trim()) return null;
 
     const settings = storageService.getSettings();
+    const trimmedText = text.trim();
+
+    // === 统一缓存预检 ===
+    try {
+      const elVoiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
+      const elModelId = 'eleven_multilingual_v2';
+      const elCached = await elevenLabsCacheService.get(trimmedText, elVoiceId, elModelId);
+      if (elCached) {
+        console.log(`🔊 [fetchBlob] ElevenLabs 本地精确命中`);
+        return elCached;
+      }
+    } catch { /* ignore */ }
+
+    try {
+      const { minimaxTtsService } = await import('./minimaxTtsService');
+      const mmVoiceId = settings.minimaxVoiceId || minimaxTtsService.getDefaultVoiceId();
+      const mmCached = await minimaxTtsService.getCachedAudio(trimmedText, mmVoiceId);
+      if (mmCached) {
+        console.log(`🔊 [fetchBlob] MiniMax 本地精确命中`);
+        return mmCached;
+      }
+    } catch { /* ignore */ }
+
+    try {
+      const elFuzzy = await elevenLabsCacheService.findByText(trimmedText);
+      if (elFuzzy) {
+        console.log(`🔊 [fetchBlob] ElevenLabs 本地模糊命中`);
+        return elFuzzy;
+      }
+    } catch { /* ignore */ }
+
+    try {
+      const { minimaxTtsService } = await import('./minimaxTtsService');
+      const mmFuzzy = await minimaxTtsService.findByText(trimmedText);
+      if (mmFuzzy) {
+        console.log(`🔊 [fetchBlob] MiniMax 本地模糊命中`);
+        return mmFuzzy;
+      }
+    } catch { /* ignore */ }
+
+    try {
+      const sentence = await dbService.findByEnglish(trimmedText);
+      if (sentence) {
+        const cloudPaths: Array<{ path: string; engine: 'elevenlabs' | 'minimax' }> = [];
+        if (sentence.ttsAudioPathEl) cloudPaths.push({ path: sentence.ttsAudioPathEl, engine: 'elevenlabs' });
+        if (sentence.ttsAudioPathMm) cloudPaths.push({ path: sentence.ttsAudioPathMm, engine: 'minimax' });
+
+        for (const { path, engine } of cloudPaths) {
+          try {
+            const cloudBlob = await ttsCloudCacheService.downloadByPath(path);
+            if (cloudBlob) {
+              console.log(`🔊 [fetchBlob] 云端路径命中 | [${engine}] | [路径] ${path}`);
+              syncToLocalCache(trimmedText, cloudBlob, engine, settings);
+              return cloudBlob;
+            }
+          } catch { /* ignore */ }
+        }
+      }
+    } catch { /* ignore */ }
+
+    try {
+      const cloudResult = await ttsCloudCacheService.getAnyEngine(trimmedText);
+      if (cloudResult) {
+        console.log(`🔊 [fetchBlob] 云端跨引擎命中 | [${cloudResult.engine}]`);
+        syncToLocalCache(trimmedText, cloudResult.blob, cloudResult.engine, settings);
+        return cloudResult.blob;
+      }
+    } catch { /* ignore */ }
+
+    // === 缓存未命中，走引擎 API ===
     const ttsEngine = settings.ttsEngine || 'auto';
 
     const tryElevenLabsBlob = async (): Promise<Blob | null> => {
@@ -818,27 +949,6 @@ export const geminiService = {
         return null;
       }
     };
-
-    if (isIOS()) {
-      try {
-        const sentence = await dbService.findByEnglish(text.trim());
-        if (sentence) {
-          const cloudPaths: Array<{ path: string; engine: string }> = [];
-          if (sentence.ttsAudioPathEl) cloudPaths.push({ path: sentence.ttsAudioPathEl, engine: 'ElevenLabs' });
-          if (sentence.ttsAudioPathMm) cloudPaths.push({ path: sentence.ttsAudioPathMm, engine: 'MiniMax' });
-
-          for (const { path } of cloudPaths) {
-            try {
-              const cloudBlob = await ttsCloudCacheService.downloadByPath(path);
-              if (cloudBlob) {
-                console.log(`🔊 [fetchBlob] iOS 云端缓存命中 | [路径] ${path}`);
-                return cloudBlob;
-              }
-            } catch { /* ignore */ }
-          }
-        }
-      } catch { /* ignore */ }
-    }
 
     if (ttsEngine === 'auto') {
       const elBlob = await tryElevenLabsBlob();

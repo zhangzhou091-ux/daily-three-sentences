@@ -554,6 +554,45 @@ export const ttsCloudCacheService = {
     return activeUploads;
   },
 
+  async getAnyEngine(
+    text: string,
+    preferredEngine?: TTSEngineType
+  ): Promise<{ blob: Blob; engine: TTSEngineType } | null> {
+    if (!isSupabaseReady()) {
+      return null;
+    }
+
+    try {
+      const sentence = await dbService.findByEnglish(text.trim());
+      if (!sentence) {
+        return null;
+      }
+
+      const paths: Array<{ path: string; engine: TTSEngineType }> = [];
+
+      if (preferredEngine === 'elevenlabs') {
+        if (sentence.ttsAudioPathEl) paths.push({ path: sentence.ttsAudioPathEl, engine: 'elevenlabs' });
+        if (sentence.ttsAudioPathMm) paths.push({ path: sentence.ttsAudioPathMm, engine: 'minimax' });
+      } else if (preferredEngine === 'minimax') {
+        if (sentence.ttsAudioPathMm) paths.push({ path: sentence.ttsAudioPathMm, engine: 'minimax' });
+        if (sentence.ttsAudioPathEl) paths.push({ path: sentence.ttsAudioPathEl, engine: 'elevenlabs' });
+      } else {
+        if (sentence.ttsAudioPathEl) paths.push({ path: sentence.ttsAudioPathEl, engine: 'elevenlabs' });
+        if (sentence.ttsAudioPathMm) paths.push({ path: sentence.ttsAudioPathMm, engine: 'minimax' });
+      }
+
+      for (const { path, engine } of paths) {
+        const blob = await this.downloadByPath(path);
+        if (blob) {
+          console.log(`🔊 [CloudCache] 跨引擎命中 | [${engine}] | [路径] ${path}`);
+          return { blob, engine };
+        }
+      }
+    } catch { /* ignore */ }
+
+    return null;
+  },
+
   formatSize,
 };
 

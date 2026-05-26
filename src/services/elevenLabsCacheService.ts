@@ -9,10 +9,11 @@
  * - 缓存键：text + voiceId + modelId 的哈希值（djb2 算法，低碰撞率）
  * - 存储格式：ArrayBuffer（iOS Safari 兼容，避免 Blob 存储缺陷）
  * - 每条缓存记录包含：音频 ArrayBuffer、文本摘要、创建时间、大小、命中次数
- * - TTL 过期：30 天未命中自动清理
+ * - 无过期时间：缓存永不过期，仅靠 LRU 容量淘汰管理
  * - 容量上限：100MB，超出时按 LRU 淘汰最旧记录
  * - 写入后验证：确保数据完整存储
  * - 支持缓存统计（条数、总大小）和手动清理
+ * - 支持按文本内容跨语音模糊查找（findByText）
  *
  * iOS Safari 兼容性说明：
  * - iOS Safari < 15.2 存在 Blob 存储到 IndexedDB 的已知 bug
@@ -24,7 +25,6 @@ const DB_NAME = 'D3S_ElevenLabs_Cache';
 const DB_VERSION = 3;
 const STORE_NAME = 'audio_cache';
 const MAX_CACHE_SIZE = 100 * 1024 * 1024;
-const CACHE_TTL = 30 * 24 * 60 * 60 * 1000;
 
 interface CacheRecord {
   key: string;
@@ -175,13 +175,6 @@ export const elevenLabsCacheService = {
             return;
           }
 
-          if (Date.now() - record.lastHitAt > CACHE_TTL) {
-            store.delete(key);
-            console.log(`🔊 [ElevenLabs缓存] 过期清理 | [key] ${key}`);
-            resolve(null);
-            return;
-          }
-
           record.hitCount = (record.hitCount || 0) + 1;
           record.lastHitAt = Date.now();
           try {
@@ -306,35 +299,7 @@ export const elevenLabsCacheService = {
   },
 
   async getStale(text: string, voiceId: string, modelId: string): Promise<Blob | null> {
-    try {
-      const db = await getDB();
-      const key = generateCacheKey(text, voiceId, modelId);
-
-      return new Promise((resolve) => {
-        const tx = db.transaction([STORE_NAME], 'readonly');
-        const store = tx.objectStore(STORE_NAME);
-        const request = store.get(key);
-
-        request.onsuccess = () => {
-          const record = request.result as CacheRecord | undefined;
-          if (!record || !record.audioData || !(record.audioData instanceof ArrayBuffer) || record.audioData.byteLength === 0) {
-            resolve(null);
-            return;
-          }
-
-          const blob = arrayBufferToBlob(record.audioData, record.audioType || 'audio/mpeg');
-          const ageDays = Math.round((Date.now() - record.createdAt) / (24 * 60 * 60 * 1000));
-          console.log(`🔊 [ElevenLabs缓存] 陈旧缓存回退 | [key] ${key} | [大小] ${this.formatSize(record.size)} | [已缓存] ${ageDays}天`);
-          resolve(blob);
-        };
-
-        request.onerror = () => {
-          resolve(null);
-        };
-      });
-    } catch {
-      return null;
-    }
+    return this.get(text, voiceId, modelId);
   },
 
   async findByVoice(voiceId: string, modelId: string): Promise<Blob | null> {
@@ -443,10 +408,10 @@ export const elevenLabsCacheService = {
     }
   },
 
-  async cleanExpired(): Promise<number> {
+  async findByText(text: string): Promise<Blob | null> {
     try {
       const db = await getDB();
-      const now = Date.now();
+      const textPreview = text.trim().slice(0, 80);
 
       return new Promise((resolve) => {
         const tx = db.transaction([STORE_NAME], 'readwrite');
@@ -455,22 +420,29 @@ export const elevenLabsCacheService = {
 
         getAllReq.onsuccess = () => {
           const records = getAllReq.result as CacheRecord[];
-          let deleted = 0;
-          for (const r of records) {
-            if (now - (r.lastHitAt || r.createdAt) > CACHE_TTL) {
-              store.delete(r.key);
-              deleted++;
-            }
+          const matching = records
+            .filter(r => r.textPreview === textPreview && r.audioData && r.audioData instanceof ArrayBuffer && r.audioData.byteLength > 0)
+            .sort((a, b) => (b.lastHitAt || b.createdAt) - (a.lastHitAt || a.createdAt));
+
+          if (matching.length === 0) {
+            resolve(null);
+            return;
           }
-          if (deleted > 0) {
-            console.log(`🔊 [ElevenLabs缓存] 清理 ${deleted} 条过期记录`);
-          }
-          resolve(deleted);
+
+          const record = matching[0];
+          record.hitCount = (record.hitCount || 0) + 1;
+          record.lastHitAt = Date.now();
+          try { store.put(record); } catch { /* ignore */ }
+
+          const blob = arrayBufferToBlob(record.audioData, record.audioType || 'audio/mpeg');
+          console.log(`🔊 [ElevenLabs缓存] 文本模糊命中 | [voiceId] ${record.voiceId} | [modelId] ${record.modelId} | [命中] ${record.hitCount}次`);
+          resolve(blob);
         };
-        getAllReq.onerror = () => resolve(0);
+
+        getAllReq.onerror = () => resolve(null);
       });
     } catch {
-      return 0;
+      return null;
     }
   },
 
