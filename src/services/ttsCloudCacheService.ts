@@ -406,6 +406,45 @@ export const ttsCloudCacheService = {
     }
   },
 
+  async deleteByPath(storagePath: string): Promise<boolean> {
+    if (!isSupabaseReady()) {
+      return false;
+    }
+
+    const client = supabaseService.client!;
+
+    try {
+      const { error } = await client.storage
+        .from(BUCKET_NAME)
+        .remove([storagePath]);
+
+      if (error) {
+        console.warn(`🔊 [CloudCache] 路径删除失败:`, error.message);
+        return false;
+      }
+
+      console.log(`🔊 [CloudCache] 路径删除成功 | [path] ${storagePath}`);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`🔊 [CloudCache] 路径删除异常:`, msg);
+      return false;
+    }
+  },
+
+  async deleteBySentence(sentence: { ttsAudioPathEl?: string; ttsAudioPathMm?: string }): Promise<{ el: boolean; mm: boolean }> {
+    const result = { el: false, mm: false };
+
+    if (sentence.ttsAudioPathEl) {
+      result.el = await this.deleteByPath(sentence.ttsAudioPathEl);
+    }
+    if (sentence.ttsAudioPathMm) {
+      result.mm = await this.deleteByPath(sentence.ttsAudioPathMm);
+    }
+
+    return result;
+  },
+
   async listFiles(engine?: TTSEngineType): Promise<Array<{ name: string; size: number; createdAt: string }>> {
     if (!isSupabaseReady()) {
       return [];

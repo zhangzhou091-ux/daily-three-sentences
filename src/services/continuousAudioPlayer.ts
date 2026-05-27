@@ -12,6 +12,8 @@ const IOS_PLAY_RETRIES = 3;
 const IOS_PLAY_RETRY_DELAY = 200;
 const PLAY_TIMEOUT = 120000;
 const AUDIO_GAIN = 1.5;
+const PAUSE_RECOVERY_RETRIES = 20;
+const PAUSE_RECOVERY_DELAY_MS = 500;
 
 class ContinuousAudioPlayer {
   private audio: HTMLAudioElement;
@@ -22,6 +24,7 @@ class ContinuousAudioPlayer {
   private generation: number = 0;
   private currentBlobUrl: string | null = null;
   private initialized: boolean = false;
+  private recoveryRetryCount: number = 0;
 
   constructor() {
     this.audio = new Audio();
@@ -55,6 +58,7 @@ class ContinuousAudioPlayer {
 
     this.active = true;
     this.generation++;
+    this.recoveryRetryCount = 0;
 
     this.setupMediaSession();
 
@@ -69,6 +73,7 @@ class ContinuousAudioPlayer {
           handleInterruption();
         }
       });
+      this.audio.onpause = this.handleAudioPause;
     }
 
     console.log('🔊 [连续播放器] 已激活');
@@ -78,14 +83,15 @@ class ContinuousAudioPlayer {
   deactivate(): void {
     this.generation++;
     this.active = false;
+    this.recoveryRetryCount = 0;
 
     try {
-      this.audio.pause();
+      this.audio.onpause = null;
       this.audio.onended = null;
       this.audio.onerror = null;
       this.audio.oncanplay = null;
       this.audio.onloadeddata = null;
-      this.audio.onpause = null;
+      this.audio.pause();
       this.audio.removeAttribute('src');
       this.audio.load();
     } catch { /* ignore */ }
@@ -216,8 +222,10 @@ class ContinuousAudioPlayer {
   }
 
   stop(): void {
+    this.recoveryRetryCount = 0;
     this.generation++;
     try {
+      this.audio.onpause = null;
       this.audio.pause();
       this.audio.removeAttribute('src');
       this.audio.load();
@@ -236,6 +244,29 @@ class ContinuousAudioPlayer {
       this.audio.play().catch(() => {});
     }
   }
+
+  private handleAudioPause = (): void => {
+    if (!this.active) return;
+    if (!this.audio.src) return;
+
+    if (this.recoveryRetryCount >= PAUSE_RECOVERY_RETRIES) {
+      console.warn('🔊 [连续播放器] 恢复重试次数耗尽，放弃当前播放');
+      return;
+    }
+
+    this.recoveryRetryCount++;
+    console.log(`🔊 [连续播放器] 句子音频被中断，第 ${this.recoveryRetryCount}/${PAUSE_RECOVERY_RETRIES} 次尝试恢复...`);
+
+    setTimeout(() => {
+      if (!this.active || !this.audio.src) return;
+      this.audio.play().then(() => {
+        this.recoveryRetryCount = 0;
+        console.log('🔊 [连续播放器] 句子音频已恢复');
+      }).catch((e) => {
+        console.warn('🔊 [连续播放器] 句子恢复失败:', e);
+      });
+    }, PAUSE_RECOVERY_DELAY_MS);
+  };
 
   private setupMediaSession(): void {
     mediaSessionService.setActionHandlers({

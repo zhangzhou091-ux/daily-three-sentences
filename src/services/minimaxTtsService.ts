@@ -915,6 +915,37 @@ export const minimaxTtsService = {
     }
   },
 
+  async deleteCacheByText(text: string): Promise<number> {
+    try {
+      const db = await getCacheDB();
+      const textPreview = text.trim().slice(0, 80);
+
+      return new Promise((resolve) => {
+        const tx = db.transaction([CACHE_STORE_NAME], 'readwrite');
+        const store = tx.objectStore(CACHE_STORE_NAME);
+        const getAllReq = store.getAll();
+
+        getAllReq.onsuccess = () => {
+          const records = getAllReq.result as Array<{ key: string; textPreview: string }>;
+          const toDelete = records.filter(r => r.textPreview === textPreview);
+
+          for (const r of toDelete) {
+            store.delete(r.key);
+          }
+
+          if (toDelete.length > 0) {
+            console.log(`🔊 [MiniMax缓存] 按文本删除 | [text] ${textPreview} | [条数] ${toDelete.length}`);
+          }
+          resolve(toDelete.length);
+        };
+
+        getAllReq.onerror = () => resolve(0);
+      });
+    } catch {
+      return 0;
+    }
+  },
+
   formatSize,
 
   getCachedAudio,

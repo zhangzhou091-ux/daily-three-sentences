@@ -137,6 +137,48 @@ export const storageSentenceService = {
     }
   },
 
+  updateSentence: async (id: string, updates: Partial<Sentence>): Promise<Sentence | null> => {
+    const all = await dbService.getAll();
+    const sentence = all.find(s => s.id === id);
+    if (!sentence) return null;
+
+    const updated: Sentence = {
+      ...sentence,
+      ...updates,
+      id: sentence.id,
+      updatedAt: Date.now(),
+    };
+
+    await dbService.put(updated);
+
+    if (supabaseService.isReady) {
+      supabaseService.syncSentences([updated]);
+    }
+
+    return updated;
+  },
+
+  clearSentenceAudio: async (id: string): Promise<Sentence | null> => {
+    const all = await dbService.getAll();
+    const sentence = all.find(s => s.id === id);
+    if (!sentence) return null;
+
+    const updated: Sentence = {
+      ...sentence,
+      ttsAudioPathEl: undefined,
+      ttsAudioPathMm: undefined,
+      updatedAt: Date.now(),
+    };
+
+    await dbService.put(updated);
+
+    if (supabaseService.isReady) {
+      supabaseService.syncSentences([updated]);
+    }
+
+    return updated;
+  },
+
   /**
    * 清除词汇
    */

@@ -408,6 +408,37 @@ export const elevenLabsCacheService = {
     }
   },
 
+  async deleteByText(text: string): Promise<number> {
+    try {
+      const db = await getDB();
+      const textPreview = text.trim().slice(0, 80);
+
+      return new Promise((resolve) => {
+        const tx = db.transaction([STORE_NAME], 'readwrite');
+        const store = tx.objectStore(STORE_NAME);
+        const getAllReq = store.getAll();
+
+        getAllReq.onsuccess = () => {
+          const records = getAllReq.result as CacheRecord[];
+          const toDelete = records.filter(r => r.textPreview === textPreview);
+
+          for (const r of toDelete) {
+            store.delete(r.key);
+          }
+
+          if (toDelete.length > 0) {
+            console.log(`🔊 [ElevenLabs缓存] 按文本删除 | [text] ${textPreview} | [条数] ${toDelete.length}`);
+          }
+          resolve(toDelete.length);
+        };
+
+        getAllReq.onerror = () => resolve(0);
+      });
+    } catch {
+      return 0;
+    }
+  },
+
   async findByText(text: string): Promise<Blob | null> {
     try {
       const db = await getDB();

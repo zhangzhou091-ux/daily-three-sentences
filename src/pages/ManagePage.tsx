@@ -1,6 +1,8 @@
 import React, { useState, useMemo, useRef, useDeferredValue, useCallback, useEffect } from 'react';
 import { Sentence } from '../types';
 import { storageService } from '../services/storage';
+import { sentenceAudioService } from '../services/sentenceAudioService';
+import { elevenLabsService } from '../services/elevenLabsService';
 import { generateUUID } from '../utils/uuid';
 import { getSafeTags } from '../utils/format';
 import { getLocalDateString } from '../utils/date';
@@ -216,6 +218,87 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
     await storageService.deleteSentence(id);
     await onUpdate();
   }, [onUpdate]);
+
+  const deleteSentenceAudio = useCallback(async (sentence: Sentence) => {
+    try {
+      await sentenceAudioService.deleteSentenceAudio(sentence);
+      showToast('语音缓存已清除', 'success');
+      await onUpdate();
+    } catch {
+      showToast('清除语音缓存失败', 'error');
+    }
+  }, [onUpdate, showToast]);
+
+  const generateSentenceAudio = useCallback(async (sentence: Sentence, engine: 'elevenlabs' | 'minimax') => {
+    const settings = storageService.getSettings();
+    const text = sentence.english.trim();
+
+    try {
+      let blob: Blob | null = null;
+
+      if (engine === 'elevenlabs') {
+        const apiKey = settings.elevenLabsApiKey;
+        if (!apiKey || !apiKey.trim()) {
+          showToast('请先在设置中配置 ElevenLabs API Key', 'error');
+          return;
+        }
+        const voiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
+        blob = await elevenLabsService.fetchAudioBlob(text, apiKey, voiceId);
+      } else {
+        const { minimaxTtsService } = await import('../services/minimaxTtsService');
+        const apiKey = settings.minimaxApiKey || '';
+        if (!apiKey.trim()) {
+          showToast('请先在设置中配置 MiniMax API Key', 'error');
+          return;
+        }
+        const voiceId = settings.minimaxVoiceId || minimaxTtsService.getDefaultVoiceId();
+        blob = await minimaxTtsService.fetchAudioBlob(text, apiKey, voiceId);
+      }
+
+      if (blob) {
+        showToast('🔊 语音生成成功', 'success');
+        await onUpdate();
+      } else {
+        showToast('语音生成失败，请检查 API Key 和网络连接', 'error');
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '未知错误';
+      showToast(`语音生成失败: ${msg}`, 'error');
+    }
+  }, [onUpdate, showToast]);
+
+  const editSentence = useCallback(async (sentence: Sentence, english: string, chinese: string, tags: string[]) => {
+    try {
+      const allSentences = await storageService.getSentences();
+      const duplicate = allSentences.find(
+        s => s.id !== sentence.id &&
+        s.english.trim().toLowerCase() === english.toLowerCase()
+      );
+      if (duplicate) {
+        showToast('该英文句子已存在', 'error');
+        return;
+      }
+
+      const enChanged = sentence.english.trim().toLowerCase() !== english.toLowerCase();
+      if (enChanged) {
+        try {
+          await sentenceAudioService.deleteSentenceAudio(sentence);
+        } catch { /* 清缓存失败不影响编辑 */ }
+      }
+
+      await storageService.updateSentence(sentence.id, {
+        english,
+        chinese,
+        tags: tags.length > 0 ? tags : undefined,
+      });
+
+      showToast('✅ 修改已保存', 'success');
+      await onUpdate();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '未知错误';
+      showToast(`修改失败: ${msg}`, 'error');
+    }
+  }, [onUpdate, showToast]);
 
   const handleExcelImport = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -893,7 +976,9 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
         {/* 使用提取后的句子列表组件 */}
         <SentenceList 
           sentences={filteredSentences} 
-          onDelete={deleteSentence} 
+          onDeleteAudio={deleteSentenceAudio}
+          onGenerateAudio={generateSentenceAudio}
+          onEdit={editSentence}
         />
       </div>
 

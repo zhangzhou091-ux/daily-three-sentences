@@ -2,30 +2,92 @@ import React, { memo, useState, useEffect } from 'react';
 import { Sentence } from '../../types';
 import { getSafeTags } from '../../utils/format';
 
+type TTSEngine = 'elevenlabs' | 'minimax';
+
 interface SentenceListProps {
   sentences: Sentence[];
-  onDelete: (id: string) => void;
+  onDeleteAudio?: (sentence: Sentence) => void;
+  onGenerateAudio?: (sentence: Sentence, engine: TTSEngine) => void;
+  onEdit?: (sentence: Sentence, english: string, chinese: string, tags: string[]) => void;
 }
 
-export const SentenceList: React.FC<SentenceListProps> = memo(({ sentences, onDelete }) => {
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+const hasAudioCache = (s: Sentence): boolean => {
+  return !!(s.ttsAudioPathEl || s.ttsAudioPathMm);
+};
+
+const getAudioEngineLabel = (s: Sentence): string | null => {
+  const parts: string[] = [];
+  if (s.ttsAudioPathEl) parts.push('ElevenLabs');
+  if (s.ttsAudioPathMm) parts.push('MiniMax');
+  return parts.length > 0 ? parts.join(' / ') : null;
+};
+
+export const SentenceList: React.FC<SentenceListProps> = memo(({ sentences, onDeleteAudio, onGenerateAudio, onEdit }) => {
+  const [audioDeleteConfirmId, setAudioDeleteConfirmId] = useState<string | null>(null);
+  const [generatingAudioId, setGeneratingAudioId] = useState<string | null>(null);
+  const [generatingEngine, setGeneratingEngine] = useState<TTSEngine | null>(null);
+  const [enginePopupId, setEnginePopupId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editEn, setEditEn] = useState('');
+  const [editZh, setEditZh] = useState('');
+  const [editTags, setEditTags] = useState('');
 
   useEffect(() => {
-    if (deleteConfirmId) {
-      const timer = setTimeout(() => {
-        setDeleteConfirmId(null);
-      }, 3000);
+    if (audioDeleteConfirmId) {
+      const timer = setTimeout(() => setAudioDeleteConfirmId(null), 3000);
       return () => clearTimeout(timer);
     }
-  }, [deleteConfirmId]);
+  }, [audioDeleteConfirmId]);
 
-  const handleDeleteClick = (id: string) => {
-    if (deleteConfirmId === id) {
-      onDelete(id);
-      setDeleteConfirmId(null);
-    } else {
-      setDeleteConfirmId(id);
+  useEffect(() => {
+    if (enginePopupId) {
+      const timer = setTimeout(() => setEnginePopupId(null), 5000);
+      return () => clearTimeout(timer);
     }
+  }, [enginePopupId]);
+
+  const handleAudioDeleteClick = (s: Sentence) => {
+    if (audioDeleteConfirmId === s.id) {
+      onDeleteAudio?.(s);
+      setAudioDeleteConfirmId(null);
+    } else {
+      setAudioDeleteConfirmId(s.id);
+    }
+  };
+
+  const handleGenerateClick = (engine: TTSEngine, s: Sentence) => {
+    setEnginePopupId(null);
+    setGeneratingAudioId(s.id);
+    setGeneratingEngine(engine);
+    onGenerateAudio?.(s, engine);
+  };
+
+  const toggleEnginePopup = (id: string) => {
+    setEnginePopupId(prev => prev === id ? null : id);
+  };
+
+  const startEditing = (s: Sentence) => {
+    setEditingId(s.id);
+    setEditEn(s.english);
+    setEditZh(s.chinese);
+    setEditTags((s.tags || []).join(', '));
+    setEnginePopupId(null);
+    setAudioDeleteConfirmId(null);
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditEn('');
+    setEditZh('');
+    setEditTags('');
+  };
+
+  const handleSaveEdit = (s: Sentence) => {
+    const trimmedEn = editEn.trim();
+    if (!trimmedEn) return;
+    const tags = getSafeTags(editTags);
+    onEdit?.(s, trimmedEn, editZh.trim(), tags);
+    setEditingId(null);
   };
 
   if (sentences.length === 0) {
@@ -36,30 +98,161 @@ export const SentenceList: React.FC<SentenceListProps> = memo(({ sentences, onDe
 
   return (
     <div className="space-y-4 pb-20">
-      {sentences.map(s => (
+      {sentences.map(s => {
+        const isEditing = editingId === s.id;
+        const enChanged = isEditing && editEn.trim() !== s.english;
+
+        return (
         <div key={s.id} className="apple-card p-8 group relative hover:border-blue-100/50 transition-all">
+          {isEditing ? (
+            <>
+              <div className="space-y-3 mb-4">
+                <textarea
+                  value={editEn}
+                  onChange={e => setEditEn(e.target.value)}
+                  className="w-full p-3 border border-blue-200 rounded-xl text-lg font-black text-gray-900 leading-tight resize-none focus:outline-none focus:border-blue-400 bg-white"
+                  rows={2}
+                  placeholder="英文句子"
+                />
+                <textarea
+                  value={editZh}
+                  onChange={e => setEditZh(e.target.value)}
+                  className="w-full p-3 border border-gray-200 rounded-xl text-sm text-gray-600 font-medium resize-none focus:outline-none focus:border-blue-400 bg-white"
+                  rows={2}
+                  placeholder="中文翻译"
+                />
+                <input
+                  value={editTags}
+                  onChange={e => setEditTags(e.target.value)}
+                  className="w-full p-2 border border-gray-200 rounded-xl text-[10px] font-bold text-gray-600 focus:outline-none focus:border-blue-400 bg-white"
+                  placeholder="标签（逗号分隔）"
+                />
+              </div>
+              {enChanged && (
+                <div className="mb-4 px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl">
+                  <span className="text-[10px] font-bold text-amber-700">⚠️ 英文有变更，语音缓存将被清除</span>
+                </div>
+              )}
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => handleSaveEdit(s)}
+                  disabled={!editEn.trim()}
+                  className="px-4 py-2 bg-blue-500 text-white rounded-xl text-xs font-black hover:bg-blue-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                >
+                  ✅ 保存
+                </button>
+                <button
+                  onClick={cancelEditing}
+                  className="px-4 py-2 bg-gray-100 text-gray-600 rounded-xl text-xs font-bold hover:bg-gray-200 transition-colors"
+                >
+                  ❌ 取消
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
           <div className="flex justify-between items-start mb-4">
             <div className="flex-1 pr-10">
               <p className="text-lg font-black text-gray-900 leading-tight mb-2">{s.english}</p>
               <p className="text-sm text-gray-600 font-medium italic">{s.chinese}</p>
             </div>
-            <button 
-              onClick={() => handleDeleteClick(s.id)} 
-              className={`w-8 h-8 flex items-center justify-center transition-all ${
-                deleteConfirmId === s.id 
-                  ? 'text-red-500 opacity-100' 
-                  : 'text-gray-600 opacity-0 group-hover:opacity-100'
-              }`}
-              title={deleteConfirmId === s.id ? '再次点击确认删除' : '删除'}
-            >
-              {deleteConfirmId === s.id ? '确认?' : '✕'}
-            </button>
+            {onEdit && (
+              <button
+                onClick={() => startEditing(s)}
+                className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-blue-500 transition-all"
+                title="编辑句子"
+              >
+                ✏️
+              </button>
+            )}
           </div>
-          <div className="flex flex-wrap gap-2 mb-6">
+          <div className="flex flex-wrap gap-2 mb-4">
             {getSafeTags(s.tags).map(tag => (
               <span key={tag} className="px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-[10px] font-black uppercase tracking-widest">{tag}</span>
             ))}
           </div>
+          {onDeleteAudio && (
+            <div className="flex items-center justify-between mb-4 px-3 py-2 bg-gray-50 rounded-xl">
+              <div className="flex items-center gap-2">
+                {generatingAudioId === s.id ? (
+                  <>
+                    <span className="text-[10px]">⏳</span>
+                    <span className="text-[10px] font-bold text-amber-700">
+                      {generatingEngine === 'elevenlabs' ? 'ElevenLabs' : 'MiniMax'} 生成中...
+                    </span>
+                  </>
+                ) : hasAudioCache(s) ? (
+                  <>
+                    <span className="text-[10px] text-green-600">🔊</span>
+                    <span className="text-[10px] font-bold text-green-700">
+                      {getAudioEngineLabel(s)}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-[10px] text-gray-400">🔇</span>
+                    <span className="text-[10px] text-gray-400">无语音缓存</span>
+                  </>
+                )}
+              </div>
+              <div className="flex items-center gap-2 relative">
+                {generatingAudioId === s.id ? null : onGenerateAudio ? (
+                  <>
+                    {hasAudioCache(s) && (
+                      <button
+                        onClick={() => handleAudioDeleteClick(s)}
+                        className={`text-[10px] font-bold transition-colors ${
+                          audioDeleteConfirmId === s.id
+                            ? 'text-red-500'
+                            : 'text-gray-500 hover:text-red-500'
+                        }`}
+                        title={audioDeleteConfirmId === s.id ? '再次点击确认清除' : '清除语音缓存'}
+                      >
+                        {audioDeleteConfirmId === s.id ? '⚠️ 确认清除?' : '🗑️ 清除语音'}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => toggleEnginePopup(s.id)}
+                      className="text-[10px] font-bold text-gray-500 hover:text-blue-600 transition-colors"
+                      title={hasAudioCache(s) ? '重新生成语音' : '生成语音'}
+                    >
+                      {hasAudioCache(s) ? '🔄 重新生成' : '🔊 生成语音'}
+                    </button>
+                    {enginePopupId === s.id && (
+                      <div className="absolute top-full right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 py-1 min-w-[110px]">
+                        <button
+                          onClick={() => handleGenerateClick('elevenlabs', s)}
+                          className="w-full text-left px-3 py-1.5 text-[10px] font-bold text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors"
+                        >
+                          🎙️ ElevenLabs
+                        </button>
+                        <button
+                          onClick={() => handleGenerateClick('minimax', s)}
+                          className="w-full text-left px-3 py-1.5 text-[10px] font-bold text-gray-700 hover:bg-purple-50 hover:text-purple-700 transition-colors"
+                        >
+                          🎙️ MiniMax
+                        </button>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  hasAudioCache(s) && (
+                    <button
+                      onClick={() => handleAudioDeleteClick(s)}
+                      className={`text-[10px] font-bold transition-colors ${
+                        audioDeleteConfirmId === s.id
+                          ? 'text-red-500'
+                          : 'text-gray-500 hover:text-red-500'
+                      }`}
+                      title={audioDeleteConfirmId === s.id ? '再次点击确认清除' : '清除语音缓存'}
+                    >
+                      {audioDeleteConfirmId === s.id ? '⚠️ 确认清除?' : '🗑️ 清除语音'}
+                    </button>
+                  )
+                )}
+              </div>
+            </div>
+          )}
           <div className="flex items-center justify-between pt-6 border-t border-black/[0.03]">
             <div className="flex gap-1">
               {[...Array(10)].map((_, i) => (
@@ -70,8 +263,10 @@ export const SentenceList: React.FC<SentenceListProps> = memo(({ sentences, onDe
               {s.intervalIndex >= 9 ? 'MASTERED' : `STAGE ${s.intervalIndex}`}
             </span>
           </div>
+            </>
+          )}
         </div>
-      ))}
+      )})}
     </div>
   );
 });
