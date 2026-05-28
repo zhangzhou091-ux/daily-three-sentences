@@ -286,9 +286,21 @@ class ContinuousAudioPlayer {
 
   private connectGain(): void {
     if (isIOS()) return;
+
+    if (this.audioContext) {
+      if (this.audioContext.state === 'suspended') {
+        this.audioContext.resume();
+      } else if (this.audioContext.state === 'closed') {
+        this.audioContext = null;
+        this.gainNode = null;
+        this.currentSource = null;
+      }
+    }
+
     if (this.currentSource) return;
+
     try {
-      if (!this.audioContext || this.audioContext.state === 'closed') {
+      if (!this.audioContext) {
         this.audioContext = new AudioContext();
         this.gainNode = this.audioContext.createGain();
         this.gainNode.gain.value = AUDIO_GAIN;

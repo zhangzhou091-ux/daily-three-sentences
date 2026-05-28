@@ -33,7 +33,7 @@ export interface SpeakResult {
   fromCache?: boolean;
 }
 
-export type NetworkQuality = 'good' | 'medium' | 'weak' | 'offline';
+export type NetworkQuality = 'good' | 'medium' | 'weak' | 'offline' | 'unknown';
 
 interface NetworkQualitySnapshot {
   quality: NetworkQuality;
@@ -147,7 +147,8 @@ const measureNetworkQuality = async (): Promise<NetworkQualitySnapshot> => {
   } catch {
     connectivityCheckResult = false;
     lastConnectivityCheck = now;
-    lastNetworkQuality = { quality: 'offline', latency: Infinity, timestamp: now };
+    lastNetworkQuality = { quality: 'unknown', latency: Infinity, timestamp: now };
+    console.log('🔊 [ElevenLabs] 网络探测失败，标记为 unknown，仍将尝试 API 调用');
     return lastNetworkQuality;
   }
 };
@@ -163,6 +164,7 @@ const getAdaptiveTimeout = (quality: NetworkQuality): number => {
     case 'medium': return BASE_SPEAK_TIMEOUT * 2;
     case 'weak': return BASE_SPEAK_TIMEOUT * 3;
     case 'offline': return BASE_SPEAK_TIMEOUT;
+    case 'unknown': return BASE_SPEAK_TIMEOUT;
   }
 };
 
@@ -172,6 +174,7 @@ const getAdaptiveRetries = (quality: NetworkQuality): number => {
     case 'medium': return MAX_RETRIES + 1;
     case 'weak': return MAX_RETRIES + 2;
     case 'offline': return 0;
+    case 'unknown': return MAX_RETRIES;
   }
 };
 

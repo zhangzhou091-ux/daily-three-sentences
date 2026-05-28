@@ -129,11 +129,14 @@ export const useDailySelection = ({
 
       if (forceRegenerate) {
         retained = [];
+        const retainedIdSet = new Set<string>();
         
         const yesterdayIds = storageService.getYesterdaySelection();
         console.log(`📚 generateDailySelection: 昨日学习列表=${yesterdayIds.length}个句子`);
         
+        // 优先级1: 昨日遗留的未学句子（最高优先）
         yesterdayIds.forEach(id => {
+          if (retained.length >= LIMIT) return;
           const s = sentenceMap.get(id);
           if (!s) {
             console.log(`📚 generateDailySelection: 跳过昨日已删除的句子ID: ${id}`);
@@ -145,43 +148,61 @@ export const useDailySelection = ({
           }
           if (s.intervalIndex === 0) {
             retained.push(s);
+            retainedIdSet.add(s.id);
           }
         });
         
-        console.log(`📚 generateDailySelection: 保留昨日未学句子=${retained.length}个`);
+        console.log(`📚 generateDailySelection: 优先级1 昨日遗留=${retained.length}个`);
         
-        if (retained.length > LIMIT) {
-          retained = retained.slice(0, LIMIT);
+        // 优先级2: 今日及过期的预约句子
+        if (retained.length < LIMIT) {
+          const scheduledSentences = sentencesSnapshot.filter(s => 
+            s.scheduledDate && s.scheduledDate <= todayDateStr && 
+            s.intervalIndex === 0 && 
+            !retainedIdSet.has(s.id)
+          ).sort((a, b) => a.addedAt - b.addedAt);
+          
+          for (const s of scheduledSentences) {
+            if (retained.length >= LIMIT) break;
+            retained.push(s);
+            retainedIdSet.add(s.id);
+          }
+          
+          console.log(`📚 generateDailySelection: 优先级2 今日预约 补充后总计=${retained.length}个`);
         }
         
-        const yesterdayLearnedCount = storageService.getYesterdayLearnedCount();
-        console.log(`📚 generateDailySelection: 昨日完成学习=${yesterdayLearnedCount}个句子`);
-        
-        let needCount = LIMIT - retained.length;
-        
-        let supplementCountFromYesterday = Math.min(needCount, yesterdayLearnedCount);
-        
-        const retainedIdSet = new Set(retained.map(r => r.id));
-        
-        if (supplementCountFromYesterday > 0) {
-          const sorted = filterAndSortAvailable(sentencesSnapshot, retainedIdSet);
+        // 优先级3: 无预约日期的普通句子（手动录入优先）
+        if (retained.length < LIMIT) {
+          const manualSentences = sentencesSnapshot.filter(s => 
+            !s.scheduledDate && 
+            s.intervalIndex === 0 &&
+            s.isManual === true &&
+            !retainedIdSet.has(s.id)
+          ).sort((a, b) => a.addedAt - b.addedAt);
           
-          const supplementList = sorted.slice(0, supplementCountFromYesterday);
-          retained.push(...supplementList);
-          supplementList.forEach(s => retainedIdSet.add(s.id));
-          needCount = LIMIT - retained.length;
-          
-          console.log(`📚 generateDailySelection: 根据昨日完成数量补充 ${supplementList.length} 个句子`);
+          for (const s of manualSentences) {
+            if (retained.length >= LIMIT) break;
+            retained.push(s);
+            retainedIdSet.add(s.id);
+          }
         }
         
-        if (needCount > 0) {
-          const sortedMore = filterAndSortAvailable(sentencesSnapshot, retainedIdSet);
+        if (retained.length < LIMIT) {
+          const importedSentences = sentencesSnapshot.filter(s => 
+            !s.scheduledDate && 
+            s.intervalIndex === 0 &&
+            (s.isManual === false || s.isManual === undefined) &&
+            !retainedIdSet.has(s.id)
+          ).sort((a, b) => a.addedAt - b.addedAt);
           
-          const additional = sortedMore.slice(0, needCount);
-          retained.push(...additional);
-          
-          console.log(`📚 generateDailySelection: 补满到${LIMIT}个，额外补充 ${additional.length} 个句子`);
+          for (const s of importedSentences) {
+            if (retained.length >= LIMIT) break;
+            retained.push(s);
+            retainedIdSet.add(s.id);
+          }
         }
+        
+        console.log(`📚 generateDailySelection: 优先级3 普通句子 最终总计=${retained.length}个`);
       } else {
         let needCount = LIMIT - retained.length;
         if (needCount > 0) {

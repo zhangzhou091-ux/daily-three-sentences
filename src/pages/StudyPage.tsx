@@ -822,8 +822,8 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         )}
 
         {activeTab === 'dictation' && (
-          <div className="space-y-10 animate-in slide-in-from-left-4 duration-500">
-            <div className="apple-card p-6 relative overflow-hidden" style={{ minHeight: '380px', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left', paddingTop: '20px', paddingBottom: '20px' }}>
+          <div className="space-y-10 animate-in slide-in-from-left-4 duration-500 safe-area-bottom">
+            <div className="apple-card p-6 relative overflow-hidden" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left', paddingTop: '20px', paddingBottom: '20px' }}>
               <div className="w-full flex justify-between items-center mb-3">
                 <div className="flex items-center gap-1">
                   {SPEECH_RATE_OPTIONS.map(opt => (
@@ -836,7 +836,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                         setSettings(updated);
                         geminiService.setPlaybackRate(clampedRate);
                       }}
-                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold transition-all ${
+                      className={`px-2.5 py-0.5 rounded-full text-xs font-bold transition-all ${
                         (settings.speechRate ?? 1) === opt.value
                           ? 'bg-blue-500 text-white shadow-sm'
                           : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
@@ -850,12 +850,12 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                   {blacklistSize > 0 && (
                     <button
                       onClick={clearBlacklist}
-                      className="text-[10px] font-bold text-gray-400 hover:text-red-500 transition-colors"
+                      className="text-xs font-bold text-gray-400 hover:text-red-500 transition-colors"
                     >
                       清除排除({blacklistSize})
                     </button>
                   )}
-                  <span className="text-[10px] font-bold text-gray-400">
+                  <span className="text-xs font-bold text-gray-400">
                     {randomListeningPoolSize} 句可用
                   </span>
                 </div>
@@ -899,7 +899,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                             style={{ width: `${(randomListeningRepeat / REPEATS_PER_SENTENCE) * 100}%` }}
                           />
                         </div>
-                        <span className="text-[10px] font-bold text-gray-500 min-w-[2.5rem] text-right">
+                        <span className="text-xs font-bold text-gray-500 min-w-[2.5rem] text-right">
                           {randomListeningRepeat}/{REPEATS_PER_SENTENCE}
                         </span>
                       </div>
@@ -907,35 +907,39 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                         <button
                           onClick={goToPreviousSentence}
                           disabled={!canGoPrevious}
-                          className={`w-10 h-10 rounded-full flex items-center justify-center text-lg transition-all ${
+                          className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
                             canGoPrevious
                               ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-90'
                               : 'bg-gray-50 text-gray-300 cursor-not-allowed'
                           }`}
                           title="上一句"
+                          aria-label="上一句"
                         >
-                          ⏮
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>
                         </button>
                         <button
                           onClick={handleToggleRandomListening}
-                          className="w-14 h-14 rounded-full flex items-center justify-center text-2xl transition-all z-20 bg-red-50 text-red-500 hover:scale-110 active:scale-95 animate-pulse"
+                          className="w-14 h-14 rounded-full flex items-center justify-center transition-all z-20 bg-red-50 text-red-500 hover:scale-110 active:scale-95"
+                          title="停止"
+                          aria-label="停止朗读"
                         >
-                          ⏹
+                          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
                         </button>
                         <button
                           onClick={goToNextSentence}
                           disabled={!canGoNext}
-                          className={`w-10 h-10 rounded-full flex items-center justify-center text-lg transition-all ${
+                          className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
                             canGoNext
                               ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-90'
                               : 'bg-gray-50 text-gray-300 cursor-not-allowed'
                           }`}
                           title="下一句"
+                          aria-label="下一句"
                         >
-                          ⏭
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
                         </button>
                       </div>
-                      <p className="text-xs font-black text-gray-600 uppercase tracking-widest mt-4">
+                      <p className="text-xs font-black text-gray-600 uppercase tracking-wide mt-4">
                         第 {randomListeningTotal + 1} 句 · 已朗读 {randomListeningTotal} 遍
                       </p>
                     </div>
@@ -944,14 +948,16 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                   <div className="flex flex-col items-center justify-center flex-1 w-full">
                     <button
                       onClick={handleToggleRandomListening}
-                      className="w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all z-20 bg-blue-50 text-blue-600 hover:scale-110 active:scale-95"
+                      className="w-16 h-16 rounded-full flex items-center justify-center transition-all z-20 bg-blue-50 text-blue-600 hover:scale-110 active:scale-95"
+                      title="开始随机朗读"
+                      aria-label="开始随机朗读"
                     >
-                      🔊
+                      <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v14l11-7-11-7z"/></svg>
                     </button>
-                    <p className="text-xs font-black text-gray-600 uppercase tracking-widest mt-6">
+                    <p className="text-xs font-black text-gray-600 uppercase tracking-wide mt-6">
                       点击开始随机朗读
                     </p>
-                    <p className="text-[10px] text-gray-400 mt-2">
+                    <p className="text-xs text-gray-400 mt-2">
                       每句连续朗读 {REPEATS_PER_SENTENCE} 遍后自动切换
                     </p>
                   </div>
@@ -965,13 +971,13 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
               )}
             </div>
 
-            <div className="apple-card p-6 relative overflow-hidden" style={{ minHeight: '320px', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left', paddingTop: '20px', paddingBottom: '20px' }}>
+            <div className="apple-card p-6 relative overflow-hidden" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left', paddingTop: '20px', paddingBottom: '20px' }}>
               <div className="w-full flex justify-between items-center mb-3">
                 <div>
                   <h3 className="text-lg font-black text-gray-900 tracking-tight">顺序朗读</h3>
-                  <p className="text-[10px] font-black text-green-500 uppercase tracking-widest mt-0.5">Sequential Reading</p>
+                  <p className="text-xs font-black text-green-500 uppercase tracking-wide mt-0.5">Sequential Reading</p>
                 </div>
-                <span className="text-[10px] font-bold text-gray-400">
+                <span className="text-xs font-bold text-gray-400">
                   {dictationReadingPoolSize} 句可用
                 </span>
               </div>
@@ -999,7 +1005,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                             style={{ width: `${(dictationReadingRepeat / DICTATION_READING_REPEATS) * 100}%` }}
                           />
                         </div>
-                        <span className="text-[10px] font-bold text-gray-500 min-w-[2.5rem] text-right">
+                        <span className="text-xs font-bold text-gray-500 min-w-[2.5rem] text-right">
                           {dictationReadingRepeat}/{DICTATION_READING_REPEATS}
                         </span>
                       </div>
@@ -1007,35 +1013,39 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                         <button
                           onClick={goToPrevReadingSentence}
                           disabled={!canGoPrevReadingSentence}
-                          className={`w-10 h-10 rounded-full flex items-center justify-center text-lg transition-all ${
+                          className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
                             canGoPrevReadingSentence
                               ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-90'
                               : 'bg-gray-50 text-gray-300 cursor-not-allowed'
                           }`}
                           title="上一句"
+                          aria-label="上一句"
                         >
-                          ⏮
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>
                         </button>
                         <button
                           onClick={handleToggleDictationReading}
-                          className="w-14 h-14 rounded-full flex items-center justify-center text-2xl transition-all z-20 bg-red-50 text-red-500 hover:scale-110 active:scale-95 animate-pulse"
+                          className="w-14 h-14 rounded-full flex items-center justify-center transition-all z-20 bg-red-50 text-red-500 hover:scale-110 active:scale-95"
+                          title="停止"
+                          aria-label="停止朗读"
                         >
-                          ⏹
+                          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
                         </button>
                         <button
                           onClick={goToNextReadingSentence}
                           disabled={!canGoNextReadingSentence}
-                          className={`w-10 h-10 rounded-full flex items-center justify-center text-lg transition-all ${
+                          className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
                             canGoNextReadingSentence
                               ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-90'
                               : 'bg-gray-50 text-gray-300 cursor-not-allowed'
                           }`}
                           title="下一句"
+                          aria-label="下一句"
                         >
-                          ⏭
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
                         </button>
                       </div>
-                      <p className="text-xs font-black text-gray-600 uppercase tracking-widest mt-4">
+                      <p className="text-xs font-black text-gray-600 uppercase tracking-wide mt-4">
                         第 {dictationReadingIndex + 1}/{dictationReadingPoolSize} 句 · 已朗读 {dictationReadingTotal} 遍
                       </p>
                     </div>
@@ -1044,14 +1054,16 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                   <div className="flex flex-col items-center justify-center flex-1 w-full">
                     <button
                       onClick={handleToggleDictationReading}
-                      className="w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all z-20 bg-green-50 text-green-600 hover:scale-110 active:scale-95"
+                      className="w-16 h-16 rounded-full flex items-center justify-center transition-all z-20 bg-green-50 text-green-600 hover:scale-110 active:scale-95"
+                      title="开始顺序朗读"
+                      aria-label="开始顺序朗读"
                     >
-                      📖
+                      <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v14l11-7-11-7z"/></svg>
                     </button>
-                    <p className="text-xs font-black text-gray-600 uppercase tracking-widest mt-6">
+                    <p className="text-xs font-black text-gray-600 uppercase tracking-wide mt-6">
                       点击开始顺序朗读
                     </p>
-                    <p className="text-[10px] text-gray-400 mt-2">
+                    <p className="text-xs text-gray-400 mt-2">
                       朗读今日学习与复习句子，每句 {DICTATION_READING_REPEATS} 遍后自动切换，循环播放
                     </p>
                   </div>
