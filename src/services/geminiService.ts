@@ -1,14 +1,13 @@
 /**
  * Gemini Service with ElevenLabs + MiniMax + EdgeTTS + Web Speech API
- * 
+ *
  * TTS 调度策略：
- * 1. 全平台统一缓存预检：本地缓存 → 云端缓存，跨引擎查找，命中即播放（不消耗积分）
+ * 1. 缓存预检：本地缓存 → 云端缓存（仅当前选中引擎）
  * 2. 缓存未命中时，按用户选择的引擎调用 API
- * 3. ElevenLabs 失败时降级到 MiniMax（直连 API，高质量多语言）
- * 4. MiniMax 不可用时降级到 EdgeTTS（微软免费语音，无需密钥）
- * 5. EdgeTTS 不可用时降级到浏览器原生语音（iOS 自动选择最佳音质）
+ * 3. 引擎失败直接报错，不自动降级
  */
 
+import { TTSEngine } from '../types';
 import { elevenLabsService } from './elevenLabsService';
 import { edgeTtsService } from './edgeTtsService';
 import { storageService } from './storage';
@@ -506,22 +505,32 @@ const tryUnifiedCacheFirst = async (
   text: string,
   loop: boolean,
   rate: number,
-  settings: ReturnType<typeof storageService.getSettings>
+  settings: ReturnType<typeof storageService.getSettings>,
+  engine: TTSEngine
 ): Promise<SpeakResult | null> => {
   const trimmedText = text.trim();
   if (!trimmedText) return null;
 
+  if (engine === 'edgeTts' || engine === 'webSpeech') return null;
+
   const elVoiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
   const elModelId = 'eleven_multilingual_v2';
 
-  // === 第一层：本地缓存精确匹配 ===
   try {
     const elCached = await elevenLabsCacheService.get(trimmedText, elVoiceId, elModelId);
     if (elCached) {
-      console.log(`🔊 [统一缓存] ElevenLabs 本地精确命中 | [语音] ${elVoiceId}`);
+      console.log(`🔊 [缓存] ElevenLabs 本地精确命中 | [语音] ${elVoiceId}`);
       const played = await playCachedBlob(elCached, loop, rate);
       if (played) return { success: true };
-      console.warn('🔊 [统一缓存] ElevenLabs 本地缓存播放失败，继续尝试');
+    }
+  } catch { /* ignore */ }
+
+  try {
+    const elFuzzy = await elevenLabsCacheService.findByText(trimmedText);
+    if (elFuzzy) {
+      console.log(`🔊 [缓存] ElevenLabs 本地模糊命中`);
+      const played = await playCachedBlob(elFuzzy, loop, rate);
+      if (played) return { success: true };
     }
   } catch { /* ignore */ }
 
@@ -530,21 +539,9 @@ const tryUnifiedCacheFirst = async (
     const mmVoiceId = settings.minimaxVoiceId || minimaxTtsService.getDefaultVoiceId();
     const mmCached = await minimaxTtsService.getCachedAudio(trimmedText, mmVoiceId);
     if (mmCached) {
-      console.log(`🔊 [统一缓存] MiniMax 本地精确命中 | [语音] ${mmVoiceId}`);
+      console.log(`🔊 [缓存] MiniMax 本地精确命中 | [语音] ${mmVoiceId}`);
       const played = await playCachedBlob(mmCached, loop, rate);
       if (played) return { success: true };
-      console.warn('🔊 [统一缓存] MiniMax 本地缓存播放失败，继续尝试');
-    }
-  } catch { /* ignore */ }
-
-  // === 第二层：本地缓存跨语音模糊匹配 ===
-  try {
-    const elFuzzy = await elevenLabsCacheService.findByText(trimmedText);
-    if (elFuzzy) {
-      console.log(`🔊 [统一缓存] ElevenLabs 本地模糊命中（跨语音）`);
-      const played = await playCachedBlob(elFuzzy, loop, rate);
-      if (played) return { success: true };
-      console.warn('🔊 [统一缓存] ElevenLabs 本地模糊缓存播放失败，继续尝试');
     }
   } catch { /* ignore */ }
 
@@ -552,49 +549,41 @@ const tryUnifiedCacheFirst = async (
     const { minimaxTtsService } = await import('./minimaxTtsService');
     const mmFuzzy = await minimaxTtsService.findByText(trimmedText);
     if (mmFuzzy) {
-      console.log(`🔊 [统一缓存] MiniMax 本地模糊命中（跨语音）`);
+      console.log(`🔊 [缓存] MiniMax 本地模糊命中`);
       const played = await playCachedBlob(mmFuzzy, loop, rate);
       if (played) return { success: true };
-      console.warn('🔊 [统一缓存] MiniMax 本地模糊缓存播放失败，继续尝试');
     }
   } catch { /* ignore */ }
 
-  // === 第三层：云端缓存（通过本地句子记录的 ttsAudioPath） ===
   try {
     const sentence = await dbService.findByEnglish(trimmedText);
     if (sentence) {
-      const cloudPaths: Array<{ path: string; engine: 'elevenlabs' | 'minimax' }> = [];
-      if (sentence.ttsAudioPathEl) cloudPaths.push({ path: sentence.ttsAudioPathEl, engine: 'elevenlabs' });
-      if (sentence.ttsAudioPathMm) cloudPaths.push({ path: sentence.ttsAudioPathMm, engine: 'minimax' });
-
-      for (const { path, engine } of cloudPaths) {
+      if (sentence.ttsAudioPathEl) {
         try {
-          const cloudBlob = await ttsCloudCacheService.downloadByPath(path);
+          const cloudBlob = await ttsCloudCacheService.downloadByPath(sentence.ttsAudioPathEl);
           if (cloudBlob) {
-            console.log(`🔊 [统一缓存] 云端路径命中 | [${engine}] | [路径] ${path}`);
-            syncToLocalCache(trimmedText, cloudBlob, engine, settings);
+            console.log(`🔊 [缓存] ElevenLabs 云端命中 | [路径] ${sentence.ttsAudioPathEl}`);
+            syncToLocalCache(trimmedText, cloudBlob, 'elevenlabs', settings);
             const played = await playCachedBlob(cloudBlob, loop, rate);
             if (played) return { success: true };
-            console.warn(`🔊 [统一缓存] ${engine} 云端缓存播放失败，继续尝试`);
+          }
+        } catch { /* ignore */ }
+      }
+      if (sentence.ttsAudioPathMm) {
+        try {
+          const cloudBlob = await ttsCloudCacheService.downloadByPath(sentence.ttsAudioPathMm);
+          if (cloudBlob) {
+            console.log(`🔊 [缓存] MiniMax 云端命中 | [路径] ${sentence.ttsAudioPathMm}`);
+            syncToLocalCache(trimmedText, cloudBlob, 'minimax', settings);
+            const played = await playCachedBlob(cloudBlob, loop, rate);
+            if (played) return { success: true };
           }
         } catch { /* ignore */ }
       }
     }
   } catch { /* ignore */ }
 
-  // === 第四层：云端缓存跨引擎查找（兜底） ===
-  try {
-    const cloudResult = await ttsCloudCacheService.getAnyEngine(trimmedText);
-    if (cloudResult) {
-      console.log(`🔊 [统一缓存] 云端跨引擎命中 | [${cloudResult.engine}]`);
-      syncToLocalCache(trimmedText, cloudResult.blob, cloudResult.engine, settings);
-      const played = await playCachedBlob(cloudResult.blob, loop, rate);
-      if (played) return { success: true };
-      console.warn(`🔊 [统一缓存] 云端跨引擎缓存播放失败，继续尝试`);
-    }
-  } catch { /* ignore */ }
-
-  console.log('🔊 [统一缓存] 本地/云端缓存均未命中，进入引擎 API 路径');
+  console.log(`🔊 [缓存] 全部未命中，进入 API 路径`);
   return null;
 };
 
@@ -608,10 +597,10 @@ export const geminiService = {
     });
 
     const settings = storageService.getSettings();
-    const ttsEngine = settings.ttsEngine || 'auto';
+    const ttsEngine: TTSEngine = settings.ttsEngine || 'elevenlabs';
     const speechRate = settings.speechRate ?? 1;
 
-    const cacheResult = await tryUnifiedCacheFirst(text, loop, speechRate, settings);
+    const cacheResult = await tryUnifiedCacheFirst(text, loop, speechRate, settings, ttsEngine);
     if (cacheResult) return cacheResult;
 
     const tryElevenLabs = async (): Promise<SpeakResult> => {
@@ -678,50 +667,22 @@ export const geminiService = {
       });
     };
 
-    if (ttsEngine === 'auto') {
-      const elResult = await tryElevenLabs();
-      if (elResult.success) return elResult;
-      console.warn('🔊 [auto] ElevenLabs 不可用，回退到 MiniMax');
-
-      const mmResult = await tryMiniMax();
-      if (mmResult.success) return mmResult;
-      console.warn('🔊 [auto] MiniMax 不可用，回退到 EdgeTTS');
-
-      const edgeResult = await tryEdgeTts();
-      if (edgeResult.success) return edgeResult;
-      console.warn('🔊 [auto] EdgeTTS 不可用，回退到 Web Speech API');
-
-      return tryWebSpeech();
-    }
-
     if (ttsEngine === 'elevenlabs') {
       const result = await tryElevenLabs();
       if (result.success) return result;
-      console.warn('🔊 ElevenLabs 失败，回退到 MiniMax');
-      const mmResult = await tryMiniMax();
-      if (mmResult.success) return mmResult;
-      console.warn('🔊 MiniMax 失败，回退到 EdgeTTS');
-      const edgeResult = await tryEdgeTts();
-      if (edgeResult.success) return edgeResult;
-      console.warn('🔊 EdgeTTS 失败，回退到 Web Speech API');
-      return tryWebSpeech();
+      return { success: false, error: 'ElevenLabs 生成失败，不降级' };
     }
 
     if (ttsEngine === 'minimax') {
       const result = await tryMiniMax();
       if (result.success) return result;
-      console.warn('🔊 MiniMax 失败，回退到 EdgeTTS');
-      const edgeResult = await tryEdgeTts();
-      if (edgeResult.success) return edgeResult;
-      console.warn('🔊 EdgeTTS 失败，回退到 Web Speech API');
-      return tryWebSpeech();
+      return { success: false, error: 'MiniMax 生成失败，不降级' };
     }
 
     if (ttsEngine === 'edgeTts') {
       const result = await tryEdgeTts();
       if (result.success) return result;
-      console.warn('🔊 EdgeTTS 失败，回退到 Web Speech API');
-      return tryWebSpeech();
+      return { success: false, error: 'EdgeTTS 生成失败，不降级' };
     }
 
     if (ttsEngine === 'webSpeech') {
@@ -771,21 +732,12 @@ export const geminiService = {
 
   getCurrentEngineInfo(): { engine: string; voiceName: string; isLocal: boolean } {
     const settings = storageService.getSettings();
-    const ttsEngine = settings.ttsEngine || 'auto';
-    if (ttsEngine === 'auto') {
-      const apiKey = settings.elevenLabsApiKey;
-      if (apiKey && apiKey.trim()) {
-        const voiceId = settings.elevenLabsVoiceId || 'JBFqnCBsd6RMkjVDRZzb';
-        const popularVoice = elevenLabsService.getPopularVoices().find(v => v.voice_id === voiceId);
-        return { engine: '自动 (ElevenLabs → MiniMax → EdgeTTS → Web Speech)', voiceName: popularVoice?.name || voiceId, isLocal: false };
-      }
-      return { engine: '自动 (MiniMax → EdgeTTS → Web Speech)', voiceName: settings.minimaxVoiceId || 'English_expressive_narrator', isLocal: false };
-    }
+    const ttsEngine: TTSEngine = settings.ttsEngine || 'elevenlabs';
     if (ttsEngine === 'elevenlabs') {
       const voiceId = settings.elevenLabsVoiceId || 'JBFqnCBsd6RMkjVDRZzb';
       const apiKey = settings.elevenLabsApiKey;
       if (!apiKey || !apiKey.trim()) {
-        return { engine: 'ElevenLabs (未配置，将回退)', voiceName: '未配置', isLocal: false };
+        return { engine: 'ElevenLabs (未配置)', voiceName: '未配置', isLocal: false };
       }
       const popularVoice = elevenLabsService.getPopularVoices().find(v => v.voice_id === voiceId);
       return { engine: 'ElevenLabs', voiceName: popularVoice?.name || voiceId, isLocal: false };
@@ -793,7 +745,7 @@ export const geminiService = {
     if (ttsEngine === 'minimax') {
       const voiceId = settings.minimaxVoiceId || 'English_expressive_narrator';
       if (!settings.minimaxApiKey || !settings.minimaxApiKey.trim()) {
-        return { engine: 'MiniMax (未配置，将回退)', voiceName: '未配置', isLocal: false };
+        return { engine: 'MiniMax (未配置)', voiceName: '未配置', isLocal: false };
       }
       return { engine: 'MiniMax (直连)', voiceName: voiceId, isLocal: false };
     }
@@ -838,9 +790,9 @@ export const geminiService = {
     if (!text || !text.trim()) return null;
 
     const settings = storageService.getSettings();
+    const ttsEngine: TTSEngine = settings.ttsEngine || 'elevenlabs';
     const trimmedText = text.trim();
 
-    // === 统一缓存预检 ===
     try {
       const elVoiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
       const elModelId = 'eleven_multilingual_v2';
@@ -852,20 +804,20 @@ export const geminiService = {
     } catch { /* ignore */ }
 
     try {
+      const elFuzzy = await elevenLabsCacheService.findByText(trimmedText);
+      if (elFuzzy) {
+        console.log(`🔊 [fetchBlob] ElevenLabs 本地模糊命中`);
+        return elFuzzy;
+      }
+    } catch { /* ignore */ }
+
+    try {
       const { minimaxTtsService } = await import('./minimaxTtsService');
       const mmVoiceId = settings.minimaxVoiceId || minimaxTtsService.getDefaultVoiceId();
       const mmCached = await minimaxTtsService.getCachedAudio(trimmedText, mmVoiceId);
       if (mmCached) {
         console.log(`🔊 [fetchBlob] MiniMax 本地精确命中`);
         return mmCached;
-      }
-    } catch { /* ignore */ }
-
-    try {
-      const elFuzzy = await elevenLabsCacheService.findByText(trimmedText);
-      if (elFuzzy) {
-        console.log(`🔊 [fetchBlob] ElevenLabs 本地模糊命中`);
-        return elFuzzy;
       }
     } catch { /* ignore */ }
 
@@ -881,16 +833,22 @@ export const geminiService = {
     try {
       const sentence = await dbService.findByEnglish(trimmedText);
       if (sentence) {
-        const cloudPaths: Array<{ path: string; engine: 'elevenlabs' | 'minimax' }> = [];
-        if (sentence.ttsAudioPathEl) cloudPaths.push({ path: sentence.ttsAudioPathEl, engine: 'elevenlabs' });
-        if (sentence.ttsAudioPathMm) cloudPaths.push({ path: sentence.ttsAudioPathMm, engine: 'minimax' });
-
-        for (const { path, engine } of cloudPaths) {
+        if (sentence.ttsAudioPathEl) {
           try {
-            const cloudBlob = await ttsCloudCacheService.downloadByPath(path);
+            const cloudBlob = await ttsCloudCacheService.downloadByPath(sentence.ttsAudioPathEl);
             if (cloudBlob) {
-              console.log(`🔊 [fetchBlob] 云端路径命中 | [${engine}] | [路径] ${path}`);
-              syncToLocalCache(trimmedText, cloudBlob, engine, settings);
+              console.log(`🔊 [fetchBlob] ElevenLabs 云端命中 | [路径] ${sentence.ttsAudioPathEl}`);
+              syncToLocalCache(trimmedText, cloudBlob, 'elevenlabs', settings);
+              return cloudBlob;
+            }
+          } catch { /* ignore */ }
+        }
+        if (sentence.ttsAudioPathMm) {
+          try {
+            const cloudBlob = await ttsCloudCacheService.downloadByPath(sentence.ttsAudioPathMm);
+            if (cloudBlob) {
+              console.log(`🔊 [fetchBlob] MiniMax 云端命中 | [路径] ${sentence.ttsAudioPathMm}`);
+              syncToLocalCache(trimmedText, cloudBlob, 'minimax', settings);
               return cloudBlob;
             }
           } catch { /* ignore */ }
@@ -898,32 +856,7 @@ export const geminiService = {
       }
     } catch { /* ignore */ }
 
-    try {
-      const cloudResult = await ttsCloudCacheService.getAnyEngine(trimmedText);
-      if (cloudResult) {
-        console.log(`🔊 [fetchBlob] 云端跨引擎命中 | [${cloudResult.engine}]`);
-        syncToLocalCache(trimmedText, cloudResult.blob, cloudResult.engine, settings);
-        return cloudResult.blob;
-      }
-    } catch { /* ignore */ }
-
-    // === 缓存未命中，走引擎 API ===
-    const ttsEngine = settings.ttsEngine || 'auto';
-
-    const tryElevenLabsBlob = async (): Promise<Blob | null> => {
-      const apiKey = settings.elevenLabsApiKey;
-      const voiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
-      if (!apiKey || !apiKey.trim()) return null;
-      try {
-        console.log(`🔊 [fetchBlob] ElevenLabs | [语音] ${voiceId}`);
-        return await elevenLabsService.fetchAudioBlob(text, apiKey, voiceId, undefined);
-      } catch (err) {
-        console.warn('🔊 [fetchBlob] ElevenLabs 失败:', err instanceof Error ? err.message : String(err));
-        return null;
-      }
-    };
-
-    const tryMiniMaxBlob = async (): Promise<Blob | null> => {
+    if (ttsEngine === 'minimax') {
       try {
         const { minimaxTtsService } = await import('./minimaxTtsService');
         const apiKey = settings.minimaxApiKey || '';
@@ -935,9 +868,22 @@ export const geminiService = {
         console.warn('🔊 [fetchBlob] MiniMax 失败:', err instanceof Error ? err.message : String(err));
         return null;
       }
-    };
+    }
 
-    const tryEdgeTtsBlob = async (): Promise<Blob | null> => {
+    if (ttsEngine === 'elevenlabs') {
+      const apiKey = settings.elevenLabsApiKey;
+      const voiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
+      if (!apiKey || !apiKey.trim()) return null;
+      try {
+        console.log(`🔊 [fetchBlob] ElevenLabs | [语音] ${voiceId}`);
+        return await elevenLabsService.fetchAudioBlob(text, apiKey, voiceId, undefined);
+      } catch (err) {
+        console.warn('🔊 [fetchBlob] ElevenLabs 失败:', err instanceof Error ? err.message : String(err));
+        return null;
+      }
+    }
+
+    if (ttsEngine === 'edgeTts') {
       try {
         const voice = settings.edgeTtsVoiceId || edgeTtsService.getDefaultVoice();
         const speechRate = settings.speechRate ?? 1;
@@ -948,43 +894,6 @@ export const geminiService = {
         console.warn('🔊 [fetchBlob] EdgeTTS 失败:', err instanceof Error ? err.message : String(err));
         return null;
       }
-    };
-
-    if (ttsEngine === 'auto') {
-      const elBlob = await tryElevenLabsBlob();
-      if (elBlob) return elBlob;
-
-      const mmBlob = await tryMiniMaxBlob();
-      if (mmBlob) return mmBlob;
-
-      const edgeBlob = await tryEdgeTtsBlob();
-      if (edgeBlob) return edgeBlob;
-
-      return null;
-    }
-
-    if (ttsEngine === 'elevenlabs') {
-      const elBlob = await tryElevenLabsBlob();
-      if (elBlob) return elBlob;
-      const mmBlob = await tryMiniMaxBlob();
-      if (mmBlob) return mmBlob;
-      const edgeBlob = await tryEdgeTtsBlob();
-      if (edgeBlob) return edgeBlob;
-      return null;
-    }
-
-    if (ttsEngine === 'minimax') {
-      const mmBlob = await tryMiniMaxBlob();
-      if (mmBlob) return mmBlob;
-      const edgeBlob = await tryEdgeTtsBlob();
-      if (edgeBlob) return edgeBlob;
-      return null;
-    }
-
-    if (ttsEngine === 'edgeTts') {
-      const edgeBlob = await tryEdgeTtsBlob();
-      if (edgeBlob) return edgeBlob;
-      return null;
     }
 
     return null;

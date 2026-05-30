@@ -8,6 +8,7 @@ import { getSafeTags } from '../utils/format';
 import { getLocalDateString } from '../utils/date';
 import { StatisticsSection } from '../components/manage/StatisticsSection';
 import { SentenceList } from '../components/manage/SentenceList';
+import { Calendar } from '../components/calendar/Calendar';
 
 const BATCH_SIZE = 100;
 
@@ -111,6 +112,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
   const [toast, setToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' }>({ show: false, message: '', type: 'success' });
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [isCalendarCollapsed, setIsCalendarCollapsed] = useState(true);
   
   const [importProgress, setImportProgress] = useState<ImportProgress>({
     total: 0,
@@ -198,6 +200,11 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
       setNewEn('');
       setNewZh('');
       setNewTags('');
+      setScheduledDate(() => {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        return getLocalDateString(tomorrow);
+      });
       setDuplicateWarning({ show: false });
       showToast('✅ 保存成功', 'success');
       
@@ -230,6 +237,12 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
   }, [onUpdate, showToast]);
 
   const generateSentenceAudio = useCallback(async (sentence: Sentence, engine: 'elevenlabs' | 'minimax') => {
+    if (sentence.ttsAudioPathEl || sentence.ttsAudioPathMm) {
+      const existingEngine = sentence.ttsAudioPathEl ? 'ElevenLabs' : 'MiniMax';
+      showToast(`⛔ 云端已有 ${existingEngine} 语音，禁止重新生成`, 'error');
+      return;
+    }
+
     const settings = storageService.getSettings();
     const text = sentence.english.trim();
 
@@ -256,6 +269,8 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
       }
 
       if (blob) {
+        const field = engine === 'elevenlabs' ? 'ttsAudioPathEl' : 'ttsAudioPathMm';
+        await storageService.updateSentence(sentence.id, { [field]: 'pending' } as Partial<Sentence>).catch(() => {});
         showToast('🔊 语音生成成功', 'success');
         await onUpdate();
       } else {
@@ -710,7 +725,30 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Sentences");
-    XLSX.writeFile(wb, `Database_Backup_${new Date().toISOString().split('T')[0]}.xlsx`);
+
+    const filename = `Database_Backup_${new Date().toISOString().split('T')[0]}.xlsx`;
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [new File([blob], filename, { type: blob.type })] })) {
+      try {
+        await navigator.share({
+          files: [new File([blob], filename, { type: blob.type })],
+          title: '导出 Excel 备份',
+        });
+        return;
+      } catch {
+      }
+    }
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }, [sentences, sentenceTagsMap]);
 
   return (
@@ -911,7 +949,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
                 value={scheduledDate}
                 onChange={(e) => setScheduledDate(e.target.value)}
                 min={getLocalDateString()}
-                className="px-3 py-2 bg-gray-50 rounded-xl border-none text-xs font-medium text-gray-600 focus:ring-2 focus:ring-gray-200 outline-none"
+                className="px-3 py-2 bg-gray-50 rounded-xl border-none text-sm font-medium text-gray-600 focus:ring-2 focus:ring-gray-200 outline-none"
               />
             </div>
           </div>
@@ -955,6 +993,22 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
             )}
           </button>
         </div>
+      </div>
+
+      <div className="mb-6">
+        <button
+          onClick={() => setIsCalendarCollapsed(v => !v)}
+          className="w-full flex items-center justify-between px-1 py-2 min-h-[44px] text-sm font-black text-gray-600 hover:text-gray-900 transition-colors"
+        >
+          <span className="flex items-center gap-2">
+            <span className="w-1.5 h-4 bg-indigo-500 rounded-full"></span>
+            日程表
+          </span>
+          <span className="text-lg transition-transform" style={{ transform: isCalendarCollapsed ? 'rotate(0deg)' : 'rotate(180deg)' }}>
+            ▼
+          </span>
+        </button>
+        {!isCalendarCollapsed && <Calendar sentences={sentences} />}
       </div>
 
       <div className="space-y-6">

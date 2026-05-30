@@ -139,7 +139,7 @@ export const DEFAULT_USER_SETTINGS = {
   dailyLearnTarget: 3,
   dailyReviewTarget: 10,
   webSpeechVoice: '',
-  ttsEngine: 'auto' as const,
+  ttsEngine: 'elevenlabs' as const,
   speechRate: 1,
   showChineseFirst: false,
   autoPlayAudio: true,
