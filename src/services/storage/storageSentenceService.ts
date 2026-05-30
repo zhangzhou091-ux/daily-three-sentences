@@ -152,7 +152,9 @@ export const storageSentenceService = {
     await dbService.put(updated);
 
     if (supabaseService.isReady) {
-      supabaseService.syncSentences([updated]);
+      await supabaseService.syncSentences([updated]).catch(err => {
+        console.warn('⚠️ 句子更新后同步 Supabase 失败:', err instanceof Error ? err.message : String(err));
+      });
     }
 
     return updated;
@@ -173,7 +175,9 @@ export const storageSentenceService = {
     await dbService.put(updated);
 
     if (supabaseService.isReady) {
-      supabaseService.syncSentences([updated]);
+      await supabaseService.syncSentences([updated]).catch(err => {
+        console.warn('⚠️ 清除音频后同步 Supabase 失败:', err instanceof Error ? err.message : String(err));
+      });
     }
 
     return updated;

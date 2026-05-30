@@ -923,7 +923,7 @@ class SupabaseService {
     });
   }
 
-  private mapSentenceToDb(s: Sentence, username: string): CloudSentenceData {
+  public mapSentenceToDb(s: Sentence, username: string): CloudSentenceData {
     return { 
       id: s.id,
       english: s.english,

@@ -18,13 +18,19 @@ import {
   RepeatConfig,
 } from '../../core/schedule/scheduleService';
 import { METRICS } from '../../core/analytics/dataStats';
+import { Sentence } from '../../types';
+import { getLocalDateString } from '../../utils/date';
 
 type ViewMode = 'day' | 'week' | 'month';
 
 const WEEKDAY_NAMES = ['一', '二', '三', '四', '五', '六', '日'];
 const MONTH_NAMES = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
 
-export const Calendar: React.FC = () => {
+interface CalendarProps {
+  sentences?: Sentence[];
+}
+
+export const Calendar: React.FC<CalendarProps> = ({ sentences = [] }) => {
   const [events, setEvents] = useState<ScheduleEvent[]>(() => loadEvents());
   const [viewMode, setViewMode] = useState<ViewMode>('month');
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -50,22 +56,57 @@ export const Calendar: React.FC = () => {
     return getEventsForDate(events, selectedDate || today);
   }, [events, selectedDate, today]);
 
+  const scheduledSentenceMap = useMemo(() => {
+    const map = new Map<string, Sentence[]>();
+    const totalSentences = sentences.length;
+    let scheduledCount = 0;
+    for (const s of sentences) {
+      if (s.scheduledDate) {
+        const existing = map.get(s.scheduledDate) || [];
+        existing.push(s);
+        map.set(s.scheduledDate, existing);
+        scheduledCount++;
+      }
+    }
+    console.log(`📅 [Calendar] 预定数据加载完成:`);
+    console.log(`  - 总句子数: ${totalSentences}`);
+    console.log(`  - 有预定日期的句子: ${scheduledCount}`);
+    console.log(`  - 涉及日期数: ${map.size}`);
+    if (map.size > 0) {
+      const sortedDates = Array.from(map.keys()).sort();
+      console.log(`  - 日期列表: [${sortedDates.join(', ')}]`);
+      sortedDates.forEach(date => {
+        const sents = map.get(date)!;
+        console.log(`    ${date}: ${sents.length}句 → [${sents.map(s => s.english.slice(0, 30)).join(' | ')}]`);
+      });
+    } else {
+      console.log(`  - ⚠️ 没有找到任何带 scheduledDate 的句子`);
+    }
+    return map;
+  }, [sentences]);
+
   const navigateMonth = (direction: number) => {
     const newDate = new Date(currentDate);
     newDate.setMonth(newDate.getMonth() + direction);
+    console.log(`📅 [Calendar] 月份导航: ${currentDate.getFullYear()}/${currentDate.getMonth() + 1} → ${newDate.getFullYear()}/${newDate.getMonth() + 1} (${direction > 0 ? '前进' : '后退'})`);
     setCurrentDate(newDate);
   };
 
   const navigateWeek = (direction: number) => {
     const newDate = new Date(selectedDate || currentDate);
     newDate.setDate(newDate.getDate() + direction * 7);
+    console.log(`📅 [Calendar] 周导航: ${getLocalDateString(selectedDate || currentDate)} → ${getLocalDateString(newDate)} (${direction > 0 ? '前进' : '后退'}${Math.abs(direction)}周)`);
     setCurrentDate(newDate);
     setSelectedDate(newDate);
   };
 
   const handleDateClick = (day: CalendarDay) => {
+    const dateStr = getLocalDateString(day.date);
+    const daySentences = scheduledSentenceMap.get(dateStr);
+    console.log(`📅 [Calendar] 日期点击: ${dateStr} | 当月:${day.isCurrentMonth} | 今天:${day.isToday} | 预定句子:${daySentences?.length || 0}句 | 日程:${day.events.length}个`);
     setSelectedDate(day.date);
     if (viewMode === 'month') {
+      console.log(`📅 [Calendar] 视图切换: month → day (点击了日期)`);
       setViewMode('day');
     }
   };
@@ -119,7 +160,10 @@ export const Calendar: React.FC = () => {
             {(['day', 'week', 'month'] as ViewMode[]).map(mode => (
               <button
                 key={mode}
-                onClick={() => setViewMode(mode)}
+                onClick={() => {
+                  console.log(`📅 [Calendar] 视图切换: ${viewMode} → ${mode}`);
+                  setViewMode(mode);
+                }}
                 className={`px-3 py-1.5 text-[10px] font-bold rounded-lg transition-all ${
                   viewMode === mode 
                     ? 'bg-white text-indigo-600 shadow-sm' 
@@ -173,11 +217,18 @@ export const Calendar: React.FC = () => {
             </div>
           ))}
           
-          {calendarWeeks.map((week, wi) => 
-            week.days.map((day, di) => (
-              <div
-                key={`${wi}-${di}`}
-                onClick={() => handleDateClick(day)}
+          {((): React.ReactNode => {
+            const matchedDates: string[] = [];
+            const nodes = calendarWeeks.map((week, wi) => 
+              week.days.map((day, di) => {
+                const dateStr = getLocalDateString(day.date);
+                const daySentences = scheduledSentenceMap.get(dateStr);
+                const sentenceCount = daySentences ? daySentences.length : 0;
+                if (sentenceCount > 0) matchedDates.push(`${dateStr}(${sentenceCount}句)`);
+                return (
+                <div
+                  key={`${wi}-${di}`}
+                  onClick={() => handleDateClick(day)}
                 className={`
                   min-h-[60px] p-1 rounded-lg cursor-pointer transition-all
                   ${day.isCurrentMonth ? 'bg-gray-50' : 'bg-gray-50/50'}
@@ -191,7 +242,12 @@ export const Calendar: React.FC = () => {
                 }`}>
                   {day.date.getDate()}
                 </div>
-                {day.events.slice(0, 2).map(event => (
+                {sentenceCount > 0 && (
+                  <div className="text-[8px] truncate px-1 py-0.5 rounded mb-0.5 bg-emerald-100 text-emerald-700 font-bold">
+                    📖 {sentenceCount}句
+                  </div>
+                )}
+                {day.events.slice(0, sentenceCount > 0 ? 1 : 2).map(event => (
                   <div
                     key={event.id}
                     className="text-[8px] truncate px-1 py-0.5 rounded mb-0.5"
@@ -200,20 +256,31 @@ export const Calendar: React.FC = () => {
                     {event.title}
                   </div>
                 ))}
-                {day.events.length > 2 && (
+                {day.events.length + sentenceCount > 2 && (
                   <div className="text-[8px] text-gray-600 text-center">
-                    +{day.events.length - 2}
+                    +{day.events.length + sentenceCount - 2}
                   </div>
                 )}
               </div>
-            ))
-          )}
-        </div>
+            );
+          })
+        );
+          console.log(`📅 [Calendar] 月视图渲染: ${currentDate.getFullYear()}/${currentDate.getMonth() + 1} | 匹配日期: ${matchedDates.length > 0 ? matchedDates.join(', ') : '(无)'}`);
+          return nodes;
+        })()}
+      </div>
       )}
 
       {viewMode === 'week' && (
         <div className="grid grid-cols-7 gap-2">
-          {weekDays.map((day, i) => (
+          {((): React.ReactNode => {
+            const weekMatchedDates: string[] = [];
+            const weekNodes = weekDays.map((day, i) => {
+            const dateStr = getLocalDateString(day.date);
+            const daySentences = scheduledSentenceMap.get(dateStr);
+            const sentenceCount = daySentences ? daySentences.length : 0;
+            if (sentenceCount > 0) weekMatchedDates.push(`${dateStr}(${sentenceCount}句)`);
+            return (
             <div key={i} className="text-center">
               <div className="text-[10px] font-bold text-gray-600 mb-1">
                 {WEEKDAY_NAMES[i]}
@@ -228,7 +295,12 @@ export const Calendar: React.FC = () => {
                 {day.date.getDate()}
               </div>
               <div className="mt-2 space-y-1">
-                {day.events.slice(0, 3).map(event => (
+                {sentenceCount > 0 && (
+                  <div className="text-[8px] truncate px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 font-bold">
+                    📖 {sentenceCount}句
+                  </div>
+                )}
+                {day.events.slice(0, sentenceCount > 0 ? 2 : 3).map(event => (
                   <div
                     key={event.id}
                     onClick={() => handleEditEvent(event)}
@@ -240,15 +312,43 @@ export const Calendar: React.FC = () => {
                 ))}
               </div>
             </div>
-          ))}
-        </div>
+          )});
+          console.log(`📅 [Calendar] 周视图渲染: 起始 ${getLocalDateString(weekDays[0]?.date || today)} | 匹配日期: ${weekMatchedDates.length > 0 ? weekMatchedDates.join(', ') : '(无)'}`);
+          return weekNodes;
+        })()}
+      </div>
       )}
 
       {viewMode === 'day' && (
         <div className="space-y-2 max-h-[300px] overflow-y-auto">
+          {selectedDate && (() => {
+            const dateStr = getLocalDateString(selectedDate);
+            const daySentences = scheduledSentenceMap.get(dateStr);
+            console.log(`📅 [Calendar] 日视图渲染: ${dateStr} | 预定句子: ${daySentences?.length || 0}句${daySentences ? ' → [' + daySentences.map(s => s.english.slice(0, 25)).join(' | ') + ']' : ''} | 日程: ${dayEvents.length}个`);
+            if (!daySentences || daySentences.length === 0) return null;
+            return (
+              <div className="space-y-2 mb-3">
+                <div className="text-[10px] font-bold text-emerald-600 px-1">
+                  📖 预定学习句子 ({daySentences.length}句)
+                </div>
+                {daySentences.map(s => (
+                  <div
+                    key={s.id}
+                    className="flex items-center gap-3 p-3 rounded-xl bg-emerald-50/60"
+                    style={{ borderLeft: '4px solid #10b981' }}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-bold text-gray-900 truncate">{s.english}</div>
+                      <div className="text-xs text-gray-500 mt-0.5 truncate">{s.chinese}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
           {dayEvents.length === 0 ? (
             <div className="text-center py-8 text-gray-600 text-sm">
-              暂无日程安排
+              无日程安排
             </div>
           ) : (
             dayEvents.map(event => (

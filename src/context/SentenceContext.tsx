@@ -15,7 +15,7 @@ interface SentenceContextType {
 
 const SentenceContext = createContext<SentenceContextType | undefined>(undefined);
 
-function mergeSentencesByUpdatedAt(
+export function mergeSentencesByUpdatedAt(
   existing: Sentence[], 
   incoming: Sentence[]
 ): Sentence[] {
@@ -35,7 +35,7 @@ function mergeSentencesByUpdatedAt(
       } else {
         const existingTime = existingSentence.updatedAt || 0;
         const incomingTime = s.updatedAt || 0;
-        if (incomingTime >= existingTime) {
+        if (incomingTime > existingTime) {
           map.set(s.id, s);
         }
       }

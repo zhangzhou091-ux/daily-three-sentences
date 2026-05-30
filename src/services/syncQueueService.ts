@@ -1737,26 +1737,9 @@ class SyncQueueService {
 
             if (localTime > cloudTime) {
               const validId = cloudSentence.id;
-              toUpload.push({
-                id: validId,
-                english: localSentence.english,
-                chinese: localSentence.chinese,
-                tags: Array.isArray(localSentence.tags) ? localSentence.tags.join(';') : (localSentence.tags || ''),
-                intervalindex: localSentence.intervalIndex,
-                addedat: localSentence.addedAt,
-                nextreviewdate: localSentence.nextReviewDate,
-                lastreviewedat: localSentence.lastReviewedAt,
-                timesreviewed: localSentence.timesReviewed,
-                ismanual: localSentence.isManual || false,
-                updatedat: localSentence.updatedAt || Date.now(),
-                username: supabaseService.userName,
-                stability: localSentence.stability,
-                difficulty: localSentence.difficulty,
-                reps: localSentence.reps || 0,
-                lapses: localSentence.lapses || 0,
-                state: localSentence.state || 0,
-                scheduleddays: localSentence.scheduledDays
-              });
+              const uploadData = supabaseService.mapSentenceToDb(localSentence, supabaseService.userName);
+              uploadData.id = validId;
+              toUpload.push(uploadData);
               merged.push(localSentence);
             } else {
               merged.push({
@@ -1788,26 +1771,9 @@ class SyncQueueService {
               logger.warn(`ID不是有效UUID，已转换`, { oldId: localSentence.id, newId: validId });
             }
 
-            toUpload.push({
-              id: validId,
-              english: localSentence.english,
-              chinese: localSentence.chinese,
-              tags: Array.isArray(localSentence.tags) ? localSentence.tags.join(';') : (localSentence.tags || ''),
-              intervalindex: localSentence.intervalIndex,
-              addedat: localSentence.addedAt,
-              nextreviewdate: localSentence.nextReviewDate,
-              lastreviewedat: localSentence.lastReviewedAt,
-              timesreviewed: localSentence.timesReviewed,
-              ismanual: localSentence.isManual || false,
-              updatedat: localSentence.updatedAt || Date.now(),
-              username: supabaseService.userName,
-              stability: localSentence.stability,
-              difficulty: localSentence.difficulty,
-              reps: localSentence.reps || 0,
-              lapses: localSentence.lapses || 0,
-              state: localSentence.state || 0,
-              scheduleddays: localSentence.scheduledDays
-            });
+            const uploadData = supabaseService.mapSentenceToDb(localSentence, supabaseService.userName);
+            uploadData.id = validId;
+            toUpload.push(uploadData);
             merged.push(localSentence);
           }
         });

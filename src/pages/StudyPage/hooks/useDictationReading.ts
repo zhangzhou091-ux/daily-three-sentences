@@ -13,6 +13,23 @@ const INTER_SENTENCE_JITTER = 300;
 const MAX_CONSECUTIVE_ERRORS = 3;
 const PLAY_TIMEOUT_MS = 8000;
 const READING_PROGRESS_KEY = 'd3s_dictation_reading_progress';
+
+const waitVisible = (ms: number): Promise<void> =>
+  new Promise<void>(resolve => {
+    setTimeout(() => {
+      if (document.visibilityState === 'visible') {
+        resolve();
+        return;
+      }
+      const onVisible = () => {
+        if (document.visibilityState === 'visible') {
+          document.removeEventListener('visibilitychange', onVisible);
+          resolve();
+        }
+      };
+      document.addEventListener('visibilitychange', onVisible);
+    }, ms);
+  });
 const PRELOAD_LOOKAHEAD = 2;
 
 const saveReadingProgress = (sentenceId: string, index: number): void => {
@@ -230,8 +247,8 @@ export const useDictationReading = (
 
         mediaSessionService.updateMetadata(sentence.english);
         mediaSessionService.setActionHandlers({
-          onPause: () => { geminiService.stop(); },
-          onStop: () => { geminiService.stop(); },
+          onPause: () => { geminiService.stop(); continuousAudioPlayer.stop(); isActiveRef.current = false; },
+          onStop: () => { geminiService.stop(); continuousAudioPlayer.stop(); isActiveRef.current = false; },
           onPrevTrack: () => { goToPrevRef.current?.(); },
           onNextTrack: () => { goToNextRef.current?.(); },
         });
@@ -277,7 +294,7 @@ export const useDictationReading = (
             if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
               break;
             }
-            await new Promise<void>(r => setTimeout(r, 500));
+            await waitVisible(500);
             continue;
           }
 
@@ -289,9 +306,7 @@ export const useDictationReading = (
 
           if (completedRepeats < REPEATS_PER_SENTENCE) {
             mediaSessionService.holdAudioFocus();
-            await new Promise<void>(r =>
-              setTimeout(r, jitterDelay(INTER_REPEAT_BASE_DELAY, INTER_REPEAT_JITTER))
-            );
+            await waitVisible(jitterDelay(INTER_REPEAT_BASE_DELAY, INTER_REPEAT_JITTER));
           }
         }
 
@@ -300,9 +315,7 @@ export const useDictationReading = (
         setState(prev => ({ ...prev, totalPlayed: totalPlayedRef.current }));
 
         mediaSessionService.holdAudioFocus();
-        await new Promise<void>(r =>
-          setTimeout(r, jitterDelay(INTER_SENTENCE_BASE_DELAY, INTER_SENTENCE_JITTER))
-        );
+        await waitVisible(jitterDelay(INTER_SENTENCE_BASE_DELAY, INTER_SENTENCE_JITTER));
       }
 
       if (!isActiveRef.current || playGenerationRef.current !== gen) return;

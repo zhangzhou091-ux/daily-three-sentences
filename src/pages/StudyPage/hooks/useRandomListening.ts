@@ -13,6 +13,23 @@ const INTER_SENTENCE_JITTER = 300;
 const MAX_CONSECUTIVE_ERRORS = 3;
 const PLAY_TIMEOUT_MS = 8000;
 const SESSION_RESET_INTERVAL = 14 * 24 * 60 * 60 * 1000;
+
+const waitVisible = (ms: number): Promise<void> =>
+  new Promise<void>(resolve => {
+    setTimeout(() => {
+      if (document.visibilityState === 'visible') {
+        resolve();
+        return;
+      }
+      const onVisible = () => {
+        if (document.visibilityState === 'visible') {
+          document.removeEventListener('visibilitychange', onVisible);
+          resolve();
+        }
+      };
+      document.addEventListener('visibilitychange', onVisible);
+    }, ms);
+  });
 const SESSION_RESET_KEY = 'd3s_random_listening_session_reset';
 const PRELOAD_LOOKAHEAD = 2;
 
@@ -281,8 +298,8 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
       mediaSessionService.updateMetadata(sentence.english);
       mediaSessionService.setActionHandlers({
-        onPause: () => { geminiService.stop(); },
-        onStop: () => { geminiService.stop(); },
+        onPause: () => { geminiService.stop(); continuousAudioPlayer.stop(); isActiveRef.current = false; },
+        onStop: () => { geminiService.stop(); continuousAudioPlayer.stop(); isActiveRef.current = false; },
         onPrevTrack: () => { goToPrevRef.current?.(); },
         onNextTrack: () => { goToNextRef.current?.(); },
       });
@@ -340,7 +357,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
           if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
             break;
           }
-          await new Promise<void>(r => setTimeout(r, 500));
+          await waitVisible(500);
           continue;
         }
 
@@ -352,9 +369,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
         if (completedRepeats < REPEATS_PER_SENTENCE) {
           mediaSessionService.holdAudioFocus();
-          await new Promise<void>(r =>
-            setTimeout(r, jitterDelay(INTER_REPEAT_BASE_DELAY, INTER_REPEAT_JITTER))
-          );
+          await waitVisible(jitterDelay(INTER_REPEAT_BASE_DELAY, INTER_REPEAT_JITTER));
         }
       }
 
@@ -363,9 +378,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
       setState(prev => ({ ...prev, totalPlayed: totalPlayedRef.current }));
 
       mediaSessionService.holdAudioFocus();
-      await new Promise<void>(r =>
-        setTimeout(r, jitterDelay(INTER_SENTENCE_BASE_DELAY, INTER_SENTENCE_JITTER))
-      );
+      await waitVisible(jitterDelay(INTER_SENTENCE_BASE_DELAY, INTER_SENTENCE_JITTER));
     }
   }, [pickRandomSentence, playSentenceOnce, getEligiblePool, addToHistory]);
 

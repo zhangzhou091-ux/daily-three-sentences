@@ -37,8 +37,12 @@ export const AchievementShareCard: React.FC<AchievementShareCardProps> = ({
       }
     } else {
       const text = `${shareData.title}\n\n${shareData.text}`;
-      await navigator.clipboard.writeText(text);
-      alert('已复制到剪贴板！');
+      try {
+        await navigator.clipboard.writeText(text);
+        alert('已复制到剪贴板！');
+      } catch {
+        alert('复制失败，请手动复制：\n\n' + text);
+      }
     }
   }, [achievement, level, streak]);
 

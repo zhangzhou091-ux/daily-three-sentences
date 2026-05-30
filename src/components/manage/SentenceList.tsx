@@ -46,6 +46,24 @@ export const SentenceList: React.FC<SentenceListProps> = memo(({ sentences, onDe
     }
   }, [enginePopupId]);
 
+  useEffect(() => {
+    if (!generatingAudioId) return;
+
+    const sentence = sentences.find(s => s.id === generatingAudioId);
+    if (sentence && hasAudioCache(sentence)) {
+      setGeneratingAudioId(null);
+      setGeneratingEngine(null);
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      setGeneratingAudioId(null);
+      setGeneratingEngine(null);
+    }, 30000);
+
+    return () => clearTimeout(timeout);
+  }, [sentences, generatingAudioId]);
+
   const handleAudioDeleteClick = (s: Sentence) => {
     if (audioDeleteConfirmId === s.id) {
       onDeleteAudio?.(s);
@@ -170,6 +188,11 @@ export const SentenceList: React.FC<SentenceListProps> = memo(({ sentences, onDe
             {getSafeTags(s.tags).map(tag => (
               <span key={tag} className="px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-[10px] font-black uppercase tracking-widest">{tag}</span>
             ))}
+            {s.scheduledDate && (
+              <span className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-1">
+                📅 {s.scheduledDate.replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2月$3日')}
+              </span>
+            )}
           </div>
           {onDeleteAudio && (
             <div className="flex items-center justify-between mb-4 px-3 py-2 bg-gray-50 rounded-xl">

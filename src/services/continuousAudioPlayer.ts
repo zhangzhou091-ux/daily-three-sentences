@@ -25,6 +25,7 @@ class ContinuousAudioPlayer {
   private currentBlobUrl: string | null = null;
   private initialized: boolean = false;
   private recoveryRetryCount: number = 0;
+  private visibilityHandler: (() => void) | null = null;
 
   constructor() {
     this.audio = new Audio();
@@ -68,11 +69,12 @@ class ContinuousAudioPlayer {
           this.audio.play().catch(() => {});
         }
       };
-      document.addEventListener('visibilitychange', () => {
+      this.visibilityHandler = () => {
         if (document.visibilityState === 'visible') {
           handleInterruption();
         }
-      });
+      };
+      document.addEventListener('visibilitychange', this.visibilityHandler);
       this.audio.onpause = this.handleAudioPause;
     }
 
@@ -84,6 +86,11 @@ class ContinuousAudioPlayer {
     this.generation++;
     this.active = false;
     this.recoveryRetryCount = 0;
+
+    if (this.visibilityHandler) {
+      document.removeEventListener('visibilitychange', this.visibilityHandler);
+      this.visibilityHandler = null;
+    }
 
     try {
       this.audio.onpause = null;
@@ -128,6 +135,9 @@ class ContinuousAudioPlayer {
       const doResolve = () => {
         if (settled) return;
         settled = true;
+        this.audio.pause();
+        this.audio.removeAttribute('src');
+        this.audio.load();
         this.revokeCurrentUrl();
         resolve();
       };
@@ -188,30 +198,7 @@ class ContinuousAudioPlayer {
         attemptPlay();
       };
 
-      this.audio.onloadeddata = () => {
-        if (!isCurrentGen() || settled) return;
-        if (isIOS()) {
-          setTimeout(() => {
-            if (!isCurrentGen() || settled) return;
-            if (this.audio.readyState >= 3) {
-              attemptPlay();
-            }
-          }, 100);
-        }
-      };
-
-      if (isIOS()) {
-        setTimeout(() => {
-          if (!isCurrentGen() || settled) return;
-          if (this.audio.readyState >= 3) {
-            attemptPlay();
-          } else {
-            this.audio.load();
-          }
-        }, 50);
-      } else {
-        this.audio.load();
-      }
+      this.audio.load();
 
       setTimeout(() => {
         if (!settled && isCurrentGen()) {
@@ -248,6 +235,7 @@ class ContinuousAudioPlayer {
   private handleAudioPause = (): void => {
     if (!this.active) return;
     if (!this.audio.src) return;
+    if (this.audio.ended) return;
 
     if (this.recoveryRetryCount >= PAUSE_RECOVERY_RETRIES) {
       console.warn('🔊 [连续播放器] 恢复重试次数耗尽，放弃当前播放');
