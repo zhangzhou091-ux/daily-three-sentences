@@ -475,7 +475,14 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     console.log('🔄 dailySelection 中句子已全部学习，但仍有未学习句子，触发重新生成');
     generateDailySelection();
   }, [allLearned, sentences, generateDailySelection, activeTab]);
-  
+
+  useEffect(() => {
+    if (activeTab !== 'learn') return;
+    if (dailySelection.length === 0) return;
+    if (currentIndex < dailySelection.length) return;
+    setCurrentIndex(0);
+  }, [dailySelection, currentIndex, activeTab, setCurrentIndex]);
+
   const currentReviewSentence = useMemo(() => {
     if (reviewQueue.length === 0 || currentReviewIndex < 0) return null;
     return reviewQueue[currentReviewIndex] || null;
