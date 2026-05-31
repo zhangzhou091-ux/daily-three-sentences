@@ -379,8 +379,11 @@ const disconnectSource = () => {
 };
 
 const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: number = 1): Promise<void> => {
+  const ios = isIOSAudio();
   const gen = ++audioGeneration;
   const isCurrentGen = () => gen === audioGeneration;
+
+  console.log(`🔊 [MiniMax] playAudioBlob 开始 | [iOS] ${ios} | [Blob大小] ${audioBlob.size} | [Blob类型] ${audioBlob.type} | [循环] ${loop} | [语速] ${rate} | [代数] ${gen}`);
 
   stopCurrentAudio();
   disconnectSource();
@@ -390,19 +393,23 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
   }
 
   const mimeType = audioBlob.type || 'audio/mpeg';
+  console.log(`🔊 [MiniMax] MIME类型 | [iOS] ${ios} | [类型] ${audioBlob.type} | [最终] ${mimeType}`);
   const url = URL.createObjectURL(new Blob([audioBlob], { type: mimeType }));
+  console.log(`🔊 [MiniMax] Blob URL 已创建 | [iOS] ${ios}`);
   const audio = new Audio();
   audio.preload = 'auto';
   audio.loop = loop;
   audio.playbackRate = rate;
   audio.crossOrigin = 'anonymous';
   currentAudioElement = audio;
+  console.log(`🔊 [MiniMax] Audio 元素已创建 | [iOS] ${ios}`);
 
   let sourceConnected = false;
 
   const connectToGain = () => {
     if (sourceConnected) return;
     if (isIOSAudio()) {
+      console.log(`🔊 [MiniMax] connectToGain 跳过 (iOS)`);
       sourceConnected = true;
       return;
     }
@@ -412,12 +419,14 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
       source.connect(gain);
       currentSource = source;
       sourceConnected = true;
+      console.log(`🔊 [MiniMax] connectToGain 成功 | [AudioContext状态] ${getAudioContext().ctx.state}`);
     } catch (e) {
       console.warn('🔊 [MiniMax] Web Audio 增益连接失败，使用原始音量:', e);
     }
   };
 
   const cleanup = () => {
+    console.log(`🔊 [MiniMax] cleanup | [iOS] ${ios} | [代数] ${gen} | [loop] ${loop}`);
     if (currentAudioElement === audio) {
       currentAudioElement = null;
     }
@@ -438,6 +447,7 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
     const doReject = (error: Error) => {
       if (settled) return;
       settled = true;
+      console.warn(`🔊 [MiniMax] doReject | [iOS] ${ios} | [代数] ${gen} | [错误] ${error.message}`);
       cleanup();
       reject(error);
     };
@@ -462,12 +472,17 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
     const attemptPlay = () => {
       if (!isCurrentGen() || settled) return;
 
+      console.log(`🔊 [MiniMax] audio.play() 调用 | [iOS] ${ios} | [readyState] ${audio.readyState} | [paused] ${audio.paused}`);
+
       audio.play().then(() => {
+        console.log(`🔊 [MiniMax] audio.play() 成功`);
         if (!loop) return;
         if (settled) return;
         doResolve();
       }).catch((playErr: DOMException) => {
         if (!isCurrentGen() || settled) return;
+
+        console.warn(`🔊 [MiniMax] audio.play() 失败 | [iOS] ${ios} | [错误名] ${playErr.name} | [错误信息] ${playErr.message}`);
 
         if (playErr.name === 'NotAllowedError') {
           if (isIOSAudio() && playbackRetryCount < IOS_PLAYBACK_RETRIES) {
@@ -485,15 +500,18 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
 
     audio.oncanplay = () => {
       if (!isCurrentGen() || settled) return;
+      console.log(`🔊 [MiniMax] oncanplay 触发 | [iOS] ${ios} | [readyState] ${audio.readyState} | [duration] ${audio.duration}`);
       connectToGain();
       attemptPlay();
     };
 
     audio.onloadeddata = () => {
       if (!isCurrentGen() || settled) return;
+      console.log(`🔊 [MiniMax] onloadeddata 触发 | [iOS] ${ios} | [readyState] ${audio.readyState} | [duration] ${audio.duration}`);
       if (isIOSAudio()) {
         setTimeout(() => {
           if (!isCurrentGen() || settled) return;
+          console.log(`🔊 [MiniMax] iOS onloadeddata 延迟播放 | [readyState] ${audio.readyState}`);
           connectToGain();
           attemptPlay();
         }, 100);
@@ -503,6 +521,7 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
     if (!loop) {
       audio.onended = () => {
         if (!isCurrentGen()) return;
+        console.log(`🔊 [MiniMax] onended 触发 | [代数] ${gen}`);
         doResolve();
       };
     }
@@ -524,11 +543,13 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
             break;
         }
       }
+      console.error(`🔊 [MiniMax] onerror 触发 | [iOS] ${ios} | [错误码] ${mediaError?.code} | [Blob大小] ${audioBlob.size} | [错误] ${errorMsg}`);
       doReject(new Error(errorMsg));
     };
 
     audio.onpause = () => {
       if (loop && currentAudioElement !== audio && !settled) {
+        console.log(`🔊 [MiniMax] onpause 触发 (loop, 非当前元素) | [iOS] ${ios}`);
         if (activePlaybackAudio === audio) {
           activePlaybackAudio = null;
         }
@@ -537,22 +558,27 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
     };
 
     audio.src = url;
+    console.log(`🔊 [MiniMax] audio.src 已设置 | [iOS] ${ios}`);
 
     if (isIOSAudio()) {
       setTimeout(() => {
         if (!isCurrentGen() || settled) return;
+        console.log(`🔊 [MiniMax] iOS 延迟加载 | [readyState] ${audio.readyState}`);
         if (audio.readyState >= 3) {
           attemptPlay();
         } else {
+          console.log(`🔊 [MiniMax] iOS audio.load() 调用`);
           audio.load();
         }
       }, 50);
     } else {
+      console.log(`🔊 [MiniMax] audio.load() 调用 (非iOS)`);
       audio.load();
     }
 
     setTimeout(() => {
       if (!settled && isCurrentGen()) {
+        console.warn(`🔊 [MiniMax] 播放超时 | [iOS] ${ios} | [超时] ${loop ? 120000 : 30000}ms | [readyState] ${audio.readyState}`);
         doReject(new Error('音频播放超时'));
       }
     }, loop ? 120000 : 30000);

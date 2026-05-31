@@ -109,6 +109,7 @@ class ContinuousAudioPlayer {
   }
 
   async playBlob(blob: Blob): Promise<void> {
+    const ios = isIOS();
     if (!this.active) {
       throw new Error('播放器未激活');
     }
@@ -116,17 +117,20 @@ class ContinuousAudioPlayer {
     const gen = this.generation;
     const isCurrentGen = () => gen === this.generation && this.active;
 
+    console.log(`🔊 [连续播放器] playBlob 开始 | [iOS] ${ios} | [Blob大小] ${blob.size} | [Blob类型] ${blob.type} | [代数] ${gen}`);
+
     this.revokeCurrentUrl();
 
     if (!blob || blob.size === 0) {
       throw new Error('音频数据为空');
     }
 
-    const mimeType = blob.type || 'audio/mpeg';
-    const url = URL.createObjectURL(new Blob([blob], { type: mimeType }));
+    const url = URL.createObjectURL(blob);
     this.currentBlobUrl = url;
+    console.log(`🔊 [连续播放器] Blob URL 已创建`);
 
     this.audio.src = url;
+    console.log(`🔊 [连续播放器] audio.src 已设置 | [iOS] ${ios}`);
 
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -135,6 +139,7 @@ class ContinuousAudioPlayer {
       const doResolve = () => {
         if (settled) return;
         settled = true;
+        console.log(`🔊 [连续播放器] doResolve | [代数] ${gen}`);
         this.audio.pause();
         this.audio.removeAttribute('src');
         this.audio.load();
@@ -145,6 +150,7 @@ class ContinuousAudioPlayer {
       const doReject = (error: Error) => {
         if (settled) return;
         settled = true;
+        console.warn(`🔊 [连续播放器] doReject | [代数] ${gen} | [错误] ${error.message}`);
         this.revokeCurrentUrl();
         reject(error);
       };
@@ -152,12 +158,18 @@ class ContinuousAudioPlayer {
       const attemptPlay = () => {
         if (!isCurrentGen() || settled) return;
 
+        console.log(`🔊 [连续播放器] audio.play() 调用 | [iOS] ${ios} | [readyState] ${this.audio.readyState} | [paused] ${this.audio.paused}`);
+
         this.connectGain();
 
-        this.audio.play().catch((err: DOMException) => {
+        this.audio.play().then(() => {
+          console.log(`🔊 [连续播放器] audio.play() 成功`);
+        }).catch((err: DOMException) => {
           if (!isCurrentGen() || settled) return;
 
-          if ((err.name === 'NotAllowedError' || err.name === 'AbortError') && isIOS() && retryCount < IOS_PLAY_RETRIES) {
+          console.warn(`🔊 [连续播放器] audio.play() 失败 | [错误名] ${err.name} | [错误信息] ${err.message}`);
+
+          if ((err.name === 'NotAllowedError' || err.name === 'AbortError') && ios && retryCount < IOS_PLAY_RETRIES) {
             retryCount++;
             console.warn(`🔊 [连续播放器] iOS 播放被阻止，第 ${retryCount}/${IOS_PLAY_RETRIES} 次重试...`);
             setTimeout(attemptPlay, IOS_PLAY_RETRY_DELAY * retryCount);
@@ -170,6 +182,7 @@ class ContinuousAudioPlayer {
 
       this.audio.onended = () => {
         if (!isCurrentGen()) return;
+        console.log(`🔊 [连续播放器] onended 触发 | [代数] ${gen}`);
         doResolve();
       };
 
@@ -190,18 +203,22 @@ class ContinuousAudioPlayer {
               break;
           }
         }
+        console.error(`🔊 [连续播放器] onerror 触发 | [错误码] ${mediaError?.code} | [Blob大小] ${blob.size} | [错误] ${errorMsg}`);
         doReject(new Error(errorMsg));
       };
 
       this.audio.oncanplay = () => {
         if (!isCurrentGen() || settled) return;
+        console.log(`🔊 [连续播放器] oncanplay 触发 | [readyState] ${this.audio.readyState} | [duration] ${this.audio.duration}`);
         attemptPlay();
       };
 
+      console.log(`🔊 [连续播放器] audio.load() 调用`);
       this.audio.load();
 
       setTimeout(() => {
         if (!settled && isCurrentGen()) {
+          console.warn(`🔊 [连续播放器] 播放超时 | [超时] ${PLAY_TIMEOUT}ms | [readyState] ${this.audio.readyState}`);
           doReject(new Error('音频播放超时'));
         }
       }, PLAY_TIMEOUT);

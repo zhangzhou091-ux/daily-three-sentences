@@ -273,18 +273,17 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
     throw new Error('音频数据为空');
   }
 
-  const mimeType = isIOS() ? 'audio/mpeg' : (audioBlob.type || 'audio/mpeg');
-  console.log(`🔊 [ElevenLabs] MIME类型决策 | [iOS] ${ios} | [原始类型] ${audioBlob.type} | [最终类型] ${mimeType}`);
+  const mimeType = audioBlob.type || 'audio/mpeg';
+  console.log(`🔊 [ElevenLabs] MIME类型 | [iOS] ${ios} | [类型] ${audioBlob.type} | [最终] ${mimeType}`);
 
-  const url = URL.createObjectURL(new Blob([audioBlob], { type: mimeType }));
+  const url = URL.createObjectURL(audioBlob);
+  console.log(`🔊 [ElevenLabs] Blob URL 已创建 | [iOS] ${ios} | [url] blob:...`);
   const audio = new Audio();
   audio.preload = 'auto';
   audio.loop = loop;
   audio.playbackRate = rate;
-  if (!isIOS()) {
-    audio.crossOrigin = 'anonymous';
-  }
-  console.log(`🔊 [ElevenLabs] Audio元素创建 | [crossOrigin] ${!ios} | [src] blob:...`);
+  audio.crossOrigin = 'anonymous';
+  console.log(`🔊 [ElevenLabs] Audio元素创建 | [src] blob:...`);
   currentAudioElement = audio;
 
   let sourceConnected = false;
@@ -309,6 +308,7 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
   };
 
   const cleanup = () => {
+    console.log(`🔊 [ElevenLabs] cleanup | [iOS] ${ios} | [代数] ${gen} | [loop] ${loop}`);
     if (currentAudioElement === audio) {
       currentAudioElement = null;
     }
@@ -415,6 +415,7 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
     if (!loop) {
       audio.onended = () => {
         if (!isCurrentGen()) return;
+        console.log(`🔊 [ElevenLabs] onended 触发 | [iOS] ${ios} | [代数] ${gen}`);
         doResolve();
       };
     }
@@ -444,12 +445,13 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
 
       console.error(`🔊 [ElevenLabs] onerror 触发 | [iOS] ${ios} | [错误码] ${mediaError?.code} | [错误信息] ${errorMsg} | [MIME] ${mimeType} | [Blob大小] ${audioBlob.size}`);
 
-      if (isIOS() && playbackRetryCount < IOS_PLAYBACK_RETRIES) {
+      if (mediaError?.code === MediaError.MEDIA_ERR_NETWORK && isIOS() && playbackRetryCount < IOS_PLAYBACK_RETRIES) {
         playbackRetryCount++;
-        console.warn(`🔊 [ElevenLabs] iOS 音频错误，第 ${playbackRetryCount}/${IOS_PLAYBACK_RETRIES} 次重试: ${errorMsg}`);
-
-        const retryUrl = URL.createObjectURL(new Blob([audioBlob], { type: mimeType }));
+        console.warn(`🔊 [ElevenLabs] iOS 网络错误，第 ${playbackRetryCount}/${IOS_PLAYBACK_RETRIES} 次重试...`);
+        const retryUrl = URL.createObjectURL(audioBlob);
+        console.log(`🔊 [ElevenLabs] onerror 重试 Blob URL 已创建`);
         audio.src = retryUrl;
+        console.log(`🔊 [ElevenLabs] onerror 重试 audio.src 已设置`);
         audio.load();
         return;
       }
@@ -459,6 +461,7 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
 
     audio.onpause = () => {
       if (loop && currentAudioElement !== audio && !settled) {
+        console.log(`🔊 [ElevenLabs] onpause 触发 (loop, 非当前元素) | [iOS] ${ios}`);
         if (activePlaybackAudio === audio) {
           activePlaybackAudio = null;
         }
@@ -476,16 +479,18 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
         if (audio.readyState >= 3) {
           attemptPlay();
         } else {
+          console.log(`🔊 [ElevenLabs] iOS audio.load() 调用`);
           audio.load();
         }
       }, 50);
     } else {
+      console.log(`🔊 [ElevenLabs] audio.load() 调用 (非iOS)`);
       audio.load();
-      console.log(`🔊 [ElevenLabs] audio.load() 已调用 (非iOS)`);
     }
 
     setTimeout(() => {
       if (!settled && isCurrentGen()) {
+        console.warn(`🔊 [ElevenLabs] 播放超时 | [iOS] ${ios} | [超时] ${loop ? 120000 : BASE_SPEAK_TIMEOUT}ms | [readyState] ${audio.readyState}`);
         doReject(new Error('音频播放超时'));
       }
     }, loop ? 120000 : BASE_SPEAK_TIMEOUT);
@@ -617,6 +622,13 @@ export const elevenLabsService = {
             console.log(`🔊 [ElevenLabs] 第 ${attempt + 1}/${adaptiveRetries} 次请求...`);
           }
 
+          const requestBody = {
+            text: trimmedText,
+            model_id: modelId,
+            output_format: DEFAULT_OUTPUT_FORMAT,
+          };
+          console.log(`🔊 [ElevenLabs] API 请求 | [尝试] ${attempt + 1}/${adaptiveRetries} | [文本长度] ${trimmedText.length} | [模型] ${modelId} | [语音] ${voiceId} | [格式] ${DEFAULT_OUTPUT_FORMAT} | [超时] ${adaptiveTimeout}ms`);
+
           response = await fetch(`${API_BASE}/v1/text-to-speech/${voiceId}`, {
             method: 'POST',
             headers: {
@@ -624,11 +636,7 @@ export const elevenLabsService = {
               'xi-api-key': apiKey.trim(),
               Accept: 'audio/mpeg',
             },
-            body: JSON.stringify({
-              text: trimmedText,
-              model_id: modelId,
-              output_format: DEFAULT_OUTPUT_FORMAT,
-            }),
+            body: JSON.stringify(requestBody),
             signal: controller.signal,
           });
           break;
@@ -704,7 +712,7 @@ export const elevenLabsService = {
         return { success: false, error: errorMessage };
       }
 
-      console.log(`🔊 [ElevenLabs] API 响应成功 | [状态码] ${response.status} | [Content-Type] ${response.headers.get('content-type')} | [模型] ${modelId}`);
+      console.log(`🔊 [ElevenLabs] API 响应成功 | [状态码] ${response.status} | [Content-Type] ${response.headers.get('content-type')} | [Content-Length] ${response.headers.get('content-length') || '未知'} | [模型] ${modelId}`);
 
       let audioBlob: Blob;
       try {
@@ -806,10 +814,17 @@ export const elevenLabsService = {
     if (validationCache &&
         validationCache.key === trimmedKey &&
         Date.now() - validationCache.timestamp < VALIDATE_CACHE_TTL) {
-      console.log('🔊 [ElevenLabs] 使用缓存的验证结果');
-      return validationCache.valid
-        ? { valid: true }
-        : { valid: false, error: 'API 密钥无效（缓存结果）' };
+      if (validationCache.valid) {
+        console.log('🔊 [ElevenLabs] 使用缓存的验证结果（有效）');
+        return { valid: true };
+      }
+      if (Date.now() - validationCache.timestamp > 30 * 1000 && navigator.onLine) {
+        console.log('🔊 [ElevenLabs] invalid 缓存已过期（>30s），清除后重新验证');
+        validationCache = null;
+      } else {
+        console.log('🔊 [ElevenLabs] 使用缓存的验证结果（无效）');
+        return { valid: false, error: 'API 密钥无效（缓存结果）' };
+      }
     }
 
     try {
@@ -837,42 +852,31 @@ export const elevenLabsService = {
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
-        console.warn('🔊 [ElevenLabs] /v1/user 超时，降级为 TTS 可用性检测');
+        console.warn('🔊 [ElevenLabs] /v1/user 超时，降级为 /v1/voices 验证');
       } else {
-        console.warn('🔊 [ElevenLabs] /v1/user 请求失败，降级为 TTS 可用性检测:', err);
+        console.warn('🔊 [ElevenLabs] /v1/user 请求失败，降级为 /v1/voices 验证:', err);
       }
     }
 
     try {
-      console.log('🔊 [ElevenLabs] 降级验证：测试 TTS 接口可用性');
+      console.log('🔊 [ElevenLabs] 降级验证：测试 /v1/voices 接口可用性（不消耗积分）');
       const testController = new AbortController();
       const testTimeoutId = setTimeout(() => testController.abort(), VALIDATE_TIMEOUT);
 
-      const testResponse = await fetch(`${API_BASE}/v1/text-to-speech/${POPULAR_VOICES[0].voice_id}`, {
-        method: 'POST',
+      const testResponse = await fetch(`${API_BASE}/v1/voices`, {
+        method: 'GET',
         headers: {
-          'Content-Type': 'application/json',
           'xi-api-key': trimmedKey,
-          Accept: 'audio/mpeg',
         },
-        body: JSON.stringify({
-          text: 'Hi',
-          model_id: DEFAULT_MODEL,
-          output_format: DEFAULT_OUTPUT_FORMAT,
-        }),
         signal: testController.signal,
       });
 
       clearTimeout(testTimeoutId);
 
       if (testResponse.ok) {
-        const testBlob = await testResponse.blob();
-        if (testBlob.size > 0) {
-          console.log('🔊 [ElevenLabs] TTS 可用性检测通过');
-          validationCache = { key: trimmedKey, valid: true, timestamp: Date.now() };
-          return { valid: true };
-        }
-        return { valid: false, error: 'API 返回空音频' };
+        console.log('🔊 [ElevenLabs] /v1/voices 可用性检测通过');
+        validationCache = { key: trimmedKey, valid: true, timestamp: Date.now() };
+        return { valid: true };
       }
 
       if (testResponse.status === 401) {
@@ -885,7 +889,7 @@ export const elevenLabsService = {
         return { valid: true, error: undefined };
       }
 
-      return { valid: false, error: `TTS 接口异常 (${testResponse.status})` };
+      return { valid: false, error: `验证接口异常 (${testResponse.status})` };
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         return { valid: false, error: '网络连接超时，请检查网络或代理设置' };

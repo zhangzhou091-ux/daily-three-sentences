@@ -44,8 +44,12 @@ let cachedAudioGeneration = 0;
 let speechSynthesisKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
 const playCachedBlob = async (blob: Blob, loop: boolean, rate: number): Promise<boolean> => {
+  const ios = isIOS();
+  console.log(`🔊 [缓存播放] 开始 | [iOS] ${ios} | [Blob大小] ${blob.size} | [Blob类型] ${blob.type} | [循环] ${loop} | [语速] ${rate}`);
+
   if (continuousAudioPlayer.isActivated()) {
     try {
+      console.log(`🔊 [缓存播放] 使用 continuousAudioPlayer`);
       if (loop) {
         continuousAudioPlayer.getAudioElement().loop = true;
         continuousAudioPlayer.getAudioElement().playbackRate = rate;
@@ -57,7 +61,7 @@ const playCachedBlob = async (blob: Blob, loop: boolean, rate: number): Promise<
       await continuousAudioPlayer.playBlob(blob);
       return true;
     } catch (err) {
-      console.warn('🔊 [playCachedBlob] continuousAudioPlayer 播放失败，回退独立 Audio:', err instanceof Error ? err.message : String(err));
+      console.warn('🔊 [缓存播放] continuousAudioPlayer 播放失败，回退独立 Audio:', err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -70,13 +74,14 @@ const playCachedBlob = async (blob: Blob, loop: boolean, rate: number): Promise<
     cachedAudioElement = null;
   }
 
-  const mimeType = blob.type || 'audio/mpeg';
-  const url = URL.createObjectURL(new Blob([blob], { type: mimeType }));
+  const url = URL.createObjectURL(blob);
+  console.log(`🔊 [缓存播放] Blob URL 已创建 | [代数] ${gen}`);
   const audio = new Audio();
   audio.preload = 'auto';
   audio.loop = loop;
   audio.playbackRate = rate;
   cachedAudioElement = audio;
+  console.log(`🔊 [缓存播放] Audio 元素已创建 | [iOS] ${ios}`);
 
   return new Promise((resolve) => {
     let settled = false;
@@ -85,21 +90,26 @@ const playCachedBlob = async (blob: Blob, loop: boolean, rate: number): Promise<
     const RETRY_DELAY = 200;
 
     const cleanup = () => {
+      console.log(`🔊 [缓存播放] cleanup | [代数] ${gen}`);
       if (cachedAudioElement === audio) cachedAudioElement = null;
       try { URL.revokeObjectURL(url); } catch { /* ignore */ }
     };
 
     const attemptPlay = () => {
       if (!isCurrentGen() || settled) return;
+      console.log(`🔊 [缓存播放] audio.play() 调用 | [iOS] ${ios} | [readyState] ${audio.readyState} | [paused] ${audio.paused}`);
       audio.play().then(() => {
+        console.log(`🔊 [缓存播放] audio.play() 成功`);
         if (loop && !settled) {
           settled = true;
           resolve(true);
         }
       }).catch((err: DOMException) => {
         if (!isCurrentGen() || settled) return;
-        if ((err.name === 'NotAllowedError' || err.name === 'AbortError') && isIOS() && retryCount < MAX_RETRIES) {
+        console.warn(`🔊 [缓存播放] audio.play() 失败 | [错误名] ${err.name} | [错误信息] ${err.message}`);
+        if ((err.name === 'NotAllowedError' || err.name === 'AbortError') && ios && retryCount < MAX_RETRIES) {
           retryCount++;
+          console.warn(`🔊 [缓存播放] iOS 重试 ${retryCount}/${MAX_RETRIES}...`);
           setTimeout(attemptPlay, RETRY_DELAY * retryCount);
           return;
         }
@@ -111,14 +121,17 @@ const playCachedBlob = async (blob: Blob, loop: boolean, rate: number): Promise<
 
     audio.oncanplay = () => {
       if (!isCurrentGen() || settled) return;
+      console.log(`🔊 [缓存播放] oncanplay 触发 | [readyState] ${audio.readyState} | [duration] ${audio.duration}`);
       attemptPlay();
     };
 
     audio.onloadeddata = () => {
       if (!isCurrentGen() || settled) return;
-      if (isIOS()) {
+      console.log(`🔊 [缓存播放] onloadeddata 触发 | [iOS] ${ios} | [readyState] ${audio.readyState} | [duration] ${audio.duration}`);
+      if (ios) {
         setTimeout(() => {
           if (!isCurrentGen() || settled) return;
+          console.log(`🔊 [缓存播放] iOS onloadeddata 延迟播放 | [readyState] ${audio.readyState}`);
           attemptPlay();
         }, 100);
       }
@@ -127,6 +140,7 @@ const playCachedBlob = async (blob: Blob, loop: boolean, rate: number): Promise<
     if (!loop) {
       audio.onended = () => {
         if (!isCurrentGen()) return;
+        console.log(`🔊 [缓存播放] onended 触发 | [代数] ${gen}`);
         settled = true;
         cleanup();
         resolve(true);
@@ -135,9 +149,13 @@ const playCachedBlob = async (blob: Blob, loop: boolean, rate: number): Promise<
 
     audio.onerror = () => {
       if (!isCurrentGen() || settled) return;
-      if (isIOS() && retryCount < MAX_RETRIES) {
+      const mediaError = audio.error;
+      console.error(`🔊 [缓存播放] onerror 触发 | [错误码] ${mediaError?.code} | [Blob大小] ${blob.size}`);
+      if (ios && retryCount < MAX_RETRIES) {
         retryCount++;
-        const retryUrl = URL.createObjectURL(new Blob([blob], { type: mimeType }));
+        console.warn(`🔊 [缓存播放] iOS 错误重试 ${retryCount}/${MAX_RETRIES}...`);
+        const retryUrl = URL.createObjectURL(blob);
+        console.log(`🔊 [缓存播放] onerror 重试 Blob URL 已创建`);
         audio.src = retryUrl;
         audio.load();
         return;
@@ -148,13 +166,16 @@ const playCachedBlob = async (blob: Blob, loop: boolean, rate: number): Promise<
     };
 
     audio.src = url;
+    console.log(`🔊 [缓存播放] audio.src 已设置 | [iOS] ${ios}`);
 
-    if (isIOS()) {
+    if (ios) {
       setTimeout(() => {
         if (!isCurrentGen() || settled) return;
+        console.log(`🔊 [缓存播放] iOS 延迟加载 | [readyState] ${audio.readyState}`);
         if (audio.readyState >= 3) {
           attemptPlay();
         } else {
+          console.log(`🔊 [缓存播放] iOS audio.load() 调用`);
           audio.load();
         }
       }, 150);
