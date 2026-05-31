@@ -222,39 +222,44 @@ const ensureBucket = async (): Promise<{ success: boolean; message: string }> =>
   const client = supabaseService.client!;
 
   try {
-    const { data, error } = await client.storage.listBuckets();
+    // 策略：不依赖 listBuckets（会被 RLS 拦），直接尝试对目标 Bucket 做一个轻量操作（list）
+    const { error: listError } = await client.storage.from(BUCKET_NAME).list('', { limit: 1 });
 
-    if (error) {
-      return { success: false, message: `无法列出存储桶: ${error.message}` };
+    if (!listError) {
+      // list 成功 → Bucket 存在且可读
+      return { success: true, message: `存储桶 "${BUCKET_NAME}" 可访问` };
     }
 
-    const exists = (data || []).some(b => b.name === BUCKET_NAME);
+    // 检查是否是 "bucket not found" 错误
+    if (isBucketNotFoundError(listError.message)) {
+      console.log(`🔊 [CloudCache] 存储桶 "${BUCKET_NAME}" 未找到，尝试创建...`);
+      const { error: createError } = await client.storage.createBucket(BUCKET_NAME, {
+        public: true,
+        fileSizeLimit: 5242880,
+      });
 
-    if (exists) {
-      return { success: true, message: `存储桶 "${BUCKET_NAME}" 已存在` };
+      if (createError) {
+        console.error(`🔊 [CloudCache] 创建存储桶失败: ${createError.message}`);
+        return {
+          success: false,
+          message: `存储桶不存在且无法自动创建: ${createError.message}`,
+        };
+      }
+
+      console.log(`🔊 [CloudCache] 存储桶 "${BUCKET_NAME}" 创建成功（公开读取）`);
+      console.log(`🔊 [CloudCache] ⚠️  请在 Supabase Dashboard → Storage → Policies 中添加以下策略：`);
+      console.log(`   1. 允许上传: INSERT, target: storage.objects, USING (bucket_id = '${BUCKET_NAME}')`);
+      console.log(`   2. 允许下载: SELECT, target: storage.objects, USING (bucket_id = '${BUCKET_NAME}')`);
+      console.log(`   或在 SQL Editor 中执行：`);
+      console.log(`   CREATE POLICY "Allow public read" ON storage.objects FOR SELECT USING (bucket_id = '${BUCKET_NAME}');`);
+      console.log(`   CREATE POLICY "Allow anon upload" ON storage.objects FOR INSERT WITH CHECK (bucket_id = '${BUCKET_NAME}');`);
+      console.log(`   CREATE POLICY "Allow anon update" ON storage.objects FOR UPDATE USING (bucket_id = '${BUCKET_NAME}');`);
+
+      return { success: true, message: `存储桶 "${BUCKET_NAME}" 创建成功` };
     }
 
-    console.log(`🔊 [CloudCache] 正在创建存储桶 "${BUCKET_NAME}"...`);
-    const { error: createError } = await client.storage.createBucket(BUCKET_NAME, {
-      public: true,
-      fileSizeLimit: 5242880,
-    });
-
-    if (createError) {
-      console.error(`🔊 [CloudCache] 创建存储桶失败: ${createError.message}`);
-      return { success: false, message: `创建存储桶失败: ${createError.message}` };
-    }
-
-    console.log(`🔊 [CloudCache] 存储桶 "${BUCKET_NAME}" 创建成功（公开读取）`);
-    console.log(`🔊 [CloudCache] ⚠️  请在 Supabase Dashboard → Storage → Policies 中添加以下策略：`);
-    console.log(`   1. 允许上传: INSERT, target: storage.objects, USING (bucket_id = '${BUCKET_NAME}')`);
-    console.log(`   2. 允许下载: SELECT, target: storage.objects, USING (bucket_id = '${BUCKET_NAME}')`);
-    console.log(`   或在 SQL Editor 中执行：`);
-    console.log(`   CREATE POLICY "Allow public read" ON storage.objects FOR SELECT USING (bucket_id = '${BUCKET_NAME}');`);
-    console.log(`   CREATE POLICY "Allow anon upload" ON storage.objects FOR INSERT WITH CHECK (bucket_id = '${BUCKET_NAME}');`);
-    console.log(`   CREATE POLICY "Allow anon update" ON storage.objects FOR UPDATE USING (bucket_id = '${BUCKET_NAME}');`);
-
-    return { success: true, message: `存储桶 "${BUCKET_NAME}" 创建成功` };
+    // 既不是 bucket not found，也不是成功 → 是其他错误（RLS、权限、网络等）
+    return { success: false, message: `存储桶访问被拒绝: ${listError.message}` };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { success: false, message: `检查存储桶异常: ${msg}` };

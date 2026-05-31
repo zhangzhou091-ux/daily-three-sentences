@@ -11,6 +11,7 @@ import { edgeTtsService, POPULAR_VOICES as EdgePopularVoices } from '../services
 import { ttsCloudCacheService } from '../services/ttsCloudCacheService';
 import { UserSettings } from '../types';
 import EnvCheckPanel from '../components/EnvCheckPanel';
+import DiagnosticsPanel from '../components/DiagnosticsPanel';
 import SupabaseConfigPanel from '../components/SupabaseConfigPanel';
 
 const MESSAGE_DURATION = 3000;
@@ -968,9 +969,15 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
             </div>
           </div>
 
-          {/* 环境诊断面板 - 在设置页面显示更详细的信息 */}
+          {/* 一键诊断面板 */}
           <div className="space-y-2">
-            <h3 className="text-[11px] font-black text-gray-600 uppercase tracking-[0.2em] ml-2">环境诊断</h3>
+            <h3 className="text-[11px] font-black text-gray-600 uppercase tracking-[0.2em] ml-2">一键诊断</h3>
+            <DiagnosticsPanel />
+          </div>
+
+          {/* 环境配置信息 */}
+          <div className="space-y-2">
+            <h3 className="text-[11px] font-black text-gray-600 uppercase tracking-[0.2em] ml-2">环境配置</h3>
             <EnvCheckPanel />
           </div>
 

@@ -840,68 +840,54 @@ export const elevenLabsService = {
     }
 
     try {
+      const validateVoiceId = POPULAR_VOICES[0].voice_id;
+      console.log('🔊 [ElevenLabs] 验证密钥：合成最小音频 "Hi" (约 1 字符配额)');
+
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), VALIDATE_TIMEOUT);
 
-      const response = await fetch(`${API_BASE}/v1/user`, {
-        method: 'GET',
+      const response = await fetch(`${API_BASE}/v1/text-to-speech/${validateVoiceId}`, {
+        method: 'POST',
         headers: {
+          'Content-Type': 'application/json',
           'xi-api-key': trimmedKey,
+          'Accept': 'audio/mpeg',
         },
+        body: JSON.stringify({
+          text: 'Hi',
+          model_id: DEFAULT_MODEL,
+          output_format: DEFAULT_OUTPUT_FORMAT,
+        }),
         signal: controller.signal,
       });
 
       clearTimeout(timeoutId);
 
       if (response.ok) {
+        console.log('🔊 [ElevenLabs] /v1/text-to-speech 验证通过 (200 OK)');
         validationCache = { key: trimmedKey, valid: true, timestamp: Date.now() };
         return { valid: true };
       }
 
       if (response.status === 401) {
+        console.warn('🔊 [ElevenLabs] /v1/text-to-speech 返回 401，密钥无 TTS 权限');
         validationCache = { key: trimmedKey, valid: false, timestamp: Date.now() };
         return { valid: false, error: 'API 密钥无效' };
       }
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        console.warn('🔊 [ElevenLabs] /v1/user 超时，降级为 /v1/voices 验证');
-      } else {
-        console.warn('🔊 [ElevenLabs] /v1/user 请求失败，降级为 /v1/voices 验证:', err);
-      }
-    }
 
-    try {
-      console.log('🔊 [ElevenLabs] 降级验证：测试 /v1/voices 接口可用性（不消耗积分）');
-      const testController = new AbortController();
-      const testTimeoutId = setTimeout(() => testController.abort(), VALIDATE_TIMEOUT);
-
-      const testResponse = await fetch(`${API_BASE}/v1/voices`, {
-        method: 'GET',
-        headers: {
-          'xi-api-key': trimmedKey,
-        },
-        signal: testController.signal,
-      });
-
-      clearTimeout(testTimeoutId);
-
-      if (testResponse.ok) {
-        console.log('🔊 [ElevenLabs] /v1/voices 可用性检测通过');
+      if (response.status === 429) {
+        console.log('🔊 [ElevenLabs] 429 限流，密钥有效');
         validationCache = { key: trimmedKey, valid: true, timestamp: Date.now() };
         return { valid: true };
       }
 
-      if (testResponse.status === 401) {
-        validationCache = { key: trimmedKey, valid: false, timestamp: Date.now() };
-        return { valid: false, error: 'API 密钥无效' };
-      }
-      if (testResponse.status === 429) {
-        console.log('🔊 [ElevenLabs] 429 限流，密钥有效');
+      if (response.status === 422) {
+        console.warn('🔊 [ElevenLabs] /v1/text-to-speech 返回 422，语音 ID 可能无效，但密钥本身有效');
         validationCache = { key: trimmedKey, valid: true, timestamp: Date.now() };
-        return { valid: true, error: undefined };
+        return { valid: true };
       }
 
-      return { valid: false, error: `验证接口异常 (${testResponse.status})` };
+      return { valid: false, error: `验证接口异常 (${response.status})` };
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         return { valid: false, error: '网络连接超时，请检查网络或代理设置' };
