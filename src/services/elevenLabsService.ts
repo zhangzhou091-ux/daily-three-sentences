@@ -262,6 +262,9 @@ const disconnectSource = () => {
 const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: number = 1): Promise<void> => {
   const gen = ++audioGeneration;
   const isCurrentGen = () => gen === audioGeneration;
+  const ios = isIOS();
+
+  console.log(`🔊 [ElevenLabs] playAudioBlob 开始 | [iOS] ${ios} | [Blob大小] ${audioBlob.size} | [Blob类型] ${audioBlob.type} | [循环] ${loop} | [语速] ${rate} | [代数] ${gen}`);
 
   stopCurrentAudio();
   disconnectSource();
@@ -271,6 +274,8 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
   }
 
   const mimeType = isIOS() ? 'audio/mpeg' : (audioBlob.type || 'audio/mpeg');
+  console.log(`🔊 [ElevenLabs] MIME类型决策 | [iOS] ${ios} | [原始类型] ${audioBlob.type} | [最终类型] ${mimeType}`);
+
   const url = URL.createObjectURL(new Blob([audioBlob], { type: mimeType }));
   const audio = new Audio();
   audio.preload = 'auto';
@@ -279,6 +284,7 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
   if (!isIOS()) {
     audio.crossOrigin = 'anonymous';
   }
+  console.log(`🔊 [ElevenLabs] Audio元素创建 | [crossOrigin] ${!ios} | [src] blob:...`);
   currentAudioElement = audio;
 
   let sourceConnected = false;
@@ -286,6 +292,7 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
   const connectToGain = () => {
     if (sourceConnected) return;
     if (isIOS()) {
+      console.log(`🔊 [ElevenLabs] connectToGain 跳过 (iOS)`);
       sourceConnected = true;
       return;
     }
@@ -295,6 +302,7 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
       source.connect(gain);
       currentSource = source;
       sourceConnected = true;
+      console.log(`🔊 [ElevenLabs] connectToGain 成功 | [AudioContext状态] ${getAudioContext().ctx.state}`);
     } catch (e) {
       console.warn('🔊 [ElevenLabs] Web Audio 增益连接失败，使用原始音量:', e);
     }
@@ -345,12 +353,17 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
     const attemptPlay = () => {
       if (!isCurrentGen() || settled) return;
 
+      console.log(`🔊 [ElevenLabs] audio.play() 调用 | [iOS] ${ios} | [readyState] ${audio.readyState} | [paused] ${audio.paused} | [currentSrc] ${audio.currentSrc ? 'blob:...' : 'empty'}`);
+
       audio.play().then(() => {
+        console.log(`🔊 [ElevenLabs] audio.play() 成功 | [iOS] ${ios}`);
         if (!loop) return;
         if (settled) return;
         doResolve();
       }).catch((playErr: DOMException) => {
         if (!isCurrentGen() || settled) return;
+
+        console.warn(`🔊 [ElevenLabs] audio.play() 失败 | [iOS] ${ios} | [错误名] ${playErr.name} | [错误信息] ${playErr.message}`);
 
         if (playErr.name === 'NotAllowedError') {
           if (isIOS() && playbackRetryCount < IOS_PLAYBACK_RETRIES) {
@@ -380,16 +393,19 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
 
     audio.oncanplay = () => {
       if (!isCurrentGen() || settled) return;
+      console.log(`🔊 [ElevenLabs] oncanplay 触发 | [iOS] ${ios} | [readyState] ${audio.readyState} | [duration] ${audio.duration}`);
       connectToGain();
       attemptPlay();
     };
 
     audio.onloadeddata = () => {
       if (!isCurrentGen() || settled) return;
+      console.log(`🔊 [ElevenLabs] onloadeddata 触发 | [iOS] ${ios} | [readyState] ${audio.readyState} | [duration] ${audio.duration}`);
 
       if (isIOS()) {
         setTimeout(() => {
           if (!isCurrentGen() || settled) return;
+          console.log(`🔊 [ElevenLabs] iOS onloadeddata 延迟播放 | [readyState] ${audio.readyState}`);
           connectToGain();
           attemptPlay();
         }, 100);
@@ -426,6 +442,8 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
         }
       }
 
+      console.error(`🔊 [ElevenLabs] onerror 触发 | [iOS] ${ios} | [错误码] ${mediaError?.code} | [错误信息] ${errorMsg} | [MIME] ${mimeType} | [Blob大小] ${audioBlob.size}`);
+
       if (isIOS() && playbackRetryCount < IOS_PLAYBACK_RETRIES) {
         playbackRetryCount++;
         console.warn(`🔊 [ElevenLabs] iOS 音频错误，第 ${playbackRetryCount}/${IOS_PLAYBACK_RETRIES} 次重试: ${errorMsg}`);
@@ -449,10 +467,12 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
     };
 
     audio.src = url;
+    console.log(`🔊 [ElevenLabs] audio.src 已设置 | [iOS] ${ios} | [MIME] ${mimeType}`);
 
     if (isIOS()) {
       setTimeout(() => {
         if (!isCurrentGen() || settled) return;
+        console.log(`🔊 [ElevenLabs] iOS 延迟加载 | [readyState] ${audio.readyState}`);
         if (audio.readyState >= 3) {
           attemptPlay();
         } else {
@@ -461,6 +481,7 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
       }, 50);
     } else {
       audio.load();
+      console.log(`🔊 [ElevenLabs] audio.load() 已调用 (非iOS)`);
     }
 
     setTimeout(() => {
@@ -480,6 +501,9 @@ export const elevenLabsService = {
     modelId: string = DEFAULT_MODEL,
     rate: number = 1
   ): Promise<SpeakResult> {
+    const ios = isIOS();
+    console.log(`🔊 [ElevenLabs] speak() 开始 | [iOS] ${ios} | [模型] ${modelId} | [语音] ${voiceId} | [文本长度] ${text?.length} | [循环] ${loop} | [语速] ${rate}`);
+
     if (!text || typeof text !== 'string' || !text.trim()) {
       return { success: false, error: '发音文本为空' };
     }
@@ -676,15 +700,21 @@ export const elevenLabsService = {
           errorMessage = '请求参数错误，请检查语音设置';
         }
 
+        console.error(`🔊 [ElevenLabs] API 响应错误 | [状态码] ${response.status} | [模型] ${modelId} | [语音] ${voiceId} | [错误] ${errorMessage}`);
         return { success: false, error: errorMessage };
       }
+
+      console.log(`🔊 [ElevenLabs] API 响应成功 | [状态码] ${response.status} | [Content-Type] ${response.headers.get('content-type')} | [模型] ${modelId}`);
 
       let audioBlob: Blob;
       try {
         audioBlob = await response.blob();
-      } catch {
+        console.log(`🔊 [ElevenLabs] response.blob() 成功 | [大小] ${audioBlob.size} | [类型] ${audioBlob.type}`);
+      } catch (blobErr) {
+        console.warn(`🔊 [ElevenLabs] response.blob() 失败，降级为 arrayBuffer | [错误] ${blobErr instanceof Error ? blobErr.message : String(blobErr)}`);
         const buffer = await response.arrayBuffer();
         audioBlob = new Blob([buffer], { type: 'audio/mpeg' });
+        console.log(`🔊 [ElevenLabs] arrayBuffer 降级成功 | [大小] ${audioBlob.size} | [类型] ${audioBlob.type}`);
       }
 
       if (!audioBlob || audioBlob.size === 0) {
