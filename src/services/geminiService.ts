@@ -490,7 +490,7 @@ const syncToLocalCache = async (
   const trimmedText = text.trim();
   if (engine === 'elevenlabs') {
     const elVoiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
-    const elModelId = 'eleven_multilingual_v2';
+    const elModelId = elevenLabsService.getDefaultModel();
     elevenLabsCacheService.put(trimmedText, elVoiceId, elModelId, blob).catch(() => {});
   } else {
     try {
@@ -514,7 +514,7 @@ const tryUnifiedCacheFirst = async (
   if (engine === 'edgeTts' || engine === 'webSpeech') return null;
 
   const elVoiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
-  const elModelId = 'eleven_multilingual_v2';
+  const elModelId = elevenLabsService.getDefaultModel();
 
   try {
     const elCached = await elevenLabsCacheService.get(trimmedText, elVoiceId, elModelId);

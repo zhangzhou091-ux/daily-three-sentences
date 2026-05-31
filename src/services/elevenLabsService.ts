@@ -52,7 +52,7 @@ interface PendingSpeakRequest {
 }
 
 const API_BASE = 'https://api.elevenlabs.io';
-const DEFAULT_MODEL = 'eleven_v3';
+const DEFAULT_MODEL = 'eleven_multilingual_v2';
 const DEFAULT_OUTPUT_FORMAT = 'mp3_44100_128';
 const BASE_SPEAK_TIMEOUT = 20000;
 const VOICES_CACHE_TTL = 30 * 60 * 1000;
@@ -674,7 +674,13 @@ export const elevenLabsService = {
         return { success: false, error: errorMessage };
       }
 
-      const audioBlob = await response.blob();
+      let audioBlob: Blob;
+      try {
+        audioBlob = await response.blob();
+      } catch {
+        const buffer = await response.arrayBuffer();
+        audioBlob = new Blob([buffer], { type: 'audio/mpeg' });
+      }
 
       if (!audioBlob || audioBlob.size === 0) {
         return { success: false, error: '未收到音频数据' };
@@ -859,6 +865,10 @@ export const elevenLabsService = {
 
   getDefaultVoiceId(): string {
     return POPULAR_VOICES[0].voice_id;
+  },
+
+  getDefaultModel(): string {
+    return DEFAULT_MODEL;
   },
 
   stop(): void {

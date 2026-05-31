@@ -53,9 +53,22 @@ const saveStudyTab = (tab: StudyStep) => {
   } catch { /* ignore */ }
 };
 
+const loadLearnProgressIndex = (): number => {
+  try {
+    const saved = localStorage.getItem('d3s_learn_progress') ||
+                  sessionStorage.getItem('d3s_learn_progress');
+    if (!saved) return 0;
+    const { index, date } = JSON.parse(saved);
+    if (date === getLocalDateString() && typeof index === 'number' && index >= 0) {
+      return index;
+    }
+  } catch { /* ignore */ }
+  return 0;
+};
+
 const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   const [activeTab, setActiveTabState] = useState<StudyStep>(() => loadSavedTab());
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [currentIndex, setCurrentIndex] = useState(() => loadLearnProgressIndex());
   const [isFlipped, setIsFlipped] = useState(false);
   
   const [isOnline, setIsOnline] = useState(navigator.onLine);
