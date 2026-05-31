@@ -237,6 +237,9 @@ let gainNode: GainNode | null = null;
 let currentSource: MediaElementAudioSourceNode | null = null;
 
 const getAudioContext = (): { ctx: AudioContext; gain: GainNode } => {
+  if (isIOS()) {
+    throw new Error('iOS 不使用 AudioContext');
+  }
   if (!audioContext || audioContext.state === 'closed') {
     audioContext = new AudioContext();
     gainNode = audioContext.createGain();
@@ -267,13 +270,15 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
     throw new Error('音频数据为空');
   }
 
-  const mimeType = audioBlob.type || 'audio/mpeg';
+  const mimeType = isIOS() ? 'audio/mpeg' : (audioBlob.type || 'audio/mpeg');
   const url = URL.createObjectURL(new Blob([audioBlob], { type: mimeType }));
   const audio = new Audio();
   audio.preload = 'auto';
   audio.loop = loop;
   audio.playbackRate = rate;
-  audio.crossOrigin = 'anonymous';
+  if (!isIOS()) {
+    audio.crossOrigin = 'anonymous';
+  }
   currentAudioElement = audio;
 
   let sourceConnected = false;
