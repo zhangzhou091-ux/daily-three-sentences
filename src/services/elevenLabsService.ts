@@ -282,8 +282,10 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
   audio.preload = 'auto';
   audio.loop = loop;
   audio.playbackRate = rate;
-  audio.crossOrigin = 'anonymous';
-  console.log(`🔊 [ElevenLabs] Audio元素创建 | [src] blob:...`);
+  if (!ios) {
+    audio.crossOrigin = 'anonymous';
+  }
+  console.log(`🔊 [ElevenLabs] Audio元素创建 | [iOS] ${ios} | [crossOrigin] ${ios ? '未设置' : 'anonymous'} | [src] blob:...`);
   currentAudioElement = audio;
 
   let sourceConnected = false;
@@ -714,15 +716,25 @@ export const elevenLabsService = {
 
       console.log(`🔊 [ElevenLabs] API 响应成功 | [状态码] ${response.status} | [Content-Type] ${response.headers.get('content-type')} | [Content-Length] ${response.headers.get('content-length') || '未知'} | [模型] ${modelId}`);
 
+      const ios = isIOS();
+      const contentType = response.headers.get('content-type') || 'audio/mpeg';
       let audioBlob: Blob;
-      try {
-        audioBlob = await response.blob();
-        console.log(`🔊 [ElevenLabs] response.blob() 成功 | [大小] ${audioBlob.size} | [类型] ${audioBlob.type}`);
-      } catch (blobErr) {
-        console.warn(`🔊 [ElevenLabs] response.blob() 失败，降级为 arrayBuffer | [错误] ${blobErr instanceof Error ? blobErr.message : String(blobErr)}`);
+
+      if (ios) {
         const buffer = await response.arrayBuffer();
-        audioBlob = new Blob([buffer], { type: 'audio/mpeg' });
-        console.log(`🔊 [ElevenLabs] arrayBuffer 降级成功 | [大小] ${audioBlob.size} | [类型] ${audioBlob.type}`);
+        console.log(`🔊 [ElevenLabs] response.arrayBuffer() | [iOS] true | [byteLength] ${buffer.byteLength}`);
+        audioBlob = new Blob([buffer], { type: contentType });
+        console.log(`🔊 [ElevenLabs] Blob 手动构造 | [iOS] true | [大小] ${audioBlob.size} | [类型] ${audioBlob.type}`);
+      } else {
+        try {
+          audioBlob = await response.blob();
+          console.log(`🔊 [ElevenLabs] response.blob() 成功 | [大小] ${audioBlob.size} | [类型] ${audioBlob.type}`);
+        } catch (blobErr) {
+          console.warn(`🔊 [ElevenLabs] response.blob() 失败，降级为 arrayBuffer | [错误] ${blobErr instanceof Error ? blobErr.message : String(blobErr)}`);
+          const buffer = await response.arrayBuffer();
+          audioBlob = new Blob([buffer], { type: 'audio/mpeg' });
+          console.log(`🔊 [ElevenLabs] arrayBuffer 降级成功 | [大小] ${audioBlob.size} | [类型] ${audioBlob.type}`);
+        }
       }
 
       if (!audioBlob || audioBlob.size === 0) {
@@ -1000,7 +1012,20 @@ export const elevenLabsService = {
         return null;
       }
 
-      const blob = await response.blob();
+      const ios = isIOS();
+      const contentType = response.headers.get('content-type') || 'audio/mpeg';
+      let blob: Blob;
+
+      if (ios) {
+        const buffer = await response.arrayBuffer();
+        console.log(`🔊 [ElevenLabs] fetchAudioBlob: response.arrayBuffer() | [iOS] true | [byteLength] ${buffer.byteLength}`);
+        blob = new Blob([buffer], { type: contentType });
+        console.log(`🔊 [ElevenLabs] fetchAudioBlob: Blob 手动构造 | [iOS] true | [大小] ${blob.size} | [类型] ${blob.type}`);
+      } else {
+        blob = await response.blob();
+        console.log(`🔊 [ElevenLabs] fetchAudioBlob: response.blob() | [大小] ${blob.size} | [类型] ${blob.type}`);
+      }
+
       if (!blob || blob.size === 0) {
         console.warn('🔊 [ElevenLabs] fetchAudioBlob: API 返回空音频');
         return null;
