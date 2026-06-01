@@ -1,4 +1,4 @@
-const CACHE_NAME = 'd3s-v1';
+const CACHE_NAME = 'd3s-v2-20260602';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
