@@ -17,7 +17,8 @@ import { ttsCloudCacheService } from './ttsCloudCacheService';
 import { dbService } from './dbService';
 import { elevenLabsCacheService } from './elevenLabsCacheService';
 
-const SPEAK_TIMEOUT = 10000;
+const SPEAK_TIMEOUT = 15000;
+const SPEAK_TIMEOUT_PER_CHAR_MS = 250;
 const SUGGEST_TIMEOUT = 5000;
 
 const isIOS = (): boolean => {
@@ -394,6 +395,7 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
       }
     };
 
+    const timeoutMs = Math.max(SPEAK_TIMEOUT, text.length * SPEAK_TIMEOUT_PER_CHAR_MS);
     const timeoutId = setTimeout(() => {
       if (promiseResolved) return;
       promiseResolved = true;
@@ -402,7 +404,7 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
       cleanup();
       console.warn('语音合成超时，已取消');
       resolve({ success: false, error: '语音合成超时，请重试' });
-    }, loop ? 120000 : SPEAK_TIMEOUT);
+    }, loop ? 120000 : timeoutMs);
 
     const startSpeak = () => {
       if (!isCurrentGen() || (!loopActiveFlag && !promiseResolved)) {
@@ -816,7 +818,7 @@ export const geminiService = {
 
     try {
       const elVoiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
-      const elModelId = 'eleven_multilingual_v2';
+      const elModelId = 'eleven_multilingual_v3';
       const elCached = await elevenLabsCacheService.get(trimmedText, elVoiceId, elModelId);
       if (elCached) {
         console.log(`🔊 [fetchBlob] ElevenLabs 本地精确命中`);

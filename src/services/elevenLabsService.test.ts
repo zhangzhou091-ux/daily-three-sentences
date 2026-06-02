@@ -1290,7 +1290,7 @@ describe('elevenLabsService - iOS 兼容性修复验证', () => {
         validApiKey,
         '21m00Tcm4TlvDq8ikWAM',
         false,
-        'eleven_multilingual_v2',
+        'eleven_multilingual_v3',
         0.75,
       );
 

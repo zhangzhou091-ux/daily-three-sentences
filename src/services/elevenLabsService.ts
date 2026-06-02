@@ -52,7 +52,7 @@ interface PendingSpeakRequest {
 }
 
 const API_BASE = 'https://api.elevenlabs.io';
-const DEFAULT_MODEL = 'eleven_multilingual_v2';
+const DEFAULT_MODEL = 'eleven_multilingual_v3';
 const DEFAULT_OUTPUT_FORMAT = 'mp3_44100_128';
 const BASE_SPEAK_TIMEOUT = 20000;
 const VOICES_CACHE_TTL = 30 * 60 * 1000;

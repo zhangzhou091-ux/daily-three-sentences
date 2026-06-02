@@ -140,6 +140,10 @@ class ContinuousAudioPlayer {
         if (settled) return;
         settled = true;
         console.log(`🔊 [连续播放器] doResolve | [代数] ${gen}`);
+        // iOS: 先移除 onpause 防止 pause() 触发恢复逻辑
+        if (isIOS()) {
+          this.audio.onpause = null;
+        }
         this.audio.pause();
         this.audio.removeAttribute('src');
         this.audio.load();
@@ -259,18 +263,42 @@ class ContinuousAudioPlayer {
       return;
     }
 
+    // 记录被暂停时的播放位置，用于判断是否已接近末尾
+    const currentTime = this.audio.currentTime;
+    const duration = this.audio.duration;
+
+    // 如果音频已播到末尾 0.3 秒内，说明是自然结束前的暂停，不恢复
+    if (duration && currentTime > duration - 0.3) {
+      console.log('🔊 [连续播放器] 音频已接近末尾（剩余<0.3s），跳过恢复');
+      return;
+    }
+
     this.recoveryRetryCount++;
-    console.log(`🔊 [连续播放器] 句子音频被中断，第 ${this.recoveryRetryCount}/${PAUSE_RECOVERY_RETRIES} 次尝试恢复...`);
+    // 渐进式延迟：后台模式下用更长的间隔
+    const isBackground = document.visibilityState === 'hidden';
+    const delay = isBackground
+      ? PAUSE_RECOVERY_DELAY_MS * Math.min(this.recoveryRetryCount, 4)  // 后台最多 2 秒间隔
+      : PAUSE_RECOVERY_DELAY_MS;
+    console.log(`🔊 [连续播放器] 句子音频被中断（${currentTime.toFixed(1)}s / ${duration ? duration.toFixed(1) + 's' : '未知'}），第 ${this.recoveryRetryCount}/${PAUSE_RECOVERY_RETRIES} 次尝试恢复... [后台:${isBackground}] [延迟:${delay}ms]`);
 
     setTimeout(() => {
       if (!this.active || !this.audio.src) return;
+      // 二次检查：音频可能已在等待期间自然结束
+      if (this.audio.ended) {
+        console.log('🔊 [连续播放器] 音频已自然结束，无需恢复');
+        return;
+      }
       this.audio.play().then(() => {
         this.recoveryRetryCount = 0;
         console.log('🔊 [连续播放器] 句子音频已恢复');
       }).catch((e) => {
         console.warn('🔊 [连续播放器] 句子恢复失败:', e);
+        // 后台模式下即使 play() 失败也继续重试
+        if (isBackground && this.active && this.audio.src) {
+          this.handleAudioPause();
+        }
       });
-    }, PAUSE_RECOVERY_DELAY_MS);
+    }, delay);
   };
 
   private setupMediaSession(): void {

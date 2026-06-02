@@ -83,6 +83,14 @@ export const mediaSessionService = {
       audio.play().catch(e => console.warn('无声音频播放失败，可能缺少用户交互', e));
       isHolding = true;
       isKeepAliveActive = true;
+      // 监听音频会话中断（电话、闹钟等），中断结束后恢复保活
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.setActionHandler('play', () => {
+          if (isKeepAliveActive && silenceAudio) {
+            silenceAudio.play().catch(() => {});
+          }
+        });
+      }
       console.log('🔊 [MediaSession] 静音保活已启动');
     } catch {}
   },

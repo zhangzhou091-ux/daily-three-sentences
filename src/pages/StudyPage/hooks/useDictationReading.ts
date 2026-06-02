@@ -11,21 +11,27 @@ const INTER_REPEAT_JITTER = 200;
 const INTER_SENTENCE_BASE_DELAY = 900;
 const INTER_SENTENCE_JITTER = 300;
 const MAX_CONSECUTIVE_ERRORS = 3;
-const PLAY_TIMEOUT_MS = 8000;
+const PLAY_TIMEOUT_MS = 15000;
+const PLAY_TIMEOUT_PER_CHAR_MS = 250;
 const READING_PROGRESS_KEY = 'd3s_dictation_reading_progress';
 
 const waitVisible = (ms: number): Promise<void> =>
   new Promise<void>(resolve => {
     setTimeout(() => {
+      // 在后台模式下直接 resolve，不阻塞播放循环
       if (document.visibilityState === 'visible') {
         resolve();
         return;
       }
+      // 给一个短暂的等待窗口（3秒），超时后强制继续
+      const forceResolveTimer = setTimeout(() => {
+        document.removeEventListener('visibilitychange', onVisible);
+        resolve(); // 强制继续，不无限等待
+      }, 3000);
       const onVisible = () => {
-        if (document.visibilityState === 'visible') {
-          document.removeEventListener('visibilitychange', onVisible);
-          resolve();
-        }
+        clearTimeout(forceResolveTimer);
+        document.removeEventListener('visibilitychange', onVisible);
+        resolve();
       };
       document.addEventListener('visibilitychange', onVisible);
     }, ms);
@@ -178,8 +184,9 @@ export const useDictationReading = (
       }
     };
 
+    const timeoutMs = Math.max(PLAY_TIMEOUT_MS, sentence.english.length * PLAY_TIMEOUT_PER_CHAR_MS);
     const timeoutPromise = new Promise<boolean>((resolve) => {
-      setTimeout(() => resolve(false), PLAY_TIMEOUT_MS);
+      setTimeout(() => resolve(false), timeoutMs);
     });
 
     const result = await Promise.race([doPlay(), timeoutPromise]);
@@ -335,6 +342,11 @@ export const useDictationReading = (
     continuousAudioPlayer.activate();
     mediaSessionService.startSilenceKeepAlive();
 
+    // 通知系统这是音频应用，需要后台播放权限
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'playing';
+    }
+
     isActiveRef.current = true;
     totalPlayedRef.current = 0;
 
@@ -377,6 +389,11 @@ export const useDictationReading = (
     geminiService.stopSpeechSynthesisKeepAlive();
     continuousAudioPlayer.deactivate();
     mediaSessionService.stopSilenceKeepAlive();
+
+    // 通知系统播放已停止
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'none';
+    }
 
     setState(prev => ({
       ...prev,
