@@ -60,8 +60,8 @@ export default defineConfig({
         name: '每日三句 - 英语学习',
         short_name: '每日三句',
         description: '基于艾宾浩斯遗忘曲线的英语句子学习/复习工具',
-        start_url: '/',
-        scope: '/',
+        start_url: '/daily-three-sentences/',
+        scope: '/daily-three-sentences/',
         display: 'standalone',
         background_color: '#f5f5f7', // 启动页背景色（匹配你的项目主题）
         theme_color: '#f5f5f7', // 状态栏主题色（匹配你的项目主题）
