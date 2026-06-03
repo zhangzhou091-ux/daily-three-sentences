@@ -693,7 +693,8 @@ export const geminiService = {
     if (ttsEngine === 'elevenlabs') {
       const result = await tryElevenLabs();
       if (result.success) return result;
-      return { success: false, error: 'ElevenLabs 生成失败，不降级' };
+      console.error(`🔊 [ElevenLabs] 调用失败: ${result.error}`);
+      return { success: false, error: result.error || 'ElevenLabs 生成失败，不降级' };
     }
 
     if (ttsEngine === 'minimax') {
@@ -818,7 +819,7 @@ export const geminiService = {
 
     try {
       const elVoiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
-      const elModelId = 'eleven_multilingual_v3';
+      const elModelId = elevenLabsService.getDefaultModel();
       const elCached = await elevenLabsCacheService.get(trimmedText, elVoiceId, elModelId);
       if (elCached) {
         console.log(`🔊 [fetchBlob] ElevenLabs 本地精确命中`);

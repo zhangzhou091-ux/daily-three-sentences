@@ -555,7 +555,7 @@ const runAudioProbe = async (
       },
       {
         text: testText,
-        model_id: 'eleven_multilingual_v3',
+        model_id: elevenLabsService.getDefaultModel(),
         output_format: 'mp3_44100_128',
       }
     );

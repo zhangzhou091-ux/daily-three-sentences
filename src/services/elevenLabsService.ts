@@ -52,7 +52,7 @@ interface PendingSpeakRequest {
 }
 
 const API_BASE = 'https://api.elevenlabs.io';
-const DEFAULT_MODEL = 'eleven_multilingual_v3';
+const DEFAULT_MODEL = 'eleven_v3';
 const DEFAULT_OUTPUT_FORMAT = 'mp3_44100_128';
 const BASE_SPEAK_TIMEOUT = 20000;
 const VOICES_CACHE_TTL = 30 * 60 * 1000;
@@ -881,10 +881,16 @@ export const elevenLabsService = {
         return { valid: true };
       }
 
-      if (response.status === 422) {
-        console.warn('🔊 [ElevenLabs] /v1/text-to-speech 返回 422，语音 ID 可能无效，但密钥本身有效');
+      if (response.status === 400) {
+        console.warn('🔊 [ElevenLabs] /v1/text-to-speech 返回 400，请求参数错误（模型或语音不兼容）');
         validationCache = { key: trimmedKey, valid: true, timestamp: Date.now() };
-        return { valid: true };
+        return { valid: true, error: '请求参数错误，请检查模型设置' };
+      }
+
+      if (response.status === 422) {
+        console.warn('🔊 [ElevenLabs] /v1/text-to-speech 返回 422，语音或模型不兼容，但密钥有效');
+        validationCache = { key: trimmedKey, valid: true, timestamp: Date.now() };
+        return { valid: true, error: '语音或模型不兼容，但密钥有效' };
       }
 
       return { valid: false, error: `验证接口异常 (${response.status})` };
