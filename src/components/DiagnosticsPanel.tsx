@@ -544,7 +544,7 @@ const runAudioProbe = async (
   };
 
   if (settings.elevenLabsApiKey?.trim()) {
-    const voiceId = settings.elevenLabsVoiceId || 'JBFqnCBsd6RMkjVDRZzb';
+    const voiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
     const elResult = await testEngine(
       'ElevenLabs',
       `${EL_API_BASE}/v1/text-to-speech/${voiceId}`,

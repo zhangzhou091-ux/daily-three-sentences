@@ -19,6 +19,7 @@
 
 import { elevenLabsCacheService } from './elevenLabsCacheService';
 import { ttsCloudCacheService } from './ttsCloudCacheService';
+import { DEFAULT_VOICES, RECOMMENDED_VOICE_IDS } from './elevenLabsVoices';
 
 export interface ElevenLabsVoice {
   voice_id: string;
@@ -186,18 +187,12 @@ const processPendingRequests = () => {
   }
 };
 
-const POPULAR_VOICES: ElevenLabsVoice[] = [
-  { voice_id: 'JBFqnCBsd6RMkjVDRZzb', name: 'George', labels: { accent: 'american', gender: 'male' } },
-  { voice_id: 'cjVigY5qzO86Huf0OWal', name: 'Eric', labels: { accent: 'american', gender: 'male' } },
-  { voice_id: 'onwK4e9ZLuTAKqWW03F9', name: 'Daniel', labels: { accent: 'british', gender: 'male' } },
-  { voice_id: 'ThT5KcBeYPX3keUQqHPh', name: 'Dorothy', labels: { accent: 'american', gender: 'female' } },
-  { voice_id: 'Xb7hH8MSUJpSbSDYk0k2', name: 'Alice', labels: { accent: 'british', gender: 'female' } },
-  { voice_id: 'pNInz6obpgDQGcFmaJgB', name: 'Adam', labels: { accent: 'american', gender: 'male' } },
-  { voice_id: 'yoZ06aMxZJJ28mfd3POQ', name: 'Sam', labels: { accent: 'american', gender: 'male' } },
-  { voice_id: 'jBpfuIE2acCO8z3wKNLl', name: 'Gigi', labels: { accent: 'american', gender: 'female' } },
-  { voice_id: 'nPczCjzI2devNBz1zQrb', name: 'Brian', labels: { accent: 'american', gender: 'male' } },
-  { voice_id: 'XB0fDUnXU5powFXDhCwa', name: 'Charlotte', labels: { accent: 'british', gender: 'female' } },
-];
+/** POPULAR_VOICES — 从 elevenLabsVoices.ts 派生为 ElevenLabsVoice 格式 */
+const POPULAR_VOICES: ElevenLabsVoice[] = DEFAULT_VOICES.map(v => ({
+  voice_id: v.voice_id,
+  name: v.name,
+  labels: { accent: v.accent, gender: v.gender, description: v.description, use_case: v.use_case },
+}));
 
 const revokeAllLoopUrls = (): void => {
   for (const url of activeLoopUrls) {
@@ -907,7 +902,7 @@ export const elevenLabsService = {
   },
 
   getDefaultVoiceId(): string {
-    return POPULAR_VOICES[0].voice_id;
+    return RECOMMENDED_VOICE_IDS[0];
   },
 
   getDefaultModel(): string {

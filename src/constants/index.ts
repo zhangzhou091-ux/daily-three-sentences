@@ -3,6 +3,8 @@
  * 集中管理所有应用常量
  */
 
+import { RECOMMENDED_VOICE_IDS } from '../services/elevenLabsVoices';
+
 // 数据库配置
 export const DB_CONFIG = {
   VERSION: 5,
@@ -147,7 +149,7 @@ export const DEFAULT_USER_SETTINGS = {
   themeColor: '#3b82f6',
   updatedAt: Date.now(),
   elevenLabsApiKey: '',
-  elevenLabsVoiceId: 'JBFqnCBsd6RMkjVDRZzb',
+  elevenLabsVoiceId: RECOMMENDED_VOICE_IDS[0],
   minimaxApiKey: '',
   minimaxVoiceId: 'English_expressive_narrator',
   edgeTtsVoiceId: 'en-US-AvaMultilingualNeural',

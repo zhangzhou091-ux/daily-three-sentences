@@ -6,6 +6,7 @@ import { syncQueueService } from '../services/syncQueueService';
 import { geminiService } from '../services/geminiService';
 import { elevenLabsService, ElevenLabsVoice } from '../services/elevenLabsService';
 import { elevenLabsCacheService } from '../services/elevenLabsCacheService';
+import { RECOMMENDED_VOICE_IDS } from '../services/elevenLabsVoices';
 import { minimaxTtsService, MiniMaxVoice } from '../services/minimaxTtsService';
 import { edgeTtsService, POPULAR_VOICES as EdgePopularVoices } from '../services/edgeTtsService';
 import { ttsCloudCacheService } from '../services/ttsCloudCacheService';
@@ -583,24 +584,24 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                   <div className="flex flex-col gap-2">
                     <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">ElevenLabs 语音</label>
                     <select
-                      value={settings.elevenLabsVoiceId || 'JBFqnCBsd6RMkjVDRZzb'}
+                      value={settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId()}
                       onChange={(e) => handleUpdate('elevenLabsVoiceId', e.target.value)}
                       className="text-sm font-bold text-gray-900 bg-white rounded-xl px-4 py-3 border border-gray-200 focus:ring-2 focus:ring-indigo-100 focus:border-indigo-300 w-full cursor-pointer"
                       disabled={loading}
                     >
                       <optgroup label="推荐语音">
                         {elevenLabsVoices.filter(v =>
-                          ['JBFqnCBsd6RMkjVDRZzb', 'cjVigY5qzO86Huf0OWal', 'onwK4e9ZLuTAKqWW03F9', 'ThT5KcBeYPX3keUQqHPh'].includes(v.voice_id)
+                          RECOMMENDED_VOICE_IDS.includes(v.voice_id)
                         ).map(v => (
                           <option key={v.voice_id} value={v.voice_id}>
                             {v.name} {v.labels?.gender === 'male' ? '♂' : v.labels?.gender === 'female' ? '♀' : ''} {v.labels?.accent ? `(${v.labels.accent})` : ''}
                           </option>
                         ))}
                       </optgroup>
-                      {elevenLabsVoices.length > 4 && (
+                      {elevenLabsVoices.length > 3 && (
                         <optgroup label="更多语音">
                           {elevenLabsVoices.filter(v =>
-                            !['JBFqnCBsd6RMkjVDRZzb', 'cjVigY5qzO86Huf0OWal', 'onwK4e9ZLuTAKqWW03F9', 'ThT5KcBeYPX3keUQqHPh'].includes(v.voice_id)
+                            !RECOMMENDED_VOICE_IDS.includes(v.voice_id)
                           ).map(v => (
                             <option key={v.voice_id} value={v.voice_id}>
                               {v.name} {v.labels?.gender === 'male' ? '♂' : v.labels?.gender === 'female' ? '♀' : ''} {v.labels?.accent ? `(${v.labels.accent})` : ''}

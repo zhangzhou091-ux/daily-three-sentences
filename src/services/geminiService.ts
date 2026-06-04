@@ -264,28 +264,29 @@ const selectBestUsVoice = async (): Promise<SpeechSynthesisVoice | null> => {
     const isEnhanced = (v: SpeechSynthesisVoice) =>
       v.name.includes('Enhanced') || v.name.includes('Premium') || v.name.includes('增强版') || v.name.includes('优化');
 
-    const zoeEnhanced = enVoices.find(v => v.name.includes('Zoe') && isEnhanced(v));
-    if (zoeEnhanced) {
-      console.log('🎤 ✅ iOS 选择 ZOE (Enhanced) 语音:', zoeEnhanced.name, '| local:', zoeEnhanced.localService, '| lang:', zoeEnhanced.lang);
-      return zoeEnhanced;
-    }
-
+    // Samantha 是 macOS/iOS 上质量最高的标准美式英语女声，优先于 Zoe（African American 口音）
     const samanthaEnhanced = enVoices.find(v => v.name.includes('Samantha') && isEnhanced(v));
     if (samanthaEnhanced) {
       console.log('🎤 ✅ iOS 选择 Samantha (Enhanced) 语音:', samanthaEnhanced.name, '| local:', samanthaEnhanced.localService, '| lang:', samanthaEnhanced.lang);
       return samanthaEnhanced;
     }
 
-    const zoeVoice = enVoices.find(v => v.name.includes('Zoe'));
-    if (zoeVoice) {
-      console.log('🎤 ✅ iOS 选择 ZOE 语音:', zoeVoice.name, '| local:', zoeVoice.localService, '| lang:', zoeVoice.lang);
-      return zoeVoice;
-    }
-
     const samantha = enVoices.find(v => v.name.includes('Samantha'));
     if (samantha) {
       console.log('🎤 ✅ iOS 选择 Samantha 语音:', samantha.name, '| local:', samantha.localService, '| lang:', samantha.lang);
       return samantha;
+    }
+
+    const zoeEnhanced = enVoices.find(v => v.name.includes('Zoe') && isEnhanced(v));
+    if (zoeEnhanced) {
+      console.log('🎤 ✅ iOS 选择 ZOE (Enhanced) 语音:', zoeEnhanced.name, '| local:', zoeEnhanced.localService, '| lang:', zoeEnhanced.lang);
+      return zoeEnhanced;
+    }
+
+    const zoeVoice = enVoices.find(v => v.name.includes('Zoe'));
+    if (zoeVoice) {
+      console.log('🎤 ✅ iOS 选择 ZOE 语音:', zoeVoice.name, '| local:', zoeVoice.localService, '| lang:', zoeVoice.lang);
+      return zoeVoice;
     }
 
     const premiumVoice = enVoices.find(v => isEnhanced(v));
@@ -758,7 +759,7 @@ export const geminiService = {
     const settings = storageService.getSettings();
     const ttsEngine: TTSEngine = settings.ttsEngine || 'elevenlabs';
     if (ttsEngine === 'elevenlabs') {
-      const voiceId = settings.elevenLabsVoiceId || 'JBFqnCBsd6RMkjVDRZzb';
+      const voiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
       const apiKey = settings.elevenLabsApiKey;
       if (!apiKey || !apiKey.trim()) {
         return { engine: 'ElevenLabs (未配置)', voiceName: '未配置', isLocal: false };
