@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover">
   <title>每日三句 | Daily Three Sentences</title>
   
   <!-- PWA & Mobile Meta -->
@@ -13,7 +13,7 @@
   <meta name="apple-touch-icon-precomposed" content="true">
 
   <!-- 关键资源预加载：加速首屏渲染 -->
-  <link rel="preload" href="data:application/octet-stream;base64,aW1wb3J0IFJlYWN0IGZyb20gJ3JlYWN0JzsKaW1wb3J0IFJlYWN0RE9NIGZyb20gJ3JlYWN0LWRvbS9jbGllbnQnOwppbXBvcnQgJy4vaW5kZXguY3NzJzsKaW1wb3J0IEFwcCBmcm9tICcuL0FwcCc7CmltcG9ydCB7IEVycm9yQm91bmRhcnkgfSBmcm9tICcuL2NvbXBvbmVudHMvRXJyb3JCb3VuZGFyeSc7CmltcG9ydCB7IHBlcmZvcm1hbmNlTW9uaXRvciB9IGZyb20gJy4vdXRpbHMvcGVyZm9ybWFuY2VNb25pdG9yJzsKaW1wb3J0IHsgY2hlY2tFbnYgfSBmcm9tICcuL3NlcnZpY2VzL2VudkNoZWNrJzsKaW1wb3J0IHsgaW5pdEVycm9yUmVwb3J0ZXIgfSBmcm9tICcuL3V0aWxzL2Vycm9yUmVwb3J0ZXInOwoKY29uc3Qgcm9vdEVsZW1lbnQgPSBkb2N1bWVudC5nZXRFbGVtZW50QnlJZCgncm9vdCcpOwoKaWYgKCFyb290RWxlbWVudCkgewogIHRocm93IG5ldyBFcnJvcigiQ291bGQgbm90IGZpbmQgcm9vdCBlbGVtZW50IHRvIG1vdW50IHRvIik7Cn0KCmlmIChpbXBvcnQubWV0YS5lbnYuREVWKSB7CiAgY2hlY2tFbnYoKTsKfQoKaWYgKGltcG9ydC5tZXRhLmVudi5QUk9EKSB7CiAgaW5pdEVycm9yUmVwb3J0ZXIoKTsKfQoKaWYgKCdzZXJ2aWNlV29ya2VyJyBpbiBuYXZpZ2F0b3IpIHsKICB3aW5kb3cuYWRkRXZlbnRMaXN0ZW5lcignbG9hZCcsICgpID0+IHsKICAgIG5hdmlnYXRvci5zZXJ2aWNlV29ya2VyLnJlZ2lzdGVyKCcvc3cuanMnKS50aGVuKChyZWcpID0+IHsKICAgICAgY29uc29sZS5sb2coJ1NXIHJlZ2lzdGVyZWQ6JywgcmVnLnNjb3BlKTsKICAgIH0pLmNhdGNoKChlcnIpID0+IHsKICAgICAgY29uc29sZS53YXJuKCdTVyByZWdpc3RyYXRpb24gZmFpbGVkOicsIGVycik7CiAgICB9KTsKICB9KTsKfQoKcGVyZm9ybWFuY2VNb25pdG9yLm1hcmsoJ2FwcFN0YXJ0Jyk7Cgpjb25zdCByb290ID0gUmVhY3RET00uY3JlYXRlUm9vdChyb290RWxlbWVudCk7CnJvb3QucmVuZGVyKAogIDxSZWFjdC5TdHJpY3RNb2RlPgogICAgPEVycm9yQm91bmRhcnk+CiAgICAgIDxBcHAgLz4KICAgIDwvRXJyb3JCb3VuZGFyeT4KICA8L1JlYWN0LlN0cmljdE1vZGU+Cik7CgpwZXJmb3JtYW5jZU1vbml0b3IubWFyaygnYXBwUmVuZGVyZWQnKTsKcGVyZm9ybWFuY2VNb25pdG9yLm1lYXN1cmUoJ2FwcEluaXRpYWxpemF0aW9uJywgJ2FwcFN0YXJ0JywgJ2FwcFJlbmRlcmVkJyk7CgppZiAoaW1wb3J0Lm1ldGEuZW52LkRFVikgewogIGNvbnN0IG1ldHJpY3MgPSBwZXJmb3JtYW5jZU1vbml0b3IuZ2V0U3VtbWFyeSgpOwogIGNvbnNvbGUubG9nKCfwn5OKIOaAp+iDveebkeaOp+aRmOimgTonLCBtZXRyaWNzKTsKfQo=" as="script" crossorigin>
+  <link rel="preload" href="data:application/octet-stream;base64,aW1wb3J0IFJlYWN0IGZyb20gJ3JlYWN0JzsKaW1wb3J0IFJlYWN0RE9NIGZyb20gJ3JlYWN0LWRvbS9jbGllbnQnOwppbXBvcnQgJy4vaW5kZXguY3NzJzsKaW1wb3J0IEFwcCBmcm9tICcuL0FwcCc7CmltcG9ydCB7IEVycm9yQm91bmRhcnkgfSBmcm9tICcuL2NvbXBvbmVudHMvRXJyb3JCb3VuZGFyeSc7CmltcG9ydCB7IHBlcmZvcm1hbmNlTW9uaXRvciB9IGZyb20gJy4vdXRpbHMvcGVyZm9ybWFuY2VNb25pdG9yJzsKaW1wb3J0IHsgY2hlY2tFbnYgfSBmcm9tICcuL3NlcnZpY2VzL2VudkNoZWNrJzsKaW1wb3J0IHsgaW5pdEVycm9yUmVwb3J0ZXIgfSBmcm9tICcuL3V0aWxzL2Vycm9yUmVwb3J0ZXInOwoKY29uc3Qgcm9vdEVsZW1lbnQgPSBkb2N1bWVudC5nZXRFbGVtZW50QnlJZCgncm9vdCcpOwoKaWYgKCFyb290RWxlbWVudCkgewogIHRocm93IG5ldyBFcnJvcigiQ291bGQgbm90IGZpbmQgcm9vdCBlbGVtZW50IHRvIG1vdW50IHRvIik7Cn0KCmlmIChpbXBvcnQubWV0YS5lbnYuREVWKSB7CiAgY2hlY2tFbnYoKTsKfQoKaWYgKGltcG9ydC5tZXRhLmVudi5QUk9EKSB7CiAgaW5pdEVycm9yUmVwb3J0ZXIoKTsKfQoKcGVyZm9ybWFuY2VNb25pdG9yLm1hcmsoJ2FwcFN0YXJ0Jyk7Cgpjb25zdCByb290ID0gUmVhY3RET00uY3JlYXRlUm9vdChyb290RWxlbWVudCk7CnJvb3QucmVuZGVyKAogIDxSZWFjdC5TdHJpY3RNb2RlPgogICAgPEVycm9yQm91bmRhcnk+CiAgICAgIDxBcHAgLz4KICAgIDwvRXJyb3JCb3VuZGFyeT4KICA8L1JlYWN0LlN0cmljdE1vZGU+Cik7CgpwZXJmb3JtYW5jZU1vbml0b3IubWFyaygnYXBwUmVuZGVyZWQnKTsKcGVyZm9ybWFuY2VNb25pdG9yLm1lYXN1cmUoJ2FwcEluaXRpYWxpemF0aW9uJywgJ2FwcFN0YXJ0JywgJ2FwcFJlbmRlcmVkJyk7CgppZiAoaW1wb3J0Lm1ldGEuZW52LkRFVikgewogIGNvbnN0IG1ldHJpY3MgPSBwZXJmb3JtYW5jZU1vbml0b3IuZ2V0U3VtbWFyeSgpOwogIGNvbnNvbGUubG9nKCfwn5OKIOaAp+iDveebkeaOp+aRmOimgTonLCBtZXRyaWNzKTsKfQo=" as="script" crossorigin>
   
   <!-- DNS预解析：减少连接时间 -->
   <link rel="dns-prefetch" href="https://fonts.loli.net">
@@ -43,10 +43,10 @@
     }
   </style>
 
-  <script type="module" crossorigin src="/daily-three-sentences/assets/index-2d-7eekD.js"></script>
+  <script type="module" crossorigin src="/daily-three-sentences/assets/index-CPLGhjdu.js"></script>
   <link rel="modulepreload" crossorigin href="/daily-three-sentences/assets/vendor-react-DEL-Qz5N.js">
-  <link rel="modulepreload" crossorigin href="/daily-three-sentences/assets/fsrs-DaKZKU1W.js">
-  <link rel="stylesheet" crossorigin href="/daily-three-sentences/assets/index-Dtk-PzZu.css">
+  <link rel="modulepreload" crossorigin href="/daily-three-sentences/assets/fsrs-CI47fmOh.js">
+  <link rel="stylesheet" crossorigin href="/daily-three-sentences/assets/index-D3a1S6GW.css">
 <link rel="manifest" href="/daily-three-sentences/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/daily-three-sentences/registerSW.js"></script></head>
 <body>
   <div id="root"></div>
