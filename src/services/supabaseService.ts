@@ -765,6 +765,7 @@ class SupabaseService {
         });
 
         let syncSuccess = false;
+        let errorMessage = '';
         if (toUpload.length > 0) {
           const { error: upsertError } = await this._client
             .from('sentences')
@@ -772,16 +773,29 @@ class SupabaseService {
 
           if (upsertError) {
             console.error(`❌ 批量同步失败: ${upsertError.message}`);
+            errorMessage = upsertError.message;
           } else {
             console.log(`✅ 成功批量同步 ${toUpload.length} 条数据`);
             syncSuccess = true;
           }
         }
 
-        this.lastSyncTime = Date.now();
+        if (syncSuccess) {
+          this.lastSyncTime = Date.now();
+        }
+
+        let finalMessage = '数据已最新';
+        if (toUpload.length > 0) {
+          if (syncSuccess) {
+            finalMessage = `✅ 成功同步${toUpload.length}条数据`;
+          } else {
+            finalMessage = `❌ 同步失败: ${errorMessage}`;
+          }
+        }
+
         return {
           sentences: merged,
-          message: syncSuccess ? `成功同步${toUpload.length}条数据` : '数据已最新'
+          message: finalMessage
         };
       } catch (err: unknown) {
         console.error("❌ Sync sentences failed:", err);
@@ -889,6 +903,7 @@ class SupabaseService {
         });
 
         let syncSuccess = false;
+        let errorMessage = '';
         if (toUpload.length > 0) {
           const { error: upsertError } = await this._client
             .from('sentences')
@@ -896,16 +911,29 @@ class SupabaseService {
 
           if (upsertError) {
             console.error(`❌ 批量同步失败: ${upsertError.message}`);
+            errorMessage = upsertError.message;
           } else {
             console.log(`✅ 成功批量同步 ${toUpload.length} 条数据`);
             syncSuccess = true;
           }
         }
 
-        this.lastSyncTime = Date.now();
+        if (syncSuccess) {
+          this.lastSyncTime = Date.now();
+        }
+
+        let finalMessage = '数据已最新';
+        if (toUpload.length > 0) {
+          if (syncSuccess) {
+            finalMessage = `✅ 成功同步${toUpload.length}条数据`;
+          } else {
+            finalMessage = `❌ 同步失败: ${errorMessage}`;
+          }
+        }
+
         return {
           sentences: merged,
-          message: syncSuccess ? `成功同步${toUpload.length}条数据` : '数据已最新',
+          message: finalMessage,
           needsLocalUpdate,
           deletedLocalIds
         };

@@ -166,7 +166,7 @@ export class FSRSService {
     const newCard = { ...normalizedCard };
     const elapsed = normalizedCard.last_review ? Math.max(0, (now - normalizedCard.last_review) / 86400000) : 0;
 
-    if (normalizedCard.is_pending_first_review && normalizedCard.reps === 0) {
+    if (normalizedCard.is_pending_first_review) {
       newCard.difficulty = initDifficulty(validatedRating, this.params);
       newCard.stability = initStability(validatedRating, this.params);
       newCard.is_pending_first_review = false;

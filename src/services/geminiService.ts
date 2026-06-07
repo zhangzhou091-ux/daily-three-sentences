@@ -16,8 +16,19 @@ import { continuousAudioPlayer } from './continuousAudioPlayer';
 import { ttsCloudCacheService } from './ttsCloudCacheService';
 import { dbService } from './dbService';
 import { elevenLabsCacheService } from './elevenLabsCacheService';
+import { cryptoService } from './cryptoService';
 
 const SPEAK_TIMEOUT = 15000;
+
+/** 解密 API Key（若已加密），未加密时直接返回原值 */
+async function decryptApiKey(key: string | undefined): Promise<string> {
+  if (!key) return '';
+  if (key.startsWith('aes:')) {
+    const decrypted = await cryptoService.decrypt(key);
+    return decrypted || '';
+  }
+  return key;
+}
 const SPEAK_TIMEOUT_PER_CHAR_MS = 250;
 const SUGGEST_TIMEOUT = 5000;
 
@@ -43,6 +54,17 @@ let currentWebSpeechRate: number = 1;
 let cachedAudioElement: HTMLAudioElement | null = null;
 let cachedAudioGeneration = 0;
 let speechSynthesisKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
+let cachedAudioObjectUrl: string | null = null;
+
+const revokeCachedAudioUrl = (): void => {
+  if (!cachedAudioObjectUrl) return;
+  try {
+    URL.revokeObjectURL(cachedAudioObjectUrl);
+  } catch {
+    // ignore cleanup failure
+  }
+  cachedAudioObjectUrl = null;
+};
 
 const playCachedBlob = async (blob: Blob, loop: boolean, rate: number): Promise<boolean> => {
   const ios = isIOS();
@@ -71,11 +93,14 @@ const playCachedBlob = async (blob: Blob, loop: boolean, rate: number): Promise<
 
   if (cachedAudioElement) {
     cachedAudioElement.pause();
-    cachedAudioElement.src = '';
+    cachedAudioElement.removeAttribute('src');
+    cachedAudioElement.load();
     cachedAudioElement = null;
+    revokeCachedAudioUrl();
   }
 
   const url = URL.createObjectURL(blob);
+  cachedAudioObjectUrl = url;
   console.log(`🔊 [缓存播放] Blob URL 已创建 | [代数] ${gen}`);
   const audio = new Audio();
   audio.preload = 'auto';
@@ -93,7 +118,14 @@ const playCachedBlob = async (blob: Blob, loop: boolean, rate: number): Promise<
     const cleanup = () => {
       console.log(`🔊 [缓存播放] cleanup | [代数] ${gen}`);
       if (cachedAudioElement === audio) cachedAudioElement = null;
-      try { URL.revokeObjectURL(url); } catch { /* ignore */ }
+      try {
+        audio.pause();
+        audio.removeAttribute('src');
+        audio.load();
+      } catch {
+        // ignore cleanup failure
+      }
+      revokeCachedAudioUrl();
     };
 
     const attemptPlay = () => {
@@ -155,7 +187,9 @@ const playCachedBlob = async (blob: Blob, loop: boolean, rate: number): Promise<
       if (ios && retryCount < MAX_RETRIES) {
         retryCount++;
         console.warn(`🔊 [缓存播放] iOS 错误重试 ${retryCount}/${MAX_RETRIES}...`);
+          revokeCachedAudioUrl();
         const retryUrl = URL.createObjectURL(blob);
+          cachedAudioObjectUrl = retryUrl;
         console.log(`🔊 [缓存播放] onerror 重试 Blob URL 已创建`);
         audio.src = retryUrl;
         audio.load();
@@ -628,7 +662,7 @@ export const geminiService = {
     if (cacheResult) return cacheResult;
 
     const tryElevenLabs = async (): Promise<SpeakResult> => {
-      const apiKey = settings.elevenLabsApiKey;
+      const apiKey = await decryptApiKey(settings.elevenLabsApiKey);
       const voiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
       if (!apiKey || !apiKey.trim()) {
         return { success: false, error: '未配置 ElevenLabs API 密钥' };
@@ -649,7 +683,7 @@ export const geminiService = {
     const tryMiniMax = async (): Promise<SpeakResult> => {
       try {
         const { minimaxTtsService } = await import('./minimaxTtsService');
-        const apiKey = settings.minimaxApiKey || '';
+        const apiKey = await decryptApiKey(settings.minimaxApiKey);
         if (!apiKey.trim()) {
           return { success: false, error: '未配置 MiniMax API 密钥' };
         }
@@ -730,10 +764,36 @@ export const geminiService = {
     isProcessing = false;
     if (cachedAudioElement) {
       cachedAudioElement.pause();
-      cachedAudioElement.src = '';
+      cachedAudioElement.removeAttribute('src');
+      cachedAudioElement.load();
       cachedAudioElement = null;
     }
+    revokeCachedAudioUrl();
     mediaSessionService.stopAll();
+  },
+
+  /**
+   * 轻量停止：仅停止正在进行的语音合成/播放，不清理 MediaSession 和 silenceAudio 保活。
+   * 用于播放循环中的错误恢复，避免打断后台音频保活。
+   */
+  stopLight(): void {
+    speakGeneration++;
+    cachedAudioGeneration++;
+    loopActiveFlag = false;
+    elevenLabsService.stop();
+    edgeTtsService.stop();
+    import('./minimaxTtsService').then(({ minimaxTtsService }) => minimaxTtsService.stop()).catch(() => {});
+    window.speechSynthesis.cancel();
+    currentUtterance = null;
+    taskQueue = [];
+    isProcessing = false;
+    if (cachedAudioElement) {
+      cachedAudioElement.pause();
+      cachedAudioElement.removeAttribute('src');
+      cachedAudioElement.load();
+      cachedAudioElement = null;
+    }
+    revokeCachedAudioUrl();
   },
 
   setPlaybackRate(rate: number): void {
@@ -761,7 +821,9 @@ export const geminiService = {
     if (ttsEngine === 'elevenlabs') {
       const voiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
       const apiKey = settings.elevenLabsApiKey;
-      if (!apiKey || !apiKey.trim()) {
+      // 检查加密或明文 API Key 是否存在
+      const hasKey = apiKey && (apiKey.startsWith('aes:') || apiKey.trim());
+      if (!hasKey) {
         return { engine: 'ElevenLabs (未配置)', voiceName: '未配置', isLocal: false };
       }
       const popularVoice = elevenLabsService.getPopularVoices().find(v => v.voice_id === voiceId);
@@ -769,7 +831,9 @@ export const geminiService = {
     }
     if (ttsEngine === 'minimax') {
       const voiceId = settings.minimaxVoiceId || 'English_expressive_narrator';
-      if (!settings.minimaxApiKey || !settings.minimaxApiKey.trim()) {
+      const miniKey = settings.minimaxApiKey;
+      const hasKey = miniKey && (miniKey.startsWith('aes:') || miniKey.trim());
+      if (!hasKey) {
         return { engine: 'MiniMax (未配置)', voiceName: '未配置', isLocal: false };
       }
       return { engine: 'MiniMax (直连)', voiceName: voiceId, isLocal: false };
@@ -818,62 +882,49 @@ export const geminiService = {
     const ttsEngine: TTSEngine = settings.ttsEngine || 'elevenlabs';
     const trimmedText = text.trim();
 
+    // 第一阶段：精确匹配并行（IndexedDB 读取，几乎无网络开销）
     try {
       const elVoiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
       const elModelId = elevenLabsService.getDefaultModel();
-      const elCached = await elevenLabsCacheService.get(trimmedText, elVoiceId, elModelId);
-      if (elCached) {
-        console.log(`🔊 [fetchBlob] ElevenLabs 本地精确命中`);
-        return elCached;
-      }
-    } catch { /* ignore */ }
-
-    try {
-      const elFuzzy = await elevenLabsCacheService.findByText(trimmedText);
-      if (elFuzzy) {
-        console.log(`🔊 [fetchBlob] ElevenLabs 本地模糊命中`);
-        return elFuzzy;
-      }
-    } catch { /* ignore */ }
-
-    try {
       const { minimaxTtsService } = await import('./minimaxTtsService');
       const mmVoiceId = settings.minimaxVoiceId || minimaxTtsService.getDefaultVoiceId();
-      const mmCached = await minimaxTtsService.getCachedAudio(trimmedText, mmVoiceId);
-      if (mmCached) {
-        console.log(`🔊 [fetchBlob] MiniMax 本地精确命中`);
-        return mmCached;
-      }
+
+      const [elExact, mmExact] = await Promise.all([
+        elevenLabsCacheService.get(trimmedText, elVoiceId, elModelId).catch(() => null),
+        minimaxTtsService.getCachedAudio(trimmedText, mmVoiceId).catch(() => null),
+      ]);
+      if (elExact) { console.log(`🔊 [fetchBlob] ElevenLabs 本地精确命中`); return elExact; }
+      if (mmExact) { console.log(`🔊 [fetchBlob] MiniMax 本地精确命中`); return mmExact; }
     } catch { /* ignore */ }
 
+    // 第二阶段：模糊匹配 + 云端并行
     try {
       const { minimaxTtsService } = await import('./minimaxTtsService');
-      const mmFuzzy = await minimaxTtsService.findByText(trimmedText);
-      if (mmFuzzy) {
-        console.log(`🔊 [fetchBlob] MiniMax 本地模糊命中`);
-        return mmFuzzy;
-      }
-    } catch { /* ignore */ }
 
-    try {
-      const sentence = await dbService.findByEnglish(trimmedText);
-      if (sentence) {
-        if (sentence.ttsAudioPathEl) {
+      const [elFuzzy, mmFuzzy, cloudSentence] = await Promise.all([
+        elevenLabsCacheService.findByText(trimmedText).catch(() => null),
+        minimaxTtsService.findByText(trimmedText).catch(() => null),
+        dbService.findByEnglish(trimmedText).catch(() => null),
+      ]);
+      if (elFuzzy) { console.log(`🔊 [fetchBlob] ElevenLabs 本地模糊命中`); return elFuzzy; }
+      if (mmFuzzy) { console.log(`🔊 [fetchBlob] MiniMax 本地模糊命中`); return mmFuzzy; }
+      if (cloudSentence) {
+        if (cloudSentence.ttsAudioPathEl) {
           try {
-            const cloudBlob = await ttsCloudCacheService.downloadByPath(sentence.ttsAudioPathEl);
+            const cloudBlob = await ttsCloudCacheService.downloadByPath(cloudSentence.ttsAudioPathEl);
             if (cloudBlob) {
-              console.log(`🔊 [fetchBlob] ElevenLabs 云端命中 | [路径] ${sentence.ttsAudioPathEl}`);
-              syncToLocalCache(trimmedText, cloudBlob, 'elevenlabs', settings);
+              console.log(`🔊 [fetchBlob] ElevenLabs 云端命中 | [路径] ${cloudSentence.ttsAudioPathEl}`);
+              syncToLocalCache(trimmedText, cloudBlob, 'elevenlabs', settings).catch(() => {});
               return cloudBlob;
             }
           } catch { /* ignore */ }
         }
-        if (sentence.ttsAudioPathMm) {
+        if (cloudSentence.ttsAudioPathMm) {
           try {
-            const cloudBlob = await ttsCloudCacheService.downloadByPath(sentence.ttsAudioPathMm);
+            const cloudBlob = await ttsCloudCacheService.downloadByPath(cloudSentence.ttsAudioPathMm);
             if (cloudBlob) {
-              console.log(`🔊 [fetchBlob] MiniMax 云端命中 | [路径] ${sentence.ttsAudioPathMm}`);
-              syncToLocalCache(trimmedText, cloudBlob, 'minimax', settings);
+              console.log(`🔊 [fetchBlob] MiniMax 云端命中 | [路径] ${cloudSentence.ttsAudioPathMm}`);
+              syncToLocalCache(trimmedText, cloudBlob, 'minimax', settings).catch(() => {});
               return cloudBlob;
             }
           } catch { /* ignore */ }
@@ -884,7 +935,7 @@ export const geminiService = {
     if (ttsEngine === 'minimax') {
       try {
         const { minimaxTtsService } = await import('./minimaxTtsService');
-        const apiKey = settings.minimaxApiKey || '';
+        const apiKey = await decryptApiKey(settings.minimaxApiKey);
         if (!apiKey.trim()) return null;
         const voiceId = settings.minimaxVoiceId || minimaxTtsService.getDefaultVoiceId();
         console.log(`🔊 [fetchBlob] MiniMax | [语音] ${voiceId}`);
@@ -896,7 +947,7 @@ export const geminiService = {
     }
 
     if (ttsEngine === 'elevenlabs') {
-      const apiKey = settings.elevenLabsApiKey;
+      const apiKey = await decryptApiKey(settings.elevenLabsApiKey);
       const voiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
       if (!apiKey || !apiKey.trim()) return null;
       try {

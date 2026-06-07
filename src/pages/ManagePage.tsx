@@ -358,7 +358,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
       return;
     }
 
-    const MAX_IMPORT_COUNT = 5000;
+    const MAX_IMPORT_COUNT = 500;
     const MAX_ENGLISH_LENGTH = 1000;
     const MAX_CHINESE_LENGTH = 500;
 
@@ -430,7 +430,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
           setImportProgress(prev => ({
             ...prev,
             status: 'error',
-            errors: [{ row: 0, message: `单次导入数量不能超过 ${MAX_IMPORT_COUNT} 条，当前有 ${data.length} 条数据。` }]
+            errors: [{ row: 0, message: `文件包含 ${data.length} 行，超过单次上限 ${MAX_IMPORT_COUNT} 行，请分批导入（可按行数拆分 Excel 后分别导入）` }]
           }));
           return;
         }

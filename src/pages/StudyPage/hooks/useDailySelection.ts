@@ -4,6 +4,9 @@ import { storageService } from '../../../services/storage';
 import { getLocalDateString } from '../../../utils/date';
 import { DAILY_LEARN_LIMIT } from '../../../constants';
 
+// 模块级内存缓存：切换标签页时避免重新计算，0ms 渲染
+let MEMORY_DAILY_CACHE: { date: string; data: Sentence[] } | null = null;
+
 interface UseDailySelectionProps {
   sentences: Sentence[];
   isGeneratingRef: RefObject<boolean>;
@@ -13,19 +16,28 @@ interface UseDailySelectionReturn {
   dailySelection: Sentence[];
   setDailySelection: React.Dispatch<React.SetStateAction<Sentence[]>>;
   generateDailySelection: () => Promise<void>;
+  isGenerating: boolean;
 }
 
 export const useDailySelection = ({ 
   sentences, 
   isGeneratingRef 
 }: UseDailySelectionProps): UseDailySelectionReturn => {
-  const [dailySelection, setDailySelection] = useState<Sentence[]>([]);
-  
   const generateVersionRef = useRef(0);
   const sentencesRef = useRef(sentences);
   const hasGeneratedTodayRef = useRef(false);
   const lastGeneratedDateRef = useRef('');
   const lastSentencesKeyRef = useRef('');
+
+  const [dailySelection, setDailySelection] = useState<Sentence[]>(() => {
+    const today = getLocalDateString();
+    if (MEMORY_DAILY_CACHE && MEMORY_DAILY_CACHE.date === today) {
+      hasGeneratedTodayRef.current = true;
+      return MEMORY_DAILY_CACHE.data;
+    }
+    return [];
+  });
+  const [isGenerating, setIsGenerating] = useState(!hasGeneratedTodayRef.current);
 
   const generateDailySelection = useCallback(async () => {
     if (isGeneratingRef.current) {
@@ -34,6 +46,7 @@ export const useDailySelection = ({
     }
     
     isGeneratingRef.current = true;
+    setIsGenerating(true);
     const currentVersion = ++generateVersionRef.current;
     
     const sentencesSnapshot = [...sentences];
@@ -45,6 +58,7 @@ export const useDailySelection = ({
         console.log('📚 generateDailySelection: sentences数组为空');
         if (currentVersion === generateVersionRef.current) {
           setDailySelection([]);
+          setIsGenerating(false);
           hasGeneratedTodayRef.current = true;
           isGeneratingRef.current = false;
         }
@@ -224,29 +238,32 @@ export const useDailySelection = ({
         !finalIdSet.has(s.id)
       );
       
+      console.log(`📚 generateDailySelection: 最终选择=${finalSelection.length}个句子`);
+      
+      // 1. 先更新 UI 状态，让页面立即渲染
+      if (currentVersion === generateVersionRef.current) {
+        setDailySelection(finalSelection);
+        hasGeneratedTodayRef.current = true;
+        MEMORY_DAILY_CACHE = { date: todayDateStr, data: finalSelection };
+      }
+
+      // 2. 等待数据库写入完成后再释放锁，防止竞态导致数据错乱
+      if (finalSelection.length > 0) {
+        await storageService.saveTodaySelection(finalSelection.map(s => s.id));
+      }
+
       if (missedScheduled.length > 0) {
         const tomorrowDate = new Date(now);
         tomorrowDate.setDate(tomorrowDate.getDate() + 1);
         const tomorrowStr = getLocalDateString(tomorrowDate);
-        
-        for (const sentence of missedScheduled) {
+
+        const updatePromises = missedScheduled.map(sentence => {
           const updated = { ...sentence, scheduledDate: tomorrowStr, updatedAt: Date.now() };
-          await storageService.addSentence(updated, false);
-        }
-        
-        console.log(`📚 generateDailySelection: ${missedScheduled.length} 个预约句子顺延至 ${tomorrowStr}`);
-      }
-      
-      console.log(`📚 generateDailySelection: 最终选择=${finalSelection.length}个句子`);
-      
-      if (finalSelection.length > 0) {
-        await storageService.saveTodaySelection(finalSelection.map(s => s.id));
-      }
-      
-      isGeneratingRef.current = false;
-      if (currentVersion === generateVersionRef.current) {
-        setDailySelection(finalSelection);
-        hasGeneratedTodayRef.current = true;
+          return storageService.addSentence(updated, false);
+        });
+
+        await Promise.all(updatePromises);
+        console.log(`📚 后台静默处理：${missedScheduled.length} 个预约句子顺延至 ${tomorrowStr}`);
       }
     } catch (err: unknown) {
       if (err instanceof Error) {
@@ -254,16 +271,19 @@ export const useDailySelection = ({
       } else {
         console.error('生成每日选择失败:', String(err));
       }
-      isGeneratingRef.current = false;
       if (currentVersion === generateVersionRef.current) {
         setDailySelection([]);
       }
+    } finally {
+      // 无论成功还是异常，都在 finally 中统一释放锁并更新 loading 状态
+      isGeneratingRef.current = false;
+      setIsGenerating(false);
     }
   }, [sentences, isGeneratingRef]);
 
   useEffect(() => {
     const today = getLocalDateString();
-    const currentSentencesKey = `${sentences.length}|${sentences.map(s => s.id).join(',')}`;
+    const currentSentencesKey = `${sentences.length}|${sentences.reduce((sum, s) => sum + (s.updatedAt || 0), 0)}`;
     const sentencesChanged = lastSentencesKeyRef.current !== currentSentencesKey;
     const isNewDay = lastGeneratedDateRef.current !== '' && lastGeneratedDateRef.current !== today;
 
@@ -284,5 +304,6 @@ export const useDailySelection = ({
     dailySelection,
     setDailySelection,
     generateDailySelection,
+    isGenerating,
   };
 };

@@ -4,6 +4,7 @@ import { geminiService } from '../../../services/geminiService';
 import { mediaSessionService } from '../../../services/mediaSessionService';
 import { continuousAudioPlayer } from '../../../services/continuousAudioPlayer';
 import { getLocalDateString } from '../../../utils/date';
+import { storageService } from '../../../services/storage';
 
 const REPEATS_PER_SENTENCE = 5;
 const INTER_REPEAT_BASE_DELAY = 450;
@@ -15,27 +16,6 @@ const PLAY_TIMEOUT_MS = 15000;
 const PLAY_TIMEOUT_PER_CHAR_MS = 250;
 const READING_PROGRESS_KEY = 'd3s_dictation_reading_progress';
 
-const waitVisible = (ms: number): Promise<void> =>
-  new Promise<void>(resolve => {
-    setTimeout(() => {
-      // 在后台模式下直接 resolve，不阻塞播放循环
-      if (document.visibilityState === 'visible') {
-        resolve();
-        return;
-      }
-      // 给一个短暂的等待窗口（3秒），超时后强制继续
-      const forceResolveTimer = setTimeout(() => {
-        document.removeEventListener('visibilitychange', onVisible);
-        resolve(); // 强制继续，不无限等待
-      }, 3000);
-      const onVisible = () => {
-        clearTimeout(forceResolveTimer);
-        document.removeEventListener('visibilitychange', onVisible);
-        resolve();
-      };
-      document.addEventListener('visibilitychange', onVisible);
-    }, ms);
-  });
 const PRELOAD_LOOKAHEAD = 2;
 
 const saveReadingProgress = (sentenceId: string, index: number): void => {
@@ -91,8 +71,8 @@ export const useDictationReading = (
   const startIdxRef = useRef(0);
   const preloadCacheRef = useRef<Map<number, Blob>>(new Map());
   const preloadGenRef = useRef(0);
-  const goToPrevRef = useRef<(() => void) | null>(null);
-  const goToNextRef = useRef<(() => void) | null>(null);
+  const goToPrevRef = useRef<((preserveAudioSession?: boolean) => void) | null>(null);
+  const goToNextRef = useRef<((preserveAudioSession?: boolean) => void) | null>(null);
 
   useEffect(() => {
     sentencesRef.current = sentences;
@@ -119,7 +99,7 @@ export const useDictationReading = (
       if (seen.has(s.id)) return false;
       const isLearnedToday = s.learnedAt && getLocalDateString(s.learnedAt) === todayStr;
       if (s.isPendingFirstReview && isLearnedToday) return false;
-      const isDue = s.nextReviewDate && s.nextReviewDate <= Date.now();
+      const isDue = !s.nextReviewDate || s.nextReviewDate <= Date.now();
       const reviewedToday = s.lastReviewedAt && getLocalDateString(s.lastReviewedAt) === todayStr;
       return isDue || reviewedToday;
     });
@@ -192,7 +172,7 @@ export const useDictationReading = (
     const result = await Promise.race([doPlay(), timeoutPromise]);
 
     if (!result) {
-      geminiService.stop();
+      geminiService.stopLight();
       continuousAudioPlayer.stop();
     }
 
@@ -254,10 +234,10 @@ export const useDictationReading = (
 
         mediaSessionService.updateMetadata(sentence.english);
         mediaSessionService.setActionHandlers({
-          onPause: () => { geminiService.stop(); continuousAudioPlayer.stop(); isActiveRef.current = false; },
-          onStop: () => { geminiService.stop(); continuousAudioPlayer.stop(); isActiveRef.current = false; },
-          onPrevTrack: () => { goToPrevRef.current?.(); },
-          onNextTrack: () => { goToNextRef.current?.(); },
+          onPause: () => { geminiService.stopLight(); continuousAudioPlayer.stop(); isActiveRef.current = false; },
+          onStop: () => { geminiService.stopLight(); continuousAudioPlayer.stop(); isActiveRef.current = false; },
+          onPrevTrack: () => { goToPrevRef.current?.(true); },
+          onNextTrack: () => { goToNextRef.current?.(true); },
         });
 
         setState(prev => ({
@@ -301,7 +281,7 @@ export const useDictationReading = (
             if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
               break;
             }
-            await waitVisible(500);
+            await mediaSessionService.waitForPlaybackGap(500);
             continue;
           }
 
@@ -313,7 +293,7 @@ export const useDictationReading = (
 
           if (completedRepeats < REPEATS_PER_SENTENCE) {
             mediaSessionService.holdAudioFocus();
-            await waitVisible(jitterDelay(INTER_REPEAT_BASE_DELAY, INTER_REPEAT_JITTER));
+            await mediaSessionService.waitForPlaybackGap(jitterDelay(INTER_REPEAT_BASE_DELAY, INTER_REPEAT_JITTER));
           }
         }
 
@@ -322,7 +302,7 @@ export const useDictationReading = (
         setState(prev => ({ ...prev, totalPlayed: totalPlayedRef.current }));
 
         mediaSessionService.holdAudioFocus();
-        await waitVisible(jitterDelay(INTER_SENTENCE_BASE_DELAY, INTER_SENTENCE_JITTER));
+        await mediaSessionService.waitForPlaybackGap(jitterDelay(INTER_SENTENCE_BASE_DELAY, INTER_SENTENCE_JITTER));
       }
 
       if (!isActiveRef.current || playGenerationRef.current !== gen) return;
@@ -341,6 +321,10 @@ export const useDictationReading = (
 
     continuousAudioPlayer.activate();
     mediaSessionService.startSilenceKeepAlive();
+
+    if (typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent) && storageService.getSettings().ttsEngine === 'webSpeech') {
+      console.warn('🔊 [顺序朗读] 当前使用系统语音，iOS 锁屏后连续播放可能被系统中断；本次不会自动降级语音引擎。');
+    }
 
     // 通知系统这是音频应用，需要后台播放权限
     if ('mediaSession' in navigator) {
@@ -410,7 +394,7 @@ export const useDictationReading = (
     }
   }, [state.isActive, startReading, stopReading]);
 
-  const goToPrevSentence = useCallback(() => {
+  const goToPrevSentence = useCallback((preserveAudioSession: boolean = false) => {
     if (!state.isActive) return;
     const pool = getReadingPool();
     if (pool.length === 0) return;
@@ -419,8 +403,12 @@ export const useDictationReading = (
     if (wasActive) {
       isActiveRef.current = false;
       playGenerationRef.current++;
-      geminiService.stop();
-      continuousAudioPlayer.stop();
+      geminiService.stopLight();
+      if (preserveAudioSession) {
+        continuousAudioPlayer.primeAudioChannelWithSilence();
+      } else {
+        continuousAudioPlayer.stop();
+      }
     }
 
     const newIdx = state.currentIndex > 0 ? state.currentIndex - 1 : pool.length - 1;
@@ -440,7 +428,7 @@ export const useDictationReading = (
     }
   }, [state.isActive, state.currentIndex, getReadingPool, runReadingLoop]);
 
-  const goToNextSentence = useCallback(() => {
+  const goToNextSentence = useCallback((preserveAudioSession: boolean = false) => {
     if (!state.isActive) return;
     const pool = getReadingPool();
     if (pool.length === 0) return;
@@ -449,8 +437,12 @@ export const useDictationReading = (
     if (wasActive) {
       isActiveRef.current = false;
       playGenerationRef.current++;
-      geminiService.stop();
-      continuousAudioPlayer.stop();
+      geminiService.stopLight();
+      if (preserveAudioSession) {
+        continuousAudioPlayer.primeAudioChannelWithSilence();
+      } else {
+        continuousAudioPlayer.stop();
+      }
     }
 
     const newIdx = state.currentIndex < pool.length - 1 ? state.currentIndex + 1 : 0;

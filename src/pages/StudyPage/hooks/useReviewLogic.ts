@@ -167,11 +167,13 @@ export const useReviewLogic = ({
       if (s.intervalIndex === 0) return false;
       
       const isLearnedToday = s.learnedAt && getLocalDateString(s.learnedAt) === todayStr;
-      if (s.isPendingFirstReview && isLearnedToday) {
+      const hasNotReviewedToday = !s.lastReviewedAt || getLocalDateString(s.lastReviewedAt) !== todayStr;
+      // 排除：今日学习但尚未复习（以 learnedAt 为兜底，兼容 isPendingFirstReview 缺失的旧数据）
+      if (isLearnedToday && hasNotReviewedToday && s.reps === 0) {
         return false;
       }
       
-      const isDue = s.nextReviewDate && s.nextReviewDate <= Date.now();
+      const isDue = !s.nextReviewDate || s.nextReviewDate <= Date.now();
       const reviewedToday = s.lastReviewedAt && getLocalDateString(s.lastReviewedAt) === todayStr;
       return isDue || reviewedToday;
     });

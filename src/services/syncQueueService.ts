@@ -1652,42 +1652,12 @@ class SyncQueueService {
   }
 
   /**
-   * 基于优先级的同步
+   * 基于优先级的同步（已降级为全量同步）
+   * processOperations 未完全实现，直接复用久经考验的 doSync 逻辑
    */
   private async doSyncWithPriority(priorityTypes: PendingOperationType[]): Promise<void> {
-    this.isSyncing = true;
-    this.emit('syncStart', { count: this.getPendingOperations().length });
-    
-    try {
-      // 只同步指定优先级的操作
-      const operationsToSync = this.getPendingOperations().filter(op => 
-        priorityTypes.includes(op.type)
-      );
-      
-      if (operationsToSync.length === 0) {
-        logger.info('无高优先级操作需要同步');
-        this.emit('syncSuccess', { count: 0, message: '无高优先级操作需要同步' });
-        return;
-      }
-      
-      const successCount = await this.processOperations(operationsToSync);
-      
-      this.lastSyncTime = Date.now();
-      this.nextSyncTime = this.calculateNextSyncTime();
-      this.lastSyncError = null;
-      this.retryCount.delete('global');
-      
-      this.emit('syncSuccess', { 
-        count: successCount,
-        message: `高优先级同步成功: ${successCount} 条操作` 
-      });
-      
-      logger.info('高优先级同步成功', { count: successCount, types: priorityTypes });
-    } catch (error) {
-      this.handleSyncFailure(0, error instanceof Error ? error.message : '智能同步异常');
-    } finally {
-      this.isSyncing = false;
-    }
+    logger.warn('doSyncWithPriority 降级为 doSync（processOperations 未完全实现）');
+    await this.doSync();
   }
 
 
@@ -1994,22 +1964,6 @@ class SyncQueueService {
     this.retryCount.delete('global');
     this.saveToStorageImmediate();
     this.emit('queueChanged', this.getQueueStatus());
-  }
-
-  /**
-   * 处理同步操作
-   */
-  private async processOperations(operations: PendingOperation[]): Promise<number> {
-    let successCount = 0;
-    
-    try {
-      // 这里实现具体的操作处理逻辑
-      // 暂时返回成功计数为0，避免影响现有逻辑
-      return successCount;
-    } catch (error) {
-      logger.error('处理操作失败', { error: String(error) });
-      return successCount;
-    }
   }
 
   /**

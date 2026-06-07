@@ -4,6 +4,7 @@ import { smartSyncService } from '../smartSyncService';
 import { indexedDBService } from '../indexedDBService';
 import { syncQueueService } from '../syncQueueService';
 import { getLocalDateString } from '../../utils/date';
+import { cryptoService } from '../cryptoService';
 
 const STORAGE_KEYS = {
   STATS: 'd3s_user_stats_v3',
@@ -327,6 +328,28 @@ export const localStorageService = {
     if (success) {
       window.dispatchEvent(new CustomEvent<UserSettings>('settingsChanged', { detail: updated }));
     }
+
+    // 异步加密 API Key
+    if (cryptoService.isAvailable()) {
+      (async () => {
+        const encrypted = { ...updated };
+        let changed = false;
+        if (encrypted.elevenLabsApiKey && !encrypted.elevenLabsApiKey.startsWith('aes:')) {
+          const enc = await cryptoService.encrypt(encrypted.elevenLabsApiKey);
+          if (enc) { encrypted.elevenLabsApiKey = enc; changed = true; }
+        }
+        if (encrypted.minimaxApiKey && !encrypted.minimaxApiKey.startsWith('aes:')) {
+          const enc = await cryptoService.encrypt(encrypted.minimaxApiKey);
+          if (enc) { encrypted.minimaxApiKey = enc; changed = true; }
+        }
+        if (changed) {
+          localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(encrypted));
+        }
+      })().catch(err => {
+        console.warn('[LocalStorage] API Key 加密失败:', err instanceof Error ? err.message : String(err));
+      });
+    }
+
     return success;
   },
 

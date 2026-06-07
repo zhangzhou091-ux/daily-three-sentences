@@ -232,6 +232,29 @@ describe('mediaSessionService - 静音保活核心服务', () => {
     expect(mediaSessionService.isHoldingAudioFocus()).toBe(true);
   });
 
+  it('waitForPlaybackGap() 在后台应播放静音延时而不是直接放行', async () => {
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: vi.fn(() => 'blob:delay-audio'),
+      revokeObjectURL: vi.fn(),
+    });
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'hidden',
+      writable: true,
+      configurable: true,
+    });
+
+    const { mediaSessionService } = await import('./mediaSessionService');
+    const delayPromise = mediaSessionService.waitForPlaybackGap(600);
+    const delayAudio = createdAudioInstances[0];
+
+    expect(delayAudio?.src).toBe('blob:delay-audio');
+    expect(mockAudioPlay).toHaveBeenCalledTimes(1);
+
+    delayAudio.onended?.();
+    await delayPromise;
+  });
+
   it('holdAudioFocus() 重复调用不应重复播放', async () => {
     const { mediaSessionService } = await import('./mediaSessionService');
     mediaSessionService.holdAudioFocus();
@@ -490,6 +513,19 @@ describe('continuousAudioPlayer - 连续播放器 iOS 兼容', () => {
     continuousAudioPlayer.activate();
     continuousAudioPlayer.stop();
     expect(mockAudioPause).toHaveBeenCalled();
+  });
+
+  it('primeAudioChannelWithSilence() 应立即启动静音接力', async () => {
+    const { continuousAudioPlayer } = await import('./continuousAudioPlayer');
+    continuousAudioPlayer.activate();
+    mockAudioPlay.mockClear();
+
+    continuousAudioPlayer.primeAudioChannelWithSilence();
+    const playerAudio = continuousAudioPlayer.getAudioElement() as MockAudio;
+
+    expect(playerAudio.src.startsWith('data:audio/mp3;base64,')).toBe(true);
+    expect(playerAudio.loop).toBe(true);
+    expect(mockAudioPlay).toHaveBeenCalledTimes(1);
   });
 
   it('getAudioElement() 应返回 Audio 元素', async () => {

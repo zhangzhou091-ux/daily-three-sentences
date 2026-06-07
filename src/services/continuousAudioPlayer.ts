@@ -38,11 +38,17 @@ class ContinuousAudioPlayer {
   }
 
   activate(): boolean {
-    if (this.active) return true;
+    if (this.active) {
+      console.log('🔊 [连续播放器] 已在激活状态，跳过重复激活');
+      return true;
+    }
 
-    if (!this.initialized && isIOS()) {
+    const ios = isIOS();
+    console.log(`🔊 [连续播放器] 开始激活 | [iOS] ${ios} | [已初始化] ${this.initialized} | [visibilityState] ${document.visibilityState}`);
+
+    if (!this.initialized && ios) {
       this.initialized = true;
-      const unlockSrc = this.audio.src;
+      console.log('🔊 [连续播放器] 首次激活，执行 iOS 原生解锁...');
       this.audio.src = SILENCE_MP3_BASE64;
       this.audio.volume = 0.01;
       this.audio.play().then(() => {
@@ -51,38 +57,47 @@ class ContinuousAudioPlayer {
         this.audio.volume = 1.0;
         this.audio.removeAttribute('src');
         this.audio.load();
-      }).catch(() => {
+        console.log('🔊 [连续播放器] iOS 原生解锁成功 ✅');
+      }).catch((e) => {
         this.audio.volume = 1.0;
         this.audio.removeAttribute('src');
+        console.warn(`🔊 [连续播放器] iOS 原生解锁失败 | [错误] ${e?.name}: ${e?.message}`);
       });
     }
 
     this.active = true;
     this.generation++;
     this.recoveryRetryCount = 0;
+    console.log(`🔊 [连续播放器] 代数更新为 ${this.generation}`);
 
     this.setupMediaSession();
 
-    if (isIOS()) {
+    if (ios) {
       const handleInterruption = () => {
+        console.log(`🔊 [连续播放器] 中断恢复检查 | [active] ${this.active} | [paused] ${this.audio.paused} | [src] ${!!this.audio.src}`);
         if (this.active && !this.audio.paused) {
-          this.audio.play().catch(() => {});
+          this.audio.play().catch((e) => {
+            console.warn(`🔊 [连续播放器] 中断恢复 play() 失败 | [错误] ${e?.name}: ${e?.message}`);
+          });
         }
       };
       this.visibilityHandler = () => {
+        console.log(`🔊 [连续播放器] visibilitychange | [新状态] ${document.visibilityState} | [active] ${this.active} | [paused] ${this.audio.paused}`);
         if (document.visibilityState === 'visible') {
           handleInterruption();
         }
       };
       document.addEventListener('visibilitychange', this.visibilityHandler);
       this.audio.onpause = this.handleAudioPause;
+      console.log('🔊 [连续播放器] iOS: visibilitychange 监听器已注册 | onpause 处理器已绑定');
     }
 
-    console.log('🔊 [连续播放器] 已激活');
+    console.log(`🔊 [连续播放器] 已激活 ✅ | [代数] ${this.generation}`);
     return true;
   }
 
   deactivate(): void {
+    console.log(`🔊 [连续播放器] 开始停用 | [代数] ${this.generation} | [active] ${this.active} | [recoveryRetryCount] ${this.recoveryRetryCount}`);
     this.generation++;
     this.active = false;
     this.recoveryRetryCount = 0;
@@ -90,6 +105,7 @@ class ContinuousAudioPlayer {
     if (this.visibilityHandler) {
       document.removeEventListener('visibilitychange', this.visibilityHandler);
       this.visibilityHandler = null;
+      console.log('🔊 [连续播放器] visibilitychange 监听器已移除');
     }
 
     try {
@@ -101,11 +117,12 @@ class ContinuousAudioPlayer {
       this.audio.pause();
       this.audio.removeAttribute('src');
       this.audio.load();
+      console.log('🔊 [连续播放器] audio 元素已清理');
     } catch { /* ignore */ }
 
     this.revokeCurrentUrl();
     this.disconnectGain();
-    console.log('🔊 [连续播放器] 已停用');
+    console.log('🔊 [连续播放器] 已停用 ✅');
   }
 
   async playBlob(blob: Blob): Promise<void> {
@@ -211,14 +228,53 @@ class ContinuousAudioPlayer {
         doReject(new Error(errorMsg));
       };
 
-      this.audio.oncanplay = () => {
-        if (!isCurrentGen() || settled) return;
-        console.log(`🔊 [连续播放器] oncanplay 触发 | [readyState] ${this.audio.readyState} | [duration] ${this.audio.duration}`);
-        attemptPlay();
-      };
-
       console.log(`🔊 [连续播放器] audio.load() 调用`);
       this.audio.load();
+
+      // iOS: 不依赖 oncanplay 异步回调，直接短轮询 readyState 在用户手势延续中 play()
+      const tryPlaySync = async () => {
+        if (!isCurrentGen() || settled) return;
+
+        console.log(`🔊 [连续播放器] tryPlaySync 开始 | [readyState] ${this.audio.readyState} | [networkState] ${this.audio.networkState}`);
+
+        if (this.audio.readyState >= 2) {
+          console.log(`🔊 [连续播放器] readyState 已就绪，直接播放`);
+          attemptPlay();
+          return;
+        }
+
+        // 短轮询，最多等 500ms，确保在 iOS 手势窗口内
+        const maxWait = 500;
+        const pollInterval = 50;
+        let waited = 0;
+        let lastReadyState = this.audio.readyState;
+        await new Promise<void>(r => {
+          const poll = () => {
+            if (!isCurrentGen() || settled) { 
+              console.log(`🔊 [连续播放器] tryPlaySync 轮询提前终止 | [代数过期] ${!isCurrentGen()} | [settled] ${settled}`);
+              r(); 
+              return; 
+            }
+            if (this.audio.readyState >= 2 || waited >= maxWait) {
+              console.log(`🔊 [连续播放器] tryPlaySync 轮询结束 | [readyState] ${this.audio.readyState} | [等待耗时] ${waited}ms | [reason] ${this.audio.readyState >= 2 ? '就绪' : '超时'}`);
+              r();
+              return;
+            }
+            if (this.audio.readyState !== lastReadyState) {
+              console.log(`🔊 [连续播放器] tryPlaySync readyState 变化 | [${lastReadyState}] → [${this.audio.readyState}] | [已等待] ${waited}ms`);
+              lastReadyState = this.audio.readyState;
+            }
+            waited += pollInterval;
+            setTimeout(poll, pollInterval);
+          };
+          poll();
+        });
+
+        if (!isCurrentGen() || settled) return;
+        console.log(`🔊 [连续播放器] tryPlaySync 完成，调用 attemptPlay | [readyState] ${this.audio.readyState} | [networkState] ${this.audio.networkState}`);
+        attemptPlay();
+      };
+      tryPlaySync();
 
       setTimeout(() => {
         if (!settled && isCurrentGen()) {
@@ -230,6 +286,7 @@ class ContinuousAudioPlayer {
   }
 
   stop(): void {
+    console.log(`🔊 [连续播放器] stop() 调用 | [active] ${this.active} | [代数] ${this.generation} | [recoveryRetryCount] ${this.recoveryRetryCount}`);
     this.recoveryRetryCount = 0;
     this.generation++;
     try {
@@ -240,6 +297,7 @@ class ContinuousAudioPlayer {
     } catch { /* ignore */ }
     this.revokeCurrentUrl();
     this.disconnectGain();
+    console.log('🔊 [连续播放器] stop() 完成');
   }
 
   getAudioElement(): HTMLAudioElement {
@@ -247,16 +305,58 @@ class ContinuousAudioPlayer {
   }
 
   resumeAudioFocus(): void {
+    console.log(`🔊 [连续播放器] resumeAudioFocus | [active] ${this.active} | [paused] ${this.audio.paused} | [src] ${!!this.audio.src} | [visibilityState] ${document.visibilityState}`);
     if (!this.active) return;
     if (this.audio.paused && this.audio.src) {
-      this.audio.play().catch(() => {});
+      this.audio.play().then(() => {
+        console.log('🔊 [连续播放器] resumeAudioFocus play() 成功');
+      }).catch((e) => {
+        console.warn(`🔊 [连续播放器] resumeAudioFocus play() 失败 | [错误] ${e?.name}: ${e?.message}`);
+      });
+    }
+  }
+
+  primeAudioChannelWithSilence(): void {
+    console.log(`🔊 [连续播放器] primeAudioChannelWithSilence | [active] ${this.active} | [src] ${!!this.audio.src}`);
+    if (!this.active) return;
+
+    this.generation++;
+    this.recoveryRetryCount = 0;
+
+    try {
+      this.audio.onpause = null;
+      this.audio.onended = null;
+      this.audio.onerror = null;
+      this.audio.oncanplay = null;
+      this.audio.onloadeddata = null;
+      this.audio.pause();
+      this.revokeCurrentUrl();
+      this.audio.removeAttribute('src');
+      this.audio.loop = true;
+      this.audio.src = SILENCE_MP3_BASE64;
+      this.audio.load();
+      this.audio.onpause = this.handleAudioPause;
+      this.audio.play().then(() => {
+        console.log('🔊 [连续播放器] 静音接力已启动 ✅');
+      }).catch((e) => {
+        console.warn(`🔊 [连续播放器] 静音接力启动失败 | [错误] ${e?.name}: ${e?.message}`);
+      });
+    } catch (e) {
+      console.warn('🔊 [连续播放器] primeAudioChannelWithSilence 异常:', e);
     }
   }
 
   private handleAudioPause = (): void => {
+    console.log(`🔊 [连续播放器] onpause 触发 | [active] ${this.active} | [src] ${!!this.audio.src} | [ended] ${this.audio.ended} | [recoveryRetryCount] ${this.recoveryRetryCount} | [visibilityState] ${document.visibilityState}`);
     if (!this.active) return;
-    if (!this.audio.src) return;
-    if (this.audio.ended) return;
+    if (!this.audio.src) {
+      console.log('🔊 [连续播放器] onpause: 无 src，跳过恢复');
+      return;
+    }
+    if (this.audio.ended) {
+      console.log('🔊 [连续播放器] onpause: 音频已结束，跳过恢复');
+      return;
+    }
 
     if (this.recoveryRetryCount >= PAUSE_RECOVERY_RETRIES) {
       console.warn('🔊 [连续播放器] 恢复重试次数耗尽，放弃当前播放');
@@ -282,36 +382,48 @@ class ContinuousAudioPlayer {
     console.log(`🔊 [连续播放器] 句子音频被中断（${currentTime.toFixed(1)}s / ${duration ? duration.toFixed(1) + 's' : '未知'}），第 ${this.recoveryRetryCount}/${PAUSE_RECOVERY_RETRIES} 次尝试恢复... [后台:${isBackground}] [延迟:${delay}ms]`);
 
     setTimeout(() => {
-      if (!this.active || !this.audio.src) return;
+      if (!this.active || !this.audio.src) {
+        console.log(`🔊 [连续播放器] 恢复重试时状态已变 | [active] ${this.active} | [src] ${!!this.audio.src}`);
+        return;
+      }
       // 二次检查：音频可能已在等待期间自然结束
       if (this.audio.ended) {
         console.log('🔊 [连续播放器] 音频已自然结束，无需恢复');
         return;
       }
+      console.log(`🔊 [连续播放器] 尝试恢复播放 | [currentTime] ${this.audio.currentTime.toFixed(1)}s | [readyState] ${this.audio.readyState} | [paused] ${this.audio.paused}`);
       this.audio.play().then(() => {
         this.recoveryRetryCount = 0;
-        console.log('🔊 [连续播放器] 句子音频已恢复');
+        console.log('🔊 [连续播放器] 句子音频已恢复 ✅');
       }).catch((e) => {
-        console.warn('🔊 [连续播放器] 句子恢复失败:', e);
-        // 后台模式下即使 play() 失败也继续重试
+        console.warn(`🔊 [连续播放器] 句子恢复失败 | [错误] ${e?.name}: ${e?.message} | [后台] ${isBackground} | [剩余重试] ${PAUSE_RECOVERY_RETRIES - this.recoveryRetryCount}`);
+        // 后台模式下即使 play() 失败也继续重试，但加入强制冷却延迟防止快速耗尽
         if (isBackground && this.active && this.audio.src) {
-          this.handleAudioPause();
+          setTimeout(() => {
+            this.handleAudioPause();
+          }, PAUSE_RECOVERY_DELAY_MS);
         }
       });
     }, delay);
   };
 
   private setupMediaSession(): void {
+    console.log('🔊 [连续播放器] 注册 MediaSession 操作处理器');
     mediaSessionService.setActionHandlers({
       onPause: () => {
+        console.log('🔊 [连续播放器] MediaSession: 用户点击暂停');
         this.audio.pause();
       },
       onPlay: () => {
+        console.log(`🔊 [连续播放器] MediaSession: 用户点击播放 | [active] ${this.active} | [src] ${!!this.audio.src}`);
         if (this.active && this.audio.src) {
-          this.audio.play().catch(() => {});
+          this.audio.play().catch((e) => {
+            console.warn(`🔊 [连续播放器] MediaSession play() 失败 | [错误] ${e?.name}: ${e?.message}`);
+          });
         }
       },
       onStop: () => {
+        console.log('🔊 [连续播放器] MediaSession: 用户点击停止');
         this.stop();
       },
     });
@@ -322,8 +434,10 @@ class ContinuousAudioPlayer {
 
     if (this.audioContext) {
       if (this.audioContext.state === 'suspended') {
+        console.log('🔊 [连续播放器] AudioContext 处于 suspended，尝试 resume...');
         this.audioContext.resume();
       } else if (this.audioContext.state === 'closed') {
+        console.log('🔊 [连续播放器] AudioContext 已关闭，重新创建');
         this.audioContext = null;
         this.gainNode = null;
         this.currentSource = null;
@@ -334,6 +448,7 @@ class ContinuousAudioPlayer {
 
     try {
       if (!this.audioContext) {
+        console.log('🔊 [连续播放器] 创建 AudioContext + GainNode');
         this.audioContext = new AudioContext();
         this.gainNode = this.audioContext.createGain();
         this.gainNode.gain.value = AUDIO_GAIN;
@@ -344,6 +459,7 @@ class ContinuousAudioPlayer {
       }
       this.currentSource = this.audioContext.createMediaElementSource(this.audio);
       this.currentSource.connect(this.gainNode!);
+      console.log('🔊 [连续播放器] Web Audio 增益已连接');
     } catch (e) {
       console.warn('🔊 [连续播放器] Web Audio 增益连接失败，使用原始音量:', e);
     }
@@ -353,12 +469,14 @@ class ContinuousAudioPlayer {
     if (this.currentSource) {
       try { this.currentSource.disconnect(); } catch { /* ignore */ }
       this.currentSource = null;
+      console.log('🔊 [连续播放器] Web Audio 增益已断开');
     }
   }
 
   private revokeCurrentUrl(): void {
     if (this.currentBlobUrl) {
       try { URL.revokeObjectURL(this.currentBlobUrl); } catch { /* ignore */ }
+      console.log('🔊 [连续播放器] Blob URL 已回收');
       this.currentBlobUrl = null;
     }
   }
