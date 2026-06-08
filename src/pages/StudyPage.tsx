@@ -71,7 +71,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   const [currentIndex, setCurrentIndex] = useState(() => loadLearnProgressIndex());
   const [isFlipped, setIsFlipped] = useState(false);
   const [tabBarVisible, setTabBarVisible] = useState(true);
-  const [readingMode, setReadingMode] = useState<'random' | 'sequential'>('random');
+  const [readingMode, setReadingMode] = useState<'random' | 'sequential'>('sequential');
   
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'failed'>('idle');
@@ -84,6 +84,13 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   const isMarkLearnedSubmittingRef = useRef(false);
   const animationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasTriggeredRegenRef = useRef(false);
+  const touchStartXRef = useRef(0);
+  const touchStartYRef = useRef(0);
+  const isRandomListeningActiveRef = useRef(false);
+  const stopRandomListeningRef = useRef<() => void>(() => {});
+  const isDictationReadingActiveRef = useRef(false);
+  const stopDictationReadingRef = useRef<() => void>(() => {});
+  const activeTabRef = useRef<StudyStep>('learn');
   
   const [progressAdjusted, setProgressAdjusted] = useState(false);
   const [currentDateStr, setCurrentDateStr] = useState(() => getLocalDateString());
@@ -101,6 +108,8 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     setActiveTabState(tab);
     saveStudyTab(tab);
   }, []);
+
+  const TABS: StudyStep[] = ['learn', 'review', 'dictation'];
   
   useEffect(() => {
     const handleSettingsChange = () => {
@@ -263,6 +272,46 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     canGoNextReadingSentence,
     REPEATS_PER_SENTENCE: DICTATION_READING_REPEATS,
   } = useDictationReading(sentences, dailySelection);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartXRef.current = e.touches[0].clientX;
+    touchStartYRef.current = e.touches[0].clientY;
+  }, []);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    const deltaX = e.changedTouches[0].clientX - touchStartXRef.current;
+    const deltaY = e.changedTouches[0].clientY - touchStartYRef.current;
+
+    if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 50) {
+      const currentIdx = TABS.indexOf(activeTabRef.current);
+      if (deltaX < 0 && currentIdx < TABS.length - 1) {
+        const nextTab = TABS[currentIdx + 1];
+        geminiService.stop();
+        setSpeakingText(null);
+        if (isRandomListeningActiveRef.current) stopRandomListeningRef.current();
+        if (isDictationReadingActiveRef.current) stopDictationReadingRef.current();
+        setActiveTab(nextTab);
+        setCurrentIndex(0);
+        setIsFlipped(nextTab === 'review');
+      } else if (deltaX > 0 && currentIdx > 0) {
+        const prevTab = TABS[currentIdx - 1];
+        geminiService.stop();
+        setSpeakingText(null);
+        if (isRandomListeningActiveRef.current) stopRandomListeningRef.current();
+        if (isDictationReadingActiveRef.current) stopDictationReadingRef.current();
+        setActiveTab(prevTab);
+        setCurrentIndex(0);
+        setIsFlipped(prevTab === 'review');
+      }
+    }
+  }, []);
+
+  // 同步 ref 值，确保 handleTouchEnd 闭包中的 ref 持有最新状态
+  isRandomListeningActiveRef.current = isRandomListeningActive;
+  stopRandomListeningRef.current = stopRandomListening;
+  isDictationReadingActiveRef.current = isDictationReadingActive;
+  stopDictationReadingRef.current = stopDictationReading;
+  activeTabRef.current = activeTab;
 
   const handleToggleRandomListening = useCallback(() => {
     if (isDictationReadingActive) stopDictationReading();
@@ -580,7 +629,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         </h2>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 pb-4">
+      <div className="flex-1 overflow-y-auto px-4 pb-4" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
         {activeTab === 'learn' && (
           dailySelection.length > 0 ? (
             (() => {
@@ -723,54 +772,54 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
               />
               
               {!isCurrentReviewed ? (
-                <div className={`grid grid-cols-2 gap-3 transition-opacity duration-300 ${isProcessingReview ? 'opacity-50 pointer-events-none grayscale' : ''}`}>
+                <div className={`grid grid-cols-4 gap-2 transition-opacity duration-300 ${isProcessingReview ? 'opacity-50 pointer-events-none grayscale' : ''}`}>
                   <button 
                     onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 1)} 
                     disabled={shouldDisableReviewButton(currentReviewSentence?.id || '')}
-                    className={`bg-white py-4 rounded-[1.5rem] font-bold shadow-sm border transition-all ${
+                    className={`bg-white py-3 rounded-2xl font-bold shadow-sm border transition-all flex flex-col items-center justify-center ${
                       shouldDisableReviewButton(currentReviewSentence?.id || '')
                         ? 'text-gray-400 border-gray-100 cursor-not-allowed bg-gray-50' 
                         : 'text-red-400 border-red-50 hover:bg-red-50 active:scale-95'
                     }`}
                   >
-                    <div className="text-lg">忘记</div>
-                    <div className="text-xs opacity-60">Again</div>
+                    <div className="text-sm md:text-base">忘记</div>
+                    <div className="text-[10px] opacity-60">Again</div>
                   </button>
                   <button 
                     onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 2)} 
                     disabled={shouldDisableReviewButton(currentReviewSentence?.id || '')}
-                    className={`bg-white py-4 rounded-[1.5rem] font-bold shadow-sm border transition-all ${
+                    className={`bg-white py-3 rounded-2xl font-bold shadow-sm border transition-all flex flex-col items-center justify-center ${
                       shouldDisableReviewButton(currentReviewSentence?.id || '')
                         ? 'text-gray-400 border-gray-100 cursor-not-allowed bg-gray-50' 
                         : 'text-orange-400 border-orange-50 hover:bg-orange-50 active:scale-95'
                     }`}
                   >
-                    <div className="text-lg">困难</div>
-                    <div className="text-xs opacity-60">Hard</div>
+                    <div className="text-sm md:text-base">困难</div>
+                    <div className="text-[10px] opacity-60">Hard</div>
                   </button>
                   <button 
                     onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 3)} 
                     disabled={shouldDisableReviewButton(currentReviewSentence?.id || '')}
-                    className={`bg-white py-4 rounded-[1.5rem] font-bold shadow-sm border transition-all ${
+                    className={`bg-white py-3 rounded-2xl font-bold shadow-sm border transition-all flex flex-col items-center justify-center ${
                       shouldDisableReviewButton(currentReviewSentence?.id || '')
                         ? 'text-gray-400 border-gray-100 cursor-not-allowed bg-gray-50' 
                         : 'text-blue-500 border-blue-50 hover:bg-blue-50 active:scale-95'
                     }`}
                   >
-                    <div className="text-lg">一般</div>
-                    <div className="text-xs opacity-60">Good</div>
+                    <div className="text-sm md:text-base">一般</div>
+                    <div className="text-[10px] opacity-60">Good</div>
                   </button>
                   <button 
                     onClick={() => currentReviewSentence && handleReviewFeedback(currentReviewSentence.id, 4)} 
                     disabled={shouldDisableReviewButton(currentReviewSentence?.id || '')}
-                    className={`py-4 rounded-[1.5rem] font-black shadow-xl transition-all ${
+                    className={`py-3 rounded-2xl font-black shadow-md transition-all flex flex-col items-center justify-center ${
                       shouldDisableReviewButton(currentReviewSentence?.id || '')
                         ? 'bg-gray-200 text-gray-500 shadow-none cursor-not-allowed' 
                         : 'bg-green-500 text-white shadow-green-200 active:scale-95'
                     }`}
                   >
-                    <div className="text-lg">简单</div>
-                    <div className="text-xs opacity-80">Easy</div>
+                    <div className="text-sm md:text-base">简单</div>
+                    <div className="text-[10px] opacity-80">Easy</div>
                   </button>
                 </div>
               ) : (
@@ -795,37 +844,31 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 <button 
                   onClick={() => goToReviewIndex(currentReviewIndex === 0 ? reviewQueue.length - 1 : currentReviewIndex - 1)}
                   disabled={isProcessingReview}
-                  className={`group flex items-center gap-3 px-6 py-4 rounded-2xl transition-all active:scale-95 ${
+                  className={`text-lg font-bold uppercase tracking-widest transition-colors ${
                     isProcessingReview
                       ? 'text-gray-300 cursor-not-allowed'
-                      : 'text-gray-500 hover:bg-white hover:text-blue-600 hover:shadow-md'
+                      : 'text-gray-600 hover:text-blue-500'
                   }`}
                 >
-                  <span className="text-2xl group-hover:-translate-x-1 transition-transform">←</span>
-                  <span className="text-lg font-black uppercase tracking-widest">上一句</span>
+                  ← 上一句
                 </button>
                 
-                <div className="flex flex-col items-center gap-1">
-                  <span className="text-2xl font-black text-gray-900 leading-none">{currentReviewIndex + 1}</span>
-                  <div className="h-0.5 w-8 bg-gray-100 rounded-full">
-                    <div 
-                      className="h-full bg-blue-500 rounded-full transition-all duration-300"
-                      style={{ width: `${((currentReviewIndex + 1) / reviewQueue.length) * 100}%` }}
-                    />
-                  </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-lg text-gray-900 font-black tracking-widest">{currentReviewIndex + 1}</span>
+                  <span className="text-lg text-gray-600 font-black tracking-widest">/</span>
+                  <span className="text-lg text-gray-600 font-black tracking-widest">{reviewQueue.length}</span>
                 </div>
 
                 <button 
                   onClick={() => goToReviewIndex(currentReviewIndex >= reviewQueue.length - 1 ? 0 : currentReviewIndex + 1)}
                   disabled={isProcessingReview}
-                  className={`group flex items-center gap-3 px-6 py-4 rounded-2xl transition-all active:scale-95 ${
+                  className={`text-lg font-bold uppercase tracking-widest transition-colors ${
                     isProcessingReview
                       ? 'text-gray-300 cursor-not-allowed'
-                      : 'text-gray-500 hover:bg-white hover:text-blue-600 hover:shadow-md'
+                      : 'text-gray-600 hover:text-blue-500'
                   }`}
                 >
-                  <span className="text-lg font-black uppercase tracking-widest">下一句</span>
-                  <span className="text-2xl group-hover:translate-x-1 transition-transform">→</span>
+                  下一句 →
                 </button>
               </div>
             </div>

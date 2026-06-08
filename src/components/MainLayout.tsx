@@ -25,7 +25,22 @@ const MainLayout: React.FC = () => {
   
   const [localIsConfigured, setLocalIsConfigured] = useState(supabaseService.isReady);
   const [isReadingConfig, setIsReadingConfig] = useState(true);
-  const [isNavVisible, setIsNavVisible] = useState(true);
+  const [isNavVisible, setIsNavVisible] = useState(() => {
+    try {
+      const saved = localStorage.getItem('d3s_nav_visible');
+      return saved !== null ? JSON.parse(saved) : true;
+    } catch {
+      return true;
+    }
+  });
+
+  const toggleNavVisible = () => {
+    setIsNavVisible((prev: boolean) => {
+      const newVal = !prev;
+      localStorage.setItem('d3s_nav_visible', JSON.stringify(newVal));
+      return newVal;
+    });
+  };
   const [userNameInput, setUserNameInput] = useState('');
   const [urlInput, setUrlInput] = useState('');
   const [keyInput, setKeyInput] = useState('');
@@ -384,17 +399,16 @@ const MainLayout: React.FC = () => {
             <span className="text-[9px] sm:text-[11px] font-black text-blue-600 uppercase tracking-[0.2em] leading-none mb-1">D3S Platform</span>
             <h1 className="text-lg sm:text-xl font-extrabold tracking-tight">每日三句</h1>
           </div>
-          
-          {/* Desktop Navigation */}
-          {isNavVisible && (
-            <div className="hidden md:flex absolute left-1/2 -translate-x-1/2">
-               <Navbar currentView={currentView} setView={setView} />
-            </div>
-          )}
 
           <div className="flex items-center gap-3">
+             {/* Desktop Navigation - 右上角位置 */}
+             {isNavVisible && (
+               <div className="hidden md:flex">
+                 <Navbar currentView={currentView} setView={setView} />
+               </div>
+             )}
              <button 
-               onClick={() => setIsNavVisible(prev => !prev)} 
+               onClick={toggleNavVisible} 
                className="w-8 h-8 sm:w-10 sm:h-10 bg-gray-100 hover:bg-gray-200 rounded-full flex items-center justify-center transition-colors shadow-sm border border-white"
                title={isNavVisible ? '隐藏导航' : '显示导航'}
              > 
