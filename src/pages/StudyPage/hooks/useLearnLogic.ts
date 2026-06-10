@@ -60,13 +60,13 @@ export const useLearnLogic = ({
         ...sentence, 
         intervalIndex: 1,
         nextReviewDate: nextReviewDate,
-        lastReviewedAt: now,
         updatedAt: now,
         isPendingFirstReview: true,
-        learnedAt: now
+        learnedAt: now,
+        reps: 0
       };
       
-      await storageService.addSentence(updatedSentence, false);
+      await storageService.addSentence(updatedSentence);
       
       storageService.incrementTodayLearnedCount();
       

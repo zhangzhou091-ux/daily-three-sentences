@@ -8,6 +8,7 @@ interface NavbarProps {
 }
 
 const Navbar: React.FC<NavbarProps> = ({ currentView, setView }) => {
+  console.log('[Navbar] 渲染, currentView:', currentView);
   const tabs = [
     { id: 'study', label: '学习', icon: '📖' },
     { id: 'manage', label: '仓库', icon: '📦' },
@@ -20,7 +21,7 @@ const Navbar: React.FC<NavbarProps> = ({ currentView, setView }) => {
       {tabs.map((tab) => (
         <button
           key={tab.id}
-          onClick={() => setView(tab.id as ViewType)}
+          onClick={() => { console.log('[Navbar] 点击切换视图:', tab.id); setView(tab.id as ViewType); }}
           className={`relative flex-1 md:flex-none flex flex-col items-center py-2.5 md:py-2 md:px-6 rounded-[1.5rem] transition-all duration-300 ease-out group ${
             currentView === tab.id 
               ? 'bg-white shadow-sm text-blue-600 md:bg-black/5 md:text-black md:shadow-none' 

@@ -153,9 +153,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, []);
 
   const setView = useCallback((view: ViewType) => {
+    console.log('[AppContext] setView 被调用:', { from: currentView, to: view });
     setCurrentView(view);
     saveCurrentView(view);
-  }, []);
+  }, [currentView]);
 
   return (
     <AppContext.Provider value={{

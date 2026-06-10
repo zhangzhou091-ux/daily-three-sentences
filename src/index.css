@@ -180,6 +180,50 @@ body {
   animation: fade-in 0.3s ease-out forwards;
 }
 
+/* Slide-in animations for swipe transitions */
+@keyframes slide-in-from-left {
+  from { transform: translateX(-30%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes slide-in-from-right {
+  from { transform: translateX(30%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.animate-in.slide-in-from-left-4 {
+  animation-name: slide-in-from-left;
+}
+.animate-in.slide-in-from-right-4 {
+  animation-name: slide-in-from-right;
+}
+
+.animate-in.fade-in {
+  animation-name: fade-in;
+}
+.animate-in.slide-in-from-bottom-2 {
+  animation-name: slide-in-from-bottom;
+}
+.animate-in.slide-in-from-bottom-4 {
+  animation-name: slide-in-from-bottom;
+}
+.animate-in.slide-in-from-top-2 {
+  animation-name: slide-in-from-top;
+}
+.animate-in.slide-in-from-top-4 {
+  animation-name: slide-in-from-top;
+}
+
+@keyframes slide-in-from-bottom {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes slide-in-from-top {
+  from { transform: translateY(-20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
 /* Spring Animation for Toast Messages */
 @keyframes spring-in {
   0% {

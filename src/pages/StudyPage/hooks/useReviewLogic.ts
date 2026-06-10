@@ -169,7 +169,7 @@ export const useReviewLogic = ({
       const isLearnedToday = s.learnedAt && getLocalDateString(s.learnedAt) === todayStr;
       const hasNotReviewedToday = !s.lastReviewedAt || getLocalDateString(s.lastReviewedAt) !== todayStr;
       // 排除：今日学习但尚未复习（以 learnedAt 为兜底，兼容 isPendingFirstReview 缺失的旧数据）
-      if (isLearnedToday && hasNotReviewedToday && s.reps === 0) {
+      if (isLearnedToday && hasNotReviewedToday && (s.reps === 0 || s.isPendingFirstReview === true)) {
         return false;
       }
       

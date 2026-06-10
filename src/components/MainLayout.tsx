@@ -25,22 +25,7 @@ const MainLayout: React.FC = () => {
   
   const [localIsConfigured, setLocalIsConfigured] = useState(supabaseService.isReady);
   const [isReadingConfig, setIsReadingConfig] = useState(true);
-  const [isNavVisible, setIsNavVisible] = useState(() => {
-    try {
-      const saved = localStorage.getItem('d3s_nav_visible');
-      return saved !== null ? JSON.parse(saved) : true;
-    } catch {
-      return true;
-    }
-  });
-
-  const toggleNavVisible = () => {
-    setIsNavVisible((prev: boolean) => {
-      const newVal = !prev;
-      localStorage.setItem('d3s_nav_visible', JSON.stringify(newVal));
-      return newVal;
-    });
-  };
+  const [isNavVisible, setIsNavVisible] = useState(false);
   const [userNameInput, setUserNameInput] = useState('');
   const [urlInput, setUrlInput] = useState('');
   const [keyInput, setKeyInput] = useState('');
@@ -342,7 +327,7 @@ const MainLayout: React.FC = () => {
   };
 
   return (
-    <div className="min-h-dvh text-[#1d1d1f] flex flex-col items-center transition-colors duration-500 overflow-hidden" style={{ backgroundColor: settings.themeColor }}>
+    <div className="min-h-screen text-[#1d1d1f] flex flex-col items-center transition-colors duration-500 overflow-hidden" style={{ backgroundColor: settings.themeColor }}>
       {/* 顶部提示条 */}
       {syncMessage && (
         <div className="fixed top-0 left-0 right-0 z-[100] bg-green-500 text-white text-[10px] font-black uppercase tracking-widest py-1 text-center safe-area-top animate-fade-in">
@@ -399,16 +384,17 @@ const MainLayout: React.FC = () => {
             <span className="text-[9px] sm:text-[11px] font-black text-blue-600 uppercase tracking-[0.2em] leading-none mb-1">D3S Platform</span>
             <h1 className="text-lg sm:text-xl font-extrabold tracking-tight">每日三句</h1>
           </div>
+          
+          {/* Desktop Navigation */}
+          {isNavVisible && (
+            <div className="hidden md:flex absolute left-1/2 -translate-x-1/2">
+               <Navbar currentView={currentView} setView={setView} />
+            </div>
+          )}
 
           <div className="flex items-center gap-3">
-             {/* Desktop Navigation - 右上角位置 */}
-             {isNavVisible && (
-               <div className="hidden md:flex">
-                 <Navbar currentView={currentView} setView={setView} />
-               </div>
-             )}
              <button 
-               onClick={toggleNavVisible} 
+               onClick={() => setIsNavVisible(prev => !prev)} 
                className="w-8 h-8 sm:w-10 sm:h-10 bg-gray-100 hover:bg-gray-200 rounded-full flex items-center justify-center transition-colors shadow-sm border border-white"
                title={isNavVisible ? '隐藏导航' : '显示导航'}
              > 

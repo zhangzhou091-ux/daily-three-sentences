@@ -26,6 +26,7 @@ class ContinuousAudioPlayer {
   private initialized: boolean = false;
   private recoveryRetryCount: number = 0;
   private visibilityHandler: (() => void) | null = null;
+  private pendingPlayResolve: (() => void) | null = null;
 
   constructor() {
     this.audio = new Audio();
@@ -37,7 +38,7 @@ class ContinuousAudioPlayer {
     return this.active;
   }
 
-  activate(): boolean {
+  async activate(): Promise<boolean> {
     if (this.active) {
       console.log('🔊 [连续播放器] 已在激活状态，跳过重复激活');
       return true;
@@ -51,18 +52,19 @@ class ContinuousAudioPlayer {
       console.log('🔊 [连续播放器] 首次激活，执行 iOS 原生解锁...');
       this.audio.src = SILENCE_MP3_BASE64;
       this.audio.volume = 0.01;
-      this.audio.play().then(() => {
+      try {
+        await this.audio.play();
         this.audio.pause();
         this.audio.currentTime = 0;
         this.audio.volume = 1.0;
         this.audio.removeAttribute('src');
         this.audio.load();
         console.log('🔊 [连续播放器] iOS 原生解锁成功 ✅');
-      }).catch((e) => {
+      } catch (e: any) {
         this.audio.volume = 1.0;
         this.audio.removeAttribute('src');
         console.warn(`🔊 [连续播放器] iOS 原生解锁失败 | [错误] ${e?.name}: ${e?.message}`);
-      });
+      }
     }
 
     this.active = true;
@@ -156,6 +158,7 @@ class ContinuousAudioPlayer {
       const doResolve = () => {
         if (settled) return;
         settled = true;
+        this.pendingPlayResolve = null;
         console.log(`🔊 [连续播放器] doResolve | [代数] ${gen}`);
         // iOS: 先移除 onpause 防止 pause() 触发恢复逻辑
         if (isIOS()) {
@@ -171,10 +174,13 @@ class ContinuousAudioPlayer {
       const doReject = (error: Error) => {
         if (settled) return;
         settled = true;
+        this.pendingPlayResolve = null;
         console.warn(`🔊 [连续播放器] doReject | [代数] ${gen} | [错误] ${error.message}`);
         this.revokeCurrentUrl();
         reject(error);
       };
+
+      this.pendingPlayResolve = () => doResolve();
 
       const attemptPlay = () => {
         if (!isCurrentGen() || settled) return;
@@ -319,6 +325,12 @@ class ContinuousAudioPlayer {
   primeAudioChannelWithSilence(): void {
     console.log(`🔊 [连续播放器] primeAudioChannelWithSilence | [active] ${this.active} | [src] ${!!this.audio.src}`);
     if (!this.active) return;
+
+    // 先显式 resolve 任何 pending 的 playBlob Promise，避免因 onended 被清除导致悬挂
+    if (this.pendingPlayResolve) {
+      console.log('🔊 [连续播放器] 清理 pending playBlob Promise');
+      this.pendingPlayResolve();
+    }
 
     this.generation++;
     this.recoveryRetryCount = 0;
