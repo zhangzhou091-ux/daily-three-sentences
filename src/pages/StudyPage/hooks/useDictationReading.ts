@@ -3,6 +3,7 @@ import { Sentence } from '../../../types';
 import { geminiService } from '../../../services/geminiService';
 import { mediaSessionService } from '../../../services/mediaSessionService';
 import { continuousAudioPlayer } from '../../../services/continuousAudioPlayer';
+import { blacklistStorage } from '../../../services/blacklistStorage';
 import { getLocalDateString } from '../../../utils/date';
 import { storageService } from '../../../services/storage';
 
@@ -46,6 +47,7 @@ interface DictationReadingState {
   currentRepeat: number;
   totalPlayed: number;
   errorMessage: string | null;
+  blacklist: Set<string>;
 }
 
 const jitterDelay = (base: number, jitter: number): number =>
@@ -61,6 +63,7 @@ export const useDictationReading = (
     currentRepeat: 0,
     totalPlayed: 0,
     errorMessage: null,
+    blacklist: blacklistStorage.getBlacklist(),
   });
 
   const isActiveRef = useRef(false);
@@ -111,7 +114,8 @@ export const useDictationReading = (
       }
     }
 
-    return pool;
+    const blacklist = blacklistStorage.getBlacklist();
+    return pool.filter(s => !blacklist.has(s.id));
   }, []);
 
   const playSentenceOnce = useCallback(async (
@@ -309,7 +313,7 @@ export const useDictationReading = (
     }
   }, [getReadingPool, playSentenceOnce, preloadNextSentences]);
 
-  const startReading = useCallback(() => {
+  const startReading = useCallback(async () => {
     const pool = getReadingPool();
     if (pool.length === 0) {
       setState(prev => ({
@@ -319,7 +323,7 @@ export const useDictationReading = (
       return;
     }
 
-    continuousAudioPlayer.activate();
+    await continuousAudioPlayer.activate();
     mediaSessionService.startSilenceKeepAlive();
 
     if (typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent) && storageService.getSettings().ttsEngine === 'webSpeech') {
@@ -481,6 +485,46 @@ export const useDictationReading = (
     };
   }, []);
 
+  const toggleBlacklist = useCallback((sentenceId: string) => {
+    const currentBlacklist = state.blacklist;
+    let newBlacklist: Set<string>;
+
+    if (currentBlacklist.has(sentenceId)) {
+      newBlacklist = blacklistStorage.removeSentence(sentenceId);
+    } else {
+      newBlacklist = blacklistStorage.addSentence(sentenceId);
+    }
+
+    setState(prev => ({
+      ...prev,
+      blacklist: new Set(newBlacklist),
+    }));
+
+    if (state.isActive && newBlacklist.has(sentenceId)) {
+      const pool = getReadingPool();
+      const newPool = pool.filter(s => !newBlacklist.has(s.id));
+      if (newPool.length === 0) {
+        stopReading();
+        setState(prev => ({
+          ...prev,
+          errorMessage: '所有句子已被排除，请取消部分排除后再试',
+        }));
+      }
+    }
+  }, [state.blacklist, state.isActive, getReadingPool, stopReading]);
+
+  const isBlacklisted = useCallback((sentenceId: string): boolean => {
+    return state.blacklist.has(sentenceId);
+  }, [state.blacklist]);
+
+  const clearBlacklist = useCallback(() => {
+    blacklistStorage.clearBlacklist();
+    setState(prev => ({
+      ...prev,
+      blacklist: new Set(),
+    }));
+  }, []);
+
   const pool = getReadingPool();
   const currentSentence = pool[state.currentIndex] || null;
   const canGoPrev = pool.length > 1;
@@ -501,6 +545,10 @@ export const useDictationReading = (
     goToNextReadingSentence: goToNextSentence,
     canGoPrevReadingSentence: canGoPrev,
     canGoNextReadingSentence: canGoNext,
+    toggleBlacklist,
+    isBlacklisted,
+    clearBlacklist,
+    blacklistSize: state.blacklist.size,
     REPEATS_PER_SENTENCE,
   };
 };

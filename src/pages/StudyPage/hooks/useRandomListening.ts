@@ -465,7 +465,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
     }
   }, [pickRandomSentence, playSentenceOnce, getEligiblePool, addToHistory]);
 
-  const startListening = useCallback(() => {
+  const startListening = useCallback(async () => {
     const eligiblePool = getEligiblePool();
     if (eligiblePool.length === 0) {
       const totalPool = poolRef.current;
@@ -480,7 +480,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
       return;
     }
 
-    continuousAudioPlayer.activate();
+    await continuousAudioPlayer.activate();
     mediaSessionService.startSilenceKeepAlive();
 
     if (typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent) && storageService.getSettings().ttsEngine === 'webSpeech') {

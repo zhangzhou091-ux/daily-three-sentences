@@ -106,10 +106,12 @@ export const useDailySelection = ({
             console.log(`📚 generateDailySelection: 跳过预约日期未到的句子: ${id}`);
             return;
           }
-          const isLearnedToday = sentence.lastReviewedAt 
-            ? getLocalDateString(new Date(sentence.lastReviewedAt)) === todayDateStr 
+          const isLearnedToday = sentence.lastReviewedAt
+            ? getLocalDateString(new Date(sentence.lastReviewedAt)) === todayDateStr
             : false;
-          if (sentence.intervalIndex === 0 || isLearnedToday) {
+          if (sentence.intervalIndex === 0) {
+            retained.push(sentence);
+          } else if (isLearnedToday && !sentence.scheduledDate) {
             retained.push(sentence);
           }
         });
@@ -264,6 +266,20 @@ export const useDailySelection = ({
 
         await Promise.all(updatePromises);
         console.log(`📚 后台静默处理：${missedScheduled.length} 个预约句子顺延至 ${tomorrowStr}`);
+      }
+
+      const learnedButScheduled = sentencesSnapshot.filter(s =>
+        s.scheduledDate &&
+        s.intervalIndex > 0
+      );
+
+      if (learnedButScheduled.length > 0) {
+        const clearPromises = learnedButScheduled.map(sentence => {
+          const updated = { ...sentence, scheduledDate: undefined, updatedAt: Date.now() };
+          return storageService.addSentence(updated, false);
+        });
+        await Promise.all(clearPromises);
+        console.log(`📚 后台静默清理：${learnedButScheduled.length} 个已学句子的预约日期已清除`);
       }
     } catch (err: unknown) {
       if (err instanceof Error) {

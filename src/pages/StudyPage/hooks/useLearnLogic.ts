@@ -56,14 +56,16 @@ export const useLearnLogic = ({
       const now = Date.now();
       const nextReviewDate = getNextReviewDate();
       
-      const updatedSentence: Sentence = { 
-        ...sentence, 
+      const updatedSentence: Sentence = {
+        ...sentence,
         intervalIndex: 1,
         nextReviewDate: nextReviewDate,
+        lastReviewedAt: now,
         updatedAt: now,
         isPendingFirstReview: true,
         learnedAt: now,
-        reps: 0
+        reps: 0,
+        scheduledDate: undefined
       };
       
       await storageService.addSentence(updatedSentence);

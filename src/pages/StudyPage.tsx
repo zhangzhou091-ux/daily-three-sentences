@@ -73,10 +73,8 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   
   // 触摸滑动状态
   const tabOrder: StudyStep[] = ['learn', 'review', 'dictation'];
-  const [touchStartX, setTouchStartX] = useState(0);
-  const [touchTranslateX, setTouchTranslateX] = useState(0);
-  const [isDragging, setIsDragging] = useState(false);
-  const SWIPE_THRESHOLD = 60;
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const isScrollingByTapRef = useRef(false);
   
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'failed'>('idle');
@@ -250,10 +248,14 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     goToNextReadingSentence,
     canGoPrevReadingSentence,
     canGoNextReadingSentence,
+    toggleBlacklist: dictationToggleBlacklist,
+    isBlacklisted: isDictationBlacklisted,
+    clearBlacklist: clearDictationBlacklist,
+    blacklistSize: dictationBlacklistSize,
     REPEATS_PER_SENTENCE: DICTATION_READING_REPEATS,
   } = useDictationReading(sentences, dailySelection);
 
-  const [dictationReadingMode, setDictationReadingMode] = useState<'random' | 'sequential'>('random');
+  const [dictationReadingMode, setDictationReadingMode] = useState<'random' | 'sequential'>('sequential');
 
   const handleToggleRandomListening = useCallback(() => {
     if (isDictationReadingActive) stopDictationReading();
@@ -265,41 +267,46 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     toggleDictationReading();
   }, [isRandomListeningActive, stopRandomListening, toggleDictationReading]);
 
-  // 触摸滑动切换（放在 hooks 之后以访问 hook 变量）
-  const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    setTouchStartX(e.touches[0].clientX);
-    setIsDragging(true);
-    setTouchTranslateX(0);
-  }, []);
-
-  const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    if (!isDragging) return;
-    const dx = e.touches[0].clientX - touchStartX;
-    setTouchTranslateX(dx);
-  }, [isDragging, touchStartX]);
-
-  const handleTouchEnd = useCallback(() => {
-    setIsDragging(false);
-    const currentIdx = tabOrder.indexOf(activeTab);
-    
-    if (touchTranslateX < -SWIPE_THRESHOLD && currentIdx < tabOrder.length - 1) {
+  // 滚动滑动切换（CSS scroll-snap 处理动画，JS 仅同步 activeTab）
+  const handleScrollSnap = useCallback(() => {
+    if (isScrollingByTapRef.current) return;
+    const container = scrollRef.current;
+    if (!container) return;
+    const width = container.clientWidth;
+    if (width === 0) return;
+    const index = Math.round(container.scrollLeft / width);
+    if (index < 0 || index >= tabOrder.length) return;
+    const newTab = tabOrder[index];
+    if (newTab && newTab !== activeTab) {
       geminiService.stop();
       if (isRandomListeningActive) stopRandomListening();
       if (isDictationReadingActive) stopDictationReading();
-      setActiveTab(tabOrder[currentIdx + 1]);
+      setActiveTab(newTab);
       setCurrentIndex(0);
-      setIsFlipped(tabOrder[currentIdx + 1] === 'review');
-    } else if (touchTranslateX > SWIPE_THRESHOLD && currentIdx > 0) {
-      geminiService.stop();
-      if (isRandomListeningActive) stopRandomListening();
-      if (isDictationReadingActive) stopDictationReading();
-      setActiveTab(tabOrder[currentIdx - 1]);
-      setCurrentIndex(0);
-      setIsFlipped(tabOrder[currentIdx - 1] === 'review');
+      setIsFlipped(newTab === 'review');
     }
-    
-    setTouchTranslateX(0);
-  }, [touchTranslateX, activeTab, tabOrder, setActiveTab, isRandomListeningActive, stopRandomListening, isDictationReadingActive, stopDictationReading]);
+  }, [activeTab, tabOrder, setActiveTab, isRandomListeningActive, stopRandomListening, isDictationReadingActive, stopDictationReading]);
+
+  const scrollToTab = useCallback((tab: StudyStep) => {
+    const container = scrollRef.current;
+    if (!container) return;
+    const index = tabOrder.indexOf(tab);
+    if (index < 0) return;
+    isScrollingByTapRef.current = true;
+    container.scrollTo({ left: index * container.clientWidth, behavior: 'smooth' });
+    setTimeout(() => { isScrollingByTapRef.current = false; }, 400);
+  }, [tabOrder]);
+
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!container) return;
+    const index = tabOrder.indexOf(activeTab);
+    if (index < 0) return;
+    const expectedLeft = index * container.clientWidth;
+    if (Math.abs(container.scrollLeft - expectedLeft) > 1) {
+      container.scrollTo({ left: expectedLeft, behavior: 'auto' });
+    }
+  }, [activeTab, tabOrder]);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -422,7 +429,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     };
   }, []);
 
-  const speak = async (text: string, loop: boolean = true) => {
+  const speak = useCallback(async (text: string, loop: boolean = true) => {
     if (!text?.trim()) return;
 
     if (loop && speakingText === text) {
@@ -447,7 +454,15 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
       setSpeakError('语音播放失败，请在设置中检查TTS引擎配置');
       setTimeout(() => setSpeakError(null), 3000);
     }
-  };
+  }, [speakingText]);
+
+  const handleSpeechRateChange = useCallback((rate: number) => {
+    const clampedRate = Math.max(0.1, Math.min(10, rate));
+    const updated = { ...settings, speechRate: clampedRate, updatedAt: Date.now() };
+    storageService.saveSettings(updated);
+    setSettings(updated);
+    geminiService.setPlaybackRate(clampedRate);
+  }, [settings]);
 
   useEffect(() => {
     if (activeTab !== 'review') return;
@@ -605,7 +620,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
             {(['learn', 'review', 'dictation'] as StudyStep[]).map(tab => (
               <button
                 key={tab}
-                onClick={() => { geminiService.stop(); setSpeakingText(null); if (isRandomListeningActive) stopRandomListening(); if (isDictationReadingActive) stopDictationReading(); setActiveTab(tab); setCurrentIndex(0); setIsFlipped(tab === 'review'); }}
+                onClick={() => { geminiService.stop(); setSpeakingText(null); if (isRandomListeningActive) stopRandomListening(); if (isDictationReadingActive) stopDictationReading(); scrollToTab(tab); setActiveTab(tab); setCurrentIndex(0); setIsFlipped(tab === 'review'); }}
                 className={`px-4 py-2 text-[11px] font-black uppercase tracking-wider rounded-[1.2rem] transition-all duration-300 ${
                   activeTab === tab ? 'bg-white shadow-sm text-blue-600' : 'text-gray-600 hover:text-gray-800'
                 }`}
@@ -617,26 +632,16 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
       </div>
 
       <div
-        className="min-h-[460px]"
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-        onTouchCancel={() => { setIsDragging(false); setTouchTranslateX(0); }}
-        style={{
-          transform: isDragging ? `translateX(${touchTranslateX}px)` : 'translateX(0)',
-          transition: isDragging ? 'none' : 'transform 0.35s cubic-bezier(0.25, 0.1, 0.25, 1.0)',
-          opacity: isDragging ? Math.max(0.6, 1 - Math.abs(touchTranslateX) / 300) : 1,
-        }}
+        ref={scrollRef}
+        className="min-h-[460px] overflow-x-auto snap-x snap-mandatory flex [&::-webkit-scrollbar]:hidden"
+        onScroll={handleScrollSnap}
+        style={{ WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none' }}
       >
-        {activeTab === 'learn' && (
-          dailySelection.length > 0 ? (
-            (() => {
-              const sentence = currentSentenceLatest || currentSentence;
-              if (!sentence) return null;
-              return (
+        <div className="min-w-full snap-center shrink-0">
+          {dailySelection.length > 0 && currentSentenceLatest && (
             <div className="space-y-8">
               <LearnCard
-                sentence={sentence}
+                sentence={currentSentenceLatest}
                 onFlip={() => setIsFlipped(!isFlipped)}
                 isFlipped={isFlipped}
                 onMarkLearned={handleMarkLearned}
@@ -644,21 +649,15 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 isCurrentlyLearned={isCurrentlyLearned}
                 isAnimating={isAnimating}
                 isSavingLearned={isSavingLearned}
-                isSpeaking={speakingText === sentence.english}
+                isSpeaking={speakingText === currentSentenceLatest.english}
                 speechRate={settings.speechRate ?? 1}
-                onSpeechRateChange={(rate) => {
-                  const clampedRate = Math.max(0.1, Math.min(10, rate));
-                  const updated = { ...settings, speechRate: clampedRate, updatedAt: Date.now() };
-                  storageService.saveSettings(updated);
-                  setSettings(updated);
-                  geminiService.setPlaybackRate(clampedRate);
-                }}
+                onSpeechRateChange={handleSpeechRateChange}
               />
               <div className="flex flex-col gap-4">
                 {!isCurrentlyLearned && !isAnimating ? (
                   <>
                     <button
-                      onClick={() => handleMarkLearned(sentence.id)}
+                      onClick={() => handleMarkLearned(currentSentenceLatest.id)}
                       className="w-full bg-black text-white py-5 rounded-[2rem] font-black text-xl shadow-2xl shadow-black/10 hover:bg-gray-800 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
                     >
                       <span>标记掌握</span>
@@ -706,7 +705,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     </button>
                     <div className="flex items-center gap-2">
                        <span className="text-lg text-gray-900 font-black tracking-widest">{currentIndex + 1}</span>
-                       <span className="text-lg text-gray-600 font-black tracking-widest">/</span>
+                       <span className="text-lg text-gray-600 font-black tracking-widest">{"/"}</span>
                        <span className="text-lg text-gray-600 font-black tracking-widest">{dailySelection.length}</span>
                     </div>
                     <button 
@@ -719,20 +718,19 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 </div>
               </div>
             </div>
-              );
-            })()
-          ) : (
+          )}
+          {dailySelection.length > 0 && !currentSentenceLatest && null}
+          {dailySelection.length === 0 && (
             <div className="apple-card p-16 text-center space-y-6">
               <div className="text-7xl">🪴</div>
               <h2 className="text-2xl font-black text-gray-900 tracking-tight">库中暂无可学内容</h2>
               <p className="text-gray-600 font-medium">请到仓库页添加新句子。</p>
             </div>
-          )
-        )}
-
-        {activeTab === 'review' && (
-          reviewQueue.length > 0 ? (
-            <div className="space-y-8 animate-in slide-in-from-right-4 duration-500">
+          )}
+        </div>
+        <div className="min-w-full snap-center shrink-0">
+          {reviewQueue.length > 0 ? (
+            <div className="space-y-8">
               {trainingIds.length > 0 && (
                 <div className="bg-gradient-to-r from-orange-50 to-amber-50 text-orange-700 text-sm font-bold px-4 py-2 rounded-lg flex items-center justify-between border border-orange-100">
                   <span className="flex items-center gap-2">
@@ -756,13 +754,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 reps={reviewQueue[currentReviewIndex]?.reps || 0}
                 isSpeaking={speakingText === reviewQueue[currentReviewIndex]?.english}
                 speechRate={settings.speechRate ?? 1}
-                onSpeechRateChange={(rate) => {
-                  const clampedRate = Math.max(0.1, Math.min(10, rate));
-                  const updated = { ...settings, speechRate: clampedRate, updatedAt: Date.now() };
-                  storageService.saveSettings(updated);
-                  setSettings(updated);
-                  geminiService.setPlaybackRate(clampedRate);
-                }}
+                onSpeechRateChange={handleSpeechRateChange}
               />
               
               {!isCurrentReviewed ? (
@@ -881,24 +873,23 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
               </p>
               <div className="flex gap-3">
                 <button 
-                  onClick={() => setActiveTab('learn')}
+                  onClick={() => { scrollToTab('learn'); setActiveTab('learn'); }}
                   className="px-6 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors"
                 >
                   去学习新句子
                 </button>
                 <button 
-                  onClick={() => setActiveTab('dictation')}
+                  onClick={() => { scrollToTab('dictation'); setActiveTab('dictation'); }}
                   className="px-6 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
                 >
                   去默写挑战
                 </button>
               </div>
             </div>
-          )
-        )}
-
-        {activeTab === 'dictation' && (
-          <div className="space-y-10 animate-in slide-in-from-left-4 duration-500 safe-area-bottom">
+          )}
+        </div>
+        <div className="min-w-full snap-center shrink-0">
+          <div className="space-y-10 safe-area-bottom">
             {/* 合并朗读卡片：随机/顺序 模式切换 */}
             <div className="apple-card p-6 relative overflow-hidden" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left', paddingTop: '20px', paddingBottom: '20px' }}>
               {/* 顶部栏：模式切换 + 语速 + 信息 */}
@@ -943,12 +934,18 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       {opt.label}
                     </button>
                   ))}
-                  {dictationReadingMode === 'random' && blacklistSize > 0 && (
+                  {(dictationReadingMode === 'random' ? blacklistSize : dictationBlacklistSize) > 0 && (
                     <button
-                      onClick={clearBlacklist}
+                      onClick={() => {
+                        if (dictationReadingMode === 'random') {
+                          clearBlacklist();
+                        } else {
+                          clearDictationBlacklist();
+                        }
+                      }}
                       className="text-xs font-bold text-gray-400 hover:text-red-500 transition-colors ml-1"
                     >
-                      清除排除({blacklistSize})
+                      清除排除({dictationReadingMode === 'random' ? blacklistSize : dictationBlacklistSize})
                     </button>
                   )}
                   <span className="text-xs font-bold text-gray-400 ml-1">
@@ -1064,13 +1061,28 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       <div className="w-full text-left space-y-2">
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 min-w-0">
-                            <h3 className="text-lg font-normal leading-normal w-full break-words whitespace-pre-wrap text-gray-900">
+                            <h3 className={`text-lg font-normal leading-normal w-full break-words whitespace-pre-wrap ${
+                              isDictationBlacklisted(dictationReadingSentence.id) ? 'text-gray-300 line-through' : 'text-gray-900'
+                            }`}>
                               {dictationReadingSentence.english}
                             </h3>
-                            <p className="text-sm leading-normal break-words text-gray-400">
+                            <p className={`text-sm leading-normal break-words ${
+                              isDictationBlacklisted(dictationReadingSentence.id) ? 'text-gray-200 line-through' : 'text-gray-400'
+                            }`}>
                               {dictationReadingSentence.chinese}
                             </p>
                           </div>
+                          <button
+                            onClick={() => dictationToggleBlacklist(dictationReadingSentence.id)}
+                            className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs transition-all ${
+                              isDictationBlacklisted(dictationReadingSentence.id)
+                                ? 'bg-red-100 text-red-500 hover:bg-red-200'
+                                : 'bg-gray-100 text-gray-400 hover:bg-gray-200 hover:text-gray-600'
+                            }`}
+                            title={isDictationBlacklisted(dictationReadingSentence.id) ? '取消排除' : '排除此句'}
+                          >
+                            {isDictationBlacklisted(dictationReadingSentence.id) ? '🚫' : '⊘'}
+                          </button>
                         </div>
                       </div>
                       <div className="mt-auto flex flex-col items-center w-full">
@@ -1274,7 +1286,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
               </div>
             </div>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

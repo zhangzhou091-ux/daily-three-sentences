@@ -27,6 +27,7 @@ class ContinuousAudioPlayer {
   private recoveryRetryCount: number = 0;
   private visibilityHandler: (() => void) | null = null;
   private pendingPlayResolve: (() => void) | null = null;
+  private resolving: boolean = false;
 
   constructor() {
     this.audio = new Audio();
@@ -160,6 +161,8 @@ class ContinuousAudioPlayer {
         settled = true;
         this.pendingPlayResolve = null;
         console.log(`🔊 [连续播放器] doResolve | [代数] ${gen}`);
+        // 设置 resolving 标志，防止 handleAudioPause 在 pause() 期间触发恢复
+        this.resolving = true;
         // iOS: 先移除 onpause 防止 pause() 触发恢复逻辑
         if (isIOS()) {
           this.audio.onpause = null;
@@ -168,6 +171,7 @@ class ContinuousAudioPlayer {
         this.audio.removeAttribute('src');
         this.audio.load();
         this.revokeCurrentUrl();
+        this.resolving = false;
         resolve();
       };
 
@@ -359,8 +363,13 @@ class ContinuousAudioPlayer {
   }
 
   private handleAudioPause = (): void => {
-    console.log(`🔊 [连续播放器] onpause 触发 | [active] ${this.active} | [src] ${!!this.audio.src} | [ended] ${this.audio.ended} | [recoveryRetryCount] ${this.recoveryRetryCount} | [visibilityState] ${document.visibilityState}`);
+    console.log(`🔊 [连续播放器] onpause 触发 | [active] ${this.active} | [src] ${!!this.audio.src} | [ended] ${this.audio.ended} | [resolving] ${this.resolving} | [recoveryRetryCount] ${this.recoveryRetryCount} | [visibilityState] ${document.visibilityState}`);
     if (!this.active) return;
+    // 如果 doResolve 正在清理，不恢复 — 这是正常结束而非意外中断
+    if (this.resolving) {
+      console.log('🔊 [连续播放器] onpause: doResolve 正在处理，跳过恢复');
+      return;
+    }
     if (!this.audio.src) {
       console.log('🔊 [连续播放器] onpause: 无 src，跳过恢复');
       return;

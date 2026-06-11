@@ -61,7 +61,7 @@ export const Calendar: React.FC<CalendarProps> = ({ sentences = [] }) => {
     const totalSentences = sentences.length;
     let scheduledCount = 0;
     for (const s of sentences) {
-      if (s.scheduledDate) {
+      if (s.scheduledDate && s.intervalIndex === 0) {
         const existing = map.get(s.scheduledDate) || [];
         existing.push(s);
         map.set(s.scheduledDate, existing);

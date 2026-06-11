@@ -56,9 +56,9 @@ export const unlockAudioEngine = (): Promise<boolean> => {
       console.log('🔊 [AudioUnlock] HTMLAudioElement 已创建，准备播放静音解锁...');
 
       const timeout = setTimeout(() => {
-        console.warn('🔊 [AudioUnlock] 3秒超时，强制标记为已解锁（兜底）');
-        isAudioUnlocked = true;
-        resolve(true);
+        console.warn('🔊 [AudioUnlock] 3秒超时，音频引擎未能解锁（可能是iOS静音模式或用户未交互）');
+        unlockPromise = null;
+        resolve(false);
       }, 3000);
 
       audio.play().then(() => {

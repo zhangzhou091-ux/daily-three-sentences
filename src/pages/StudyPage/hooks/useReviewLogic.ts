@@ -311,13 +311,14 @@ export const useReviewLogic = ({
         sentence
       );
       
-      const updated: Sentence = { 
-        ...sentence, 
-        intervalIndex: nextIndex, 
+      const updated: Sentence = {
+        ...sentence,
+        intervalIndex: nextIndex,
         nextReviewDate: nextDate,
         lastReviewedAt: Date.now(),
         timesReviewed: (sentence.timesReviewed || 0) + 1,
         updatedAt: Date.now(),
+        scheduledDate: undefined,
         ...(sentence.isPendingFirstReview === true ? { isPendingFirstReview: false } : {}),
         ...fsrsData
       };
