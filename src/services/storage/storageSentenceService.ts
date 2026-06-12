@@ -80,18 +80,9 @@ export const storageSentenceService = {
     const existing = await dbService.findByEnglish(trimmedEnglish);
 
     if (existing) {
-      const isAlreadyLearned = existing.intervalIndex > 0;
       const updatedSentence = {
         ...existing,
         ...sentence,
-        ...(isAlreadyLearned ? {
-          intervalIndex: existing.intervalIndex,
-          learnedAt: existing.learnedAt,
-          isPendingFirstReview: existing.isPendingFirstReview,
-          lastReviewedAt: existing.lastReviewedAt,
-          nextReviewDate: existing.nextReviewDate,
-          scheduledDate: existing.scheduledDate,
-        } : {}),
         id: existing.id,
         english: trimmedEnglish,
         updatedAt: Date.now()

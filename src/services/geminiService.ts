@@ -391,10 +391,6 @@ const executeSpeak = async (text: string, loop: boolean = false, rate: number = 
 
   window.speechSynthesis.cancel();
 
-  if (isIOS()) {
-    await new Promise(resolve => setTimeout(resolve, 150));
-  }
-
   const gen = ++speakGeneration;
   currentWebSpeechRate = rate;
 

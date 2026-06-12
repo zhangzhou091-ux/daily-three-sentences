@@ -167,9 +167,8 @@ export const useReviewLogic = ({
       if (s.intervalIndex === 0) return false;
       
       const isLearnedToday = s.learnedAt && getLocalDateString(s.learnedAt) === todayStr;
-      const hasNotReviewedToday = !s.lastReviewedAt || getLocalDateString(s.lastReviewedAt) !== todayStr;
-      // 排除：今日学习但尚未复习（以 learnedAt 为兜底，兼容 isPendingFirstReview 缺失的旧数据）
-      if (isLearnedToday && hasNotReviewedToday && (s.reps === 0 || s.isPendingFirstReview === true)) {
+      // 排除：今日学习但尚未正式复习（以 learnedAt 为兜底，兼容 isPendingFirstReview 缺失的旧数据）
+      if (isLearnedToday && (s.reps === 0 || s.isPendingFirstReview === true)) {
         return false;
       }
       
@@ -273,7 +272,8 @@ export const useReviewLogic = ({
     }
     if (isProcessingReview) return;
     
-    const normalizedIndex = Math.max(0, Math.min(nextIndex, reviewQueue.length - 1));
+    const length = reviewQueue.length;
+    const normalizedIndex = ((nextIndex % length) + length) % length;
     const nextSentence = reviewQueue[normalizedIndex];
     
     if (!nextSentence || !nextSentence.id) {

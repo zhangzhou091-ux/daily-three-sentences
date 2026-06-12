@@ -54,17 +54,23 @@ class ContinuousAudioPlayer {
       this.audio.src = SILENCE_MP3_BASE64;
       this.audio.volume = 0.01;
       try {
-        await this.audio.play();
-        this.audio.pause();
-        this.audio.currentTime = 0;
-        this.audio.volume = 1.0;
-        this.audio.removeAttribute('src');
-        this.audio.load();
-        console.log('🔊 [连续播放器] iOS 原生解锁成功 ✅');
+        // 火种取栗：静音播放不阻塞主流程，避免消耗 User Gesture Token
+        this.audio.play().then(() => {
+          this.audio.pause();
+          this.audio.currentTime = 0;
+          this.audio.volume = 1.0;
+          this.audio.removeAttribute('src');
+          this.audio.load();
+          console.log('🔊 [连续播放器] iOS 原生解锁成功 ✅');
+        }).catch((e: any) => {
+          this.audio.volume = 1.0;
+          this.audio.removeAttribute('src');
+          console.warn(`🔊 [连续播放器] iOS 原生解锁失败 | [错误] ${e?.name}: ${e?.message}`);
+        });
       } catch (e: any) {
         this.audio.volume = 1.0;
         this.audio.removeAttribute('src');
-        console.warn(`🔊 [连续播放器] iOS 原生解锁失败 | [错误] ${e?.name}: ${e?.message}`);
+        console.warn(`🔊 [连续播放器] iOS 原生解锁异常 | [错误] ${e?.message}`);
       }
     }
 
@@ -328,7 +334,6 @@ class ContinuousAudioPlayer {
 
   primeAudioChannelWithSilence(): void {
     console.log(`🔊 [连续播放器] primeAudioChannelWithSilence | [active] ${this.active} | [src] ${!!this.audio.src}`);
-    if (!this.active) return;
 
     // 先显式 resolve 任何 pending 的 playBlob Promise，避免因 onended 被清除导致悬挂
     if (this.pendingPlayResolve) {

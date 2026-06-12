@@ -460,6 +460,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   const speak = useCallback(async (text: string, loop: boolean = true) => {
     if (!text?.trim()) return;
 
+    // 同步抢占音频通道，在异步请求前锁定 User Gesture Token
+    continuousAudioPlayer.primeAudioChannelWithSilence();
+
     if (loop && speakingText === text) {
       geminiService.stop();
       setSpeakingText(null);
@@ -745,9 +748,11 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 
                 <div className="flex justify-between items-center px-6">
                     <button 
-                      disabled={currentIndex === 0} 
-                      onClick={() => { setIsFlipped(false); setCurrentIndex(currentIndex - 1); }} 
-                      className={`text-lg font-bold uppercase tracking-widest transition-colors ${currentIndex === 0 ? 'text-gray-500' : 'text-gray-600 hover:text-blue-500'}`}
+                      onClick={() => { 
+                        setIsFlipped(false); 
+                        setCurrentIndex((currentIndex - 1 + dailySelection.length) % dailySelection.length); 
+                      }} 
+                      className="text-lg font-bold uppercase tracking-widest transition-colors text-gray-600 hover:text-blue-500"
                     >
                       ← Prev
                     </button>
@@ -757,9 +762,11 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                        <span className="text-lg text-gray-600 font-black tracking-widest">{dailySelection.length}</span>
                     </div>
                     <button 
-                      disabled={currentIndex === dailySelection.length - 1} 
-                      onClick={() => { setIsFlipped(false); setCurrentIndex(currentIndex + 1); }} 
-                      className={`text-lg font-bold uppercase tracking-widest transition-colors ${currentIndex === dailySelection.length - 1 ? 'text-gray-500' : 'text-gray-600 hover:text-blue-500'}`}
+                      onClick={() => { 
+                        setIsFlipped(false); 
+                        setCurrentIndex((currentIndex + 1) % dailySelection.length); 
+                      }} 
+                      className="text-lg font-bold uppercase tracking-widest transition-colors text-gray-600 hover:text-blue-500"
                     >
                       Next →
                     </button>
@@ -884,9 +891,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
               <div className="flex justify-between items-center px-4 mt-2">
                 <button 
                   onClick={() => goToReviewIndex(currentReviewIndex - 1)}
-                  disabled={currentReviewIndex === 0 || isProcessingReview}
+                  disabled={isProcessingReview}
                   className={`group flex items-center gap-3 px-6 py-4 rounded-2xl transition-all active:scale-95 ${
-                    currentReviewIndex === 0 || isProcessingReview
+                    isProcessingReview
                       ? 'text-gray-300 cursor-not-allowed'
                       : 'text-gray-500 hover:bg-white hover:text-blue-600 hover:shadow-md'
                   }`}
@@ -907,9 +914,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
 
                 <button 
                   onClick={() => goToReviewIndex(currentReviewIndex + 1)}
-                  disabled={currentReviewIndex >= reviewQueue.length - 1 || isProcessingReview}
+                  disabled={isProcessingReview}
                   className={`group flex items-center gap-3 px-6 py-4 rounded-2xl transition-all active:scale-95 ${
-                    currentReviewIndex >= reviewQueue.length - 1 || isProcessingReview
+                    isProcessingReview
                       ? 'text-gray-300 cursor-not-allowed'
                       : 'text-gray-500 hover:bg-white hover:text-blue-600 hover:shadow-md'
                   }`}

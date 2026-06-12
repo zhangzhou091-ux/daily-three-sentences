@@ -31,26 +31,15 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({
   onSpeechRateChange,
 }) => {
   return (
-    <div className="perspective-1000 min-h-[380px] w-full">
+    <div className="perspective-1000 w-full">
       <div
         className={`card-inner apple-card ${isFlipped ? 'card-flipped' : ''}`}
         onClick={onFlip}
-        style={{ position: 'relative', width: '100%', height: 'auto', transformStyle: 'preserve-3d' }}
+        style={{ position: 'relative', width: '100%', minHeight: '380px', transformStyle: 'preserve-3d' }}
       >
         <div
           className="card-front p-6 bg-white"
           style={{
-            backfaceVisibility: 'hidden',
-            WebkitBackfaceVisibility: 'hidden',
-            transform: 'none',
-            position: 'relative',
-            width: '100%',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'flex-start',
-            justifyContent: 'flex-start',
-            minHeight: '380px',
-            textAlign: 'left',
             paddingTop: '20px',
             paddingBottom: '20px',
             overflow: 'hidden'
@@ -113,11 +102,6 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({
         <div
           className="card-back p-6 flex flex-col bg-white"
           style={{
-            backfaceVisibility: 'hidden',
-            WebkitBackfaceVisibility: 'hidden',
-            position: 'absolute',
-            inset: 0,
-            transform: 'rotateY(180deg)',
             textAlign: 'left',
             paddingTop: '20px',
             paddingBottom: '20px'

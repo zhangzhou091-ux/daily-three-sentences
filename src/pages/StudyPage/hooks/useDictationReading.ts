@@ -73,7 +73,6 @@ export const useDictationReading = (
   const dailySelectionRef = useRef(dailySelection);
   const startIdxRef = useRef(0);
   const preloadCacheRef = useRef<Map<number, Blob>>(new Map());
-  const preloadGenRef = useRef(0);
   const goToPrevRef = useRef<((preserveAudioSession?: boolean) => void) | null>(null);
   const goToNextRef = useRef<((preserveAudioSession?: boolean) => void) | null>(null);
 
@@ -314,6 +313,9 @@ export const useDictationReading = (
   }, [getReadingPool, playSentenceOnce, preloadNextSentences]);
 
   const startReading = useCallback(async () => {
+    // 同步抢占音频通道，在异步请求前锁定 User Gesture Token
+    continuousAudioPlayer.primeAudioChannelWithSilence();
+
     const pool = getReadingPool();
     if (pool.length === 0) {
       setState(prev => ({
@@ -350,13 +352,14 @@ export const useDictationReading = (
       }
     }
 
-    setState({
+    setState(prev => ({
+      ...prev,
       isActive: true,
       currentIndex: startIndex,
       currentRepeat: 0,
       totalPlayed: totalPlayedRef.current,
       errorMessage: null,
-    });
+    }));
 
     startIdxRef.current = startIndex;
     runReadingLoop(gen, startIndex);

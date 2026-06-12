@@ -119,7 +119,7 @@ const measureNetworkQuality = async (): Promise<NetworkQualitySnapshot> => {
   try {
     const start = performance.now();
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
 
     await fetch(`${API_BASE}/v1/voices`, {
       method: 'HEAD',
@@ -399,14 +399,10 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
     audio.onloadeddata = () => {
       if (!isCurrentGen() || settled) return;
       console.log(`🔊 [ElevenLabs] onloadeddata 触发 | [iOS] ${ios} | [readyState] ${audio.readyState} | [duration] ${audio.duration}`);
-
-      if (isIOS()) {
-        setTimeout(() => {
-          if (!isCurrentGen() || settled) return;
-          console.log(`🔊 [ElevenLabs] iOS onloadeddata 延迟播放 | [readyState] ${audio.readyState}`);
-          connectToGain();
-          attemptPlay();
-        }, 100);
+      // iOS 不再延迟播放，由 oncanplay 统一处理以紧跟 User Gesture 上下文
+      if (!isIOS()) {
+        connectToGain();
+        attemptPlay();
       }
     };
 

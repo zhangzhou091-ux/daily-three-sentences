@@ -10,6 +10,9 @@ export default defineConfig({
     }
   },
   base: '/daily-three-sentences/',
+  optimizeDeps: {
+    include: ['react', 'react-dom', 'react-is'],
+  },
   build: {
     modulePreload: {
       polyfill: false,

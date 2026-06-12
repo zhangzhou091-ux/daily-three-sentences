@@ -466,6 +466,9 @@ export const useRandomListening = (sentences: Sentence[]) => {
   }, [pickRandomSentence, playSentenceOnce, getEligiblePool, addToHistory]);
 
   const startListening = useCallback(async () => {
+    // 同步抢占音频通道，在异步请求前锁定 User Gesture Token
+    continuousAudioPlayer.primeAudioChannelWithSilence();
+
     const eligiblePool = getEligiblePool();
     if (eligiblePool.length === 0) {
       const totalPool = poolRef.current;

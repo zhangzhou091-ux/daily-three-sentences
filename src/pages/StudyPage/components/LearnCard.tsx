@@ -35,26 +35,15 @@ export const LearnCard: React.FC<LearnCardProps> = ({
   onSpeechRateChange,
 }) => {
   return (
-    <div className="perspective-1000 min-h-[340px] w-full">
+    <div className="perspective-1000 w-full">
       <div
         className={`card-inner apple-card ${isFlipped ? 'card-flipped' : ''}`}
         onClick={onFlip}
-        style={{ position: 'relative', width: '100%', height: 'auto', transformStyle: 'preserve-3d' }}
+        style={{ position: 'relative', width: '100%', minHeight: '340px', transformStyle: 'preserve-3d' }}
       >
         <div
-          className="card-front p-6 transition-all duration-700 bg-white"
+          className="card-front p-6 bg-white"
           style={{
-            backfaceVisibility: 'hidden',
-            WebkitBackfaceVisibility: 'hidden',
-            transform: 'none',
-            position: 'relative',
-            width: '100%',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'flex-start',
-            justifyContent: 'flex-start',
-            minHeight: '340px',
-            textAlign: 'left',
             paddingTop: '20px',
             paddingBottom: '20px',
             overflow: 'hidden'
@@ -116,11 +105,6 @@ export const LearnCard: React.FC<LearnCardProps> = ({
         <div
           className="card-back p-6 flex flex-col bg-white"
           style={{
-            backfaceVisibility: 'hidden',
-            WebkitBackfaceVisibility: 'hidden',
-            position: 'absolute',
-            inset: 0,
-            transform: 'rotateY(180deg)',
             textAlign: 'left',
             paddingTop: '20px',
             paddingBottom: '20px'
