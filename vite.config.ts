@@ -68,31 +68,31 @@ export default defineConfig({
         orientation: 'portrait', // 锁定竖屏
         icons: [
           {
-            src: 'icons/apple-touch-icon-180x180.png',
+            src: '/daily-three-sentences/icons/apple-touch-icon-180x180.png',
             sizes: '180x180',
             type: 'image/png',
             purpose: 'any'
           },
           {
-            src: 'icons/apple-touch-icon-167x167.png',
+            src: '/daily-three-sentences/icons/apple-touch-icon-167x167.png',
             sizes: '167x167',
             type: 'image/png',
             purpose: 'any'
           },
           {
-            src: 'icons/apple-touch-icon-152x152.png',
+            src: '/daily-three-sentences/icons/apple-touch-icon-152x152.png',
             sizes: '152x152',
             type: 'image/png',
             purpose: 'any'
           },
           {
-            src: 'icons/apple-touch-icon-120x120.png',
+            src: '/daily-three-sentences/icons/apple-touch-icon-120x120.png',
             sizes: '120x120',
             type: 'image/png',
             purpose: 'any'
           },
           {
-            src: 'icons/apple-touch-icon.png',
+            src: '/daily-three-sentences/icons/apple-touch-icon.png',
             sizes: 'any',
             type: 'image/png',
             purpose: 'maskable'

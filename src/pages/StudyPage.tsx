@@ -71,11 +71,6 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   const [currentIndex, setCurrentIndex] = useState(() => loadLearnProgressIndex());
   const [isFlipped, setIsFlipped] = useState(false);
   
-  // 触摸滑动状态
-  const tabOrder: StudyStep[] = ['learn', 'review', 'dictation'];
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const isScrollingByTapRef = useRef(false);
-  
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'failed'>('idle');
   const [syncErrorMsg, setSyncErrorMsg] = useState<string | null>(null);
@@ -267,46 +262,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     toggleDictationReading();
   }, [isRandomListeningActive, stopRandomListening, toggleDictationReading]);
 
-  // 滚动滑动切换（CSS scroll-snap 处理动画，JS 仅同步 activeTab）
-  const handleScrollSnap = useCallback(() => {
-    if (isScrollingByTapRef.current) return;
-    const container = scrollRef.current;
-    if (!container) return;
-    const width = container.clientWidth;
-    if (width === 0) return;
-    const index = Math.round(container.scrollLeft / width);
-    if (index < 0 || index >= tabOrder.length) return;
-    const newTab = tabOrder[index];
-    if (newTab && newTab !== activeTab) {
-      geminiService.stop();
-      if (isRandomListeningActive) stopRandomListening();
-      if (isDictationReadingActive) stopDictationReading();
-      setActiveTab(newTab);
-      setCurrentIndex(0);
-      setIsFlipped(newTab === 'review');
-    }
-  }, [activeTab, tabOrder, setActiveTab, isRandomListeningActive, stopRandomListening, isDictationReadingActive, stopDictationReading]);
-
-  const scrollToTab = useCallback((tab: StudyStep) => {
-    const container = scrollRef.current;
-    if (!container) return;
-    const index = tabOrder.indexOf(tab);
-    if (index < 0) return;
-    isScrollingByTapRef.current = true;
-    container.scrollTo({ left: index * container.clientWidth, behavior: 'smooth' });
-    setTimeout(() => { isScrollingByTapRef.current = false; }, 400);
-  }, [tabOrder]);
-
-  useEffect(() => {
-    const container = scrollRef.current;
-    if (!container) return;
-    const index = tabOrder.indexOf(activeTab);
-    if (index < 0) return;
-    const expectedLeft = index * container.clientWidth;
-    if (Math.abs(container.scrollLeft - expectedLeft) > 1) {
-      container.scrollTo({ left: expectedLeft, behavior: 'auto' });
-    }
-  }, [activeTab, tabOrder]);
+  
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -620,7 +576,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
             {(['learn', 'review', 'dictation'] as StudyStep[]).map(tab => (
               <button
                 key={tab}
-                onClick={() => { geminiService.stop(); setSpeakingText(null); if (isRandomListeningActive) stopRandomListening(); if (isDictationReadingActive) stopDictationReading(); scrollToTab(tab); setActiveTab(tab); setCurrentIndex(0); setIsFlipped(tab === 'review'); }}
+                onClick={() => { geminiService.stop(); setSpeakingText(null); if (isRandomListeningActive) stopRandomListening(); if (isDictationReadingActive) stopDictationReading(); setActiveTab(tab); setCurrentIndex(0); setIsFlipped(tab === 'review'); }}
                 className={`px-4 py-2 text-[11px] font-black uppercase tracking-wider rounded-[1.2rem] transition-all duration-300 ${
                   activeTab === tab ? 'bg-white shadow-sm text-blue-600' : 'text-gray-600 hover:text-gray-800'
                 }`}
@@ -631,14 +587,12 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         </div>
       </div>
 
-      <div
-        ref={scrollRef}
-        className="min-h-[460px] overflow-x-auto snap-x snap-mandatory flex [&::-webkit-scrollbar]:hidden"
-        onScroll={handleScrollSnap}
-        style={{ WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none' }}
-      >
-        <div className="min-w-full snap-center shrink-0">
-          {dailySelection.length > 0 && currentSentenceLatest && (
+      <div className="min-h-[460px]">
+        {activeTab === 'learn' && (
+          dailySelection.length > 0 ? (
+            (() => {
+              if (!currentSentenceLatest) return null;
+              return (
             <div className="space-y-8">
               <LearnCard
                 sentence={currentSentenceLatest}
@@ -718,18 +672,19 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 </div>
               </div>
             </div>
-          )}
-          {dailySelection.length > 0 && !currentSentenceLatest && null}
-          {dailySelection.length === 0 && (
+              );
+            })()
+          ) : (
             <div className="apple-card p-16 text-center space-y-6">
               <div className="text-7xl">🪴</div>
               <h2 className="text-2xl font-black text-gray-900 tracking-tight">库中暂无可学内容</h2>
               <p className="text-gray-600 font-medium">请到仓库页添加新句子。</p>
             </div>
-          )}
-        </div>
-        <div className="min-w-full snap-center shrink-0">
-          {reviewQueue.length > 0 ? (
+          )
+        )}
+
+        {activeTab === 'review' && (
+          reviewQueue.length > 0 ? (
             <div className="space-y-8">
               {trainingIds.length > 0 && (
                 <div className="bg-gradient-to-r from-orange-50 to-amber-50 text-orange-700 text-sm font-bold px-4 py-2 rounded-lg flex items-center justify-between border border-orange-100">
@@ -873,22 +828,23 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
               </p>
               <div className="flex gap-3">
                 <button 
-                  onClick={() => { scrollToTab('learn'); setActiveTab('learn'); }}
+                  onClick={() => { setActiveTab('learn'); }}
                   className="px-6 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors"
                 >
                   去学习新句子
                 </button>
                 <button 
-                  onClick={() => { scrollToTab('dictation'); setActiveTab('dictation'); }}
+                  onClick={() => { setActiveTab('dictation'); }}
                   className="px-6 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
                 >
                   去默写挑战
                 </button>
               </div>
             </div>
-          )}
-        </div>
-        <div className="min-w-full snap-center shrink-0">
+          )
+        )}
+
+        {activeTab === 'dictation' && (
           <div className="space-y-10 safe-area-bottom">
             {/* 合并朗读卡片：随机/顺序 模式切换 */}
             <div className="apple-card p-6 relative overflow-hidden" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left', paddingTop: '20px', paddingBottom: '20px' }}>
@@ -1195,12 +1151,16 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     "{targetSentence?.chinese || '暂无题目'}"
                   </p>
                 </div>
-                <textarea 
-                  value={userInput} 
-                  onChange={(e) => setUserInput(e.target.value.slice(0, 1000))} 
+                <textarea
+                  value={userInput}
+                  onChange={(e) => setUserInput(e.target.value.slice(0, 1000))}
                   maxLength={1000}
-                  className="w-full p-8 bg-gray-50 rounded-[2rem] border-none focus:ring-4 focus:ring-orange-100 outline-none min-h-[160px] text-lg font-semibold placeholder:text-gray-500 transition-all text-left" 
-                  placeholder="请输入听到的内容..." 
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  className="w-full p-8 bg-gray-50 rounded-[2rem] border-none focus:ring-4 focus:ring-orange-100 outline-none min-h-[160px] text-lg font-semibold placeholder:text-gray-500 transition-all text-left"
+                  placeholder="请输入听到的内容..."
                 />
                 <div className="text-[10px] text-gray-400 text-right mt-1">
                   {userInput.length}/1000
@@ -1286,7 +1246,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
               </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

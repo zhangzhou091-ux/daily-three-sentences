@@ -1,6 +1,6 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import Navbar from './Navbar';
-import StudyPage from '../pages/StudyPage';
+const StudyPage = lazy(() => import('../pages/StudyPage'));
 const ManagePage = lazy(() => import('../pages/ManagePage'));
 const AchievementPage = lazy(() => import('../pages/AchievementPage'));
 const SettingsPage = lazy(() => import('../pages/SettingsPage'));
@@ -379,7 +379,7 @@ const MainLayout: React.FC = () => {
 
       {/* Header */}
       {localIsConfigured && (
-        <header className="fixed top-0 left-0 right-0 h-16 sm:h-20 bg-white/80 backdrop-blur-2xl z-40 border-b border-black/[0.03] px-4 sm:px-8 flex items-center justify-between transition-all duration-300 safe-area-top">
+        <header className="fixed top-0 left-0 right-0 h-16 sm:h-20 bg-white/85 backdrop-blur-md z-40 border-b border-black/[0.03] px-4 sm:px-8 flex items-center justify-between transition-all duration-300 safe-area-top">
           <div className="flex flex-col">
             <span className="text-[9px] sm:text-[11px] font-black text-blue-600 uppercase tracking-[0.2em] leading-none mb-1">D3S Platform</span>
             <h1 className="text-lg sm:text-xl font-extrabold tracking-tight">每日三句</h1>
@@ -415,7 +415,7 @@ const MainLayout: React.FC = () => {
       )}
 
       {/* Main Content */}
-      <main className="w-full max-w-5xl mx-auto px-4 pt-20 pb-28 sm:pt-28 sm:pb-12 h-full overflow-y-auto custom-scrollbar">
+      <main className="w-full max-w-5xl mx-auto px-4 pt-20 pb-28 sm:pt-28 sm:pb-12 overflow-y-auto custom-scrollbar">
         <div className="w-full h-full">
            {renderView()}
         </div>
