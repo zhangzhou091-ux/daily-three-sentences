@@ -42,7 +42,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({
           style={{
             backfaceVisibility: 'hidden',
             WebkitBackfaceVisibility: 'hidden',
-            transform: 'translateZ(1px)',
+            transform: 'none',
             position: 'relative',
             width: '100%',
             display: 'flex',
@@ -117,7 +117,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({
             WebkitBackfaceVisibility: 'hidden',
             position: 'absolute',
             inset: 0,
-            transform: 'rotateY(180deg) translateZ(1px)',
+            transform: 'rotateY(180deg)',
             textAlign: 'left',
             paddingTop: '20px',
             paddingBottom: '20px'

@@ -90,6 +90,7 @@ export const storageSentenceService = {
           isPendingFirstReview: existing.isPendingFirstReview,
           lastReviewedAt: existing.lastReviewedAt,
           nextReviewDate: existing.nextReviewDate,
+          scheduledDate: existing.scheduledDate,
         } : {}),
         id: existing.id,
         english: trimmedEnglish,

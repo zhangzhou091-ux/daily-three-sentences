@@ -63,40 +63,49 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
   const refreshSentences = useCallback(async () => {
     const currentRequestId = ++lastRequestId.current;
     const currentVersion = ++dataVersionRef.current;
-    
+
     try {
       console.log('📚 SentenceContext: 开始加载本地句子...');
       const localData = await storageService.getSentences();
-      
+
       if (currentRequestId !== lastRequestId.current) {
         console.log('📚 SentenceContext: 检测到新请求，放弃当前本地数据更新');
         return;
       }
-      
+
       console.log(`📚 SentenceContext: 本地句子加载完成，共${localData.length}条`);
-      
+
       if (localData.length > 0 || previousSentencesRef.current.length === 0) {
         setSentences(localData);
         previousSentencesRef.current = localData;
       }
-      
+
       setSyncError(null);
       setIsInitialLoading(false);
 
       if (isConfiguredRef.current && isOnlineRef.current) {
+        const LAST_SYNC_DATE_KEY = 'd3s_last_sync_date';
+        const today = new Date().toISOString().split('T')[0];
+        const lastSyncDate = localStorage.getItem(LAST_SYNC_DATE_KEY);
+
+        if (lastSyncDate === today && localData.length > 0) {
+          console.log('📚 SentenceContext: 今日已同步，跳过云端同步');
+          return;
+        }
+
         console.log('📚 SentenceContext: 开始云端同步...');
         const result = await syncData(localData);
-        
+
         if (Array.isArray(result) && result.length > 0) {
           console.log(`📚 SentenceContext: 云端同步完成，共${result.length}条`);
-          
+
           const mergedData = mergeSentencesByUpdatedAt(
             previousSentencesRef.current,
             result
           );
-          
+
           previousSentencesRef.current = mergedData;
-          
+
           if (currentRequestId === lastRequestId.current && currentVersion === dataVersionRef.current) {
             console.log('📚 SentenceContext: 当前请求为最新，更新UI');
             setSentences(mergedData);
@@ -111,6 +120,8 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
             setSyncError('同步未执行，显示本地数据');
           }
         }
+
+        localStorage.setItem(LAST_SYNC_DATE_KEY, today);
       } else {
         console.log('📚 SentenceContext: 跳过云端同步', { isConfigured: isConfiguredRef.current, isOnline: isOnlineRef.current });
       }

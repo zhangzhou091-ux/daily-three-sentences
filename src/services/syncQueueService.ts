@@ -1640,6 +1640,10 @@ class SyncQueueService {
         // 优先同步高优先级操作
         logger.info('执行高优先级操作同步');
         await this.doSyncWithPriority(['markLearned', 'reviewFeedback']);
+        // 高优先级同步成功后，继续安排低优先级同步
+        if (this.hasPendingOperations()) {
+          this.scheduleSync();
+        }
       } else {
         // 同步所有操作
         await this.doSync();
@@ -1652,12 +1656,111 @@ class SyncQueueService {
   }
 
   /**
-   * 基于优先级的同步（已降级为全量同步）
-   * processOperations 未完全实现，直接复用久经考验的 doSync 逻辑
+   * 基于优先级的同步：只同步指定类型的操作，低优先级暂留
+   * 用于网络不稳定时优先保障学习进度数据不丢失
    */
   private async doSyncWithPriority(priorityTypes: PendingOperationType[]): Promise<void> {
-    logger.warn('doSyncWithPriority 降级为 doSync（processOperations 未完全实现）');
-    await this.doSync();
+    if (this.isSyncing || !this.hasPendingOperations()) {
+      return;
+    }
+
+    this.restoreFromEmergencyStore();
+
+    const isOnline = await networkService.checkConnectivity();
+    if (!isOnline) {
+      this.lastSyncError = '网络未连接';
+      return;
+    }
+
+    if (!supabaseService.isReady) {
+      this.lastSyncError = '云同步未配置';
+      return;
+    }
+
+    const syncMode = deviceService.getSyncMode();
+    if (syncMode === 'downloadOnly') {
+      this.markLearnedQueue.clear();
+      this.reviewFeedbackQueue.clear();
+      this.addSentenceQueue.clear();
+      this.dictationRecordQueue.clear();
+      this.statsSyncQueue.clear();
+      this.lastSyncTime = Date.now();
+      this.saveToStorageImmediate();
+      return;
+    }
+
+    const includeType = (type: string) => priorityTypes.includes(type as PendingOperationType);
+
+    const sentencesToSync: Sentence[] = [];
+
+    if (includeType('markLearned')) {
+      this.markLearnedQueue.forEach(op => {
+        if (!this.isRecentlySynced(op.sentenceId)) {
+          sentencesToSync.push(op.updatedSentence);
+        }
+      });
+    }
+
+    if (includeType('reviewFeedback')) {
+      this.reviewFeedbackQueue.forEach(op => {
+        if (!this.isRecentlySynced(op.sentenceId)) {
+          sentencesToSync.push(op.updatedSentence);
+        }
+      });
+    }
+
+    if (sentencesToSync.length === 0) {
+      logger.debug('高优先级同步队列为空，跳过');
+      return;
+    }
+
+    this.isSyncing = true;
+    this.lastSyncError = null;
+    const totalCount = sentencesToSync.length;
+    this.emit('syncStart', { count: totalCount });
+
+    try {
+      const uniqueSentences = dedupeSentences(sentencesToSync);
+
+      if (uniqueSentences.length > 0) {
+        logger.info('高优先级同步', { count: uniqueSentences.length, types: priorityTypes.join(',') });
+        await runWithConcurrency(
+          uniqueSentences.map(s => () => supabaseService.syncSentences([s])),
+          CONCURRENT_LIMIT
+        );
+      }
+
+      // 只清理已同步的高优先级队列
+      if (includeType('markLearned')) {
+        this.markLearnedQueue.forEach(op => {
+          this.markSynced(op.sentenceId);
+          op.synced = true;
+        });
+        this.markLearnedQueue.clear();
+      }
+      if (includeType('reviewFeedback')) {
+        this.reviewFeedbackQueue.forEach(op => {
+          this.markSynced(op.sentenceId);
+          op.synced = true;
+        });
+        this.reviewFeedbackQueue.clear();
+      }
+
+      this.lastSyncTime = Date.now();
+      this.saveToStorageImmediate();
+
+      this.emit('syncSuccess', {
+        count: totalCount,
+        message: `高优先级同步成功: ${totalCount} 条操作`
+      });
+      this.emit('queueChanged', this.getQueueStatus());
+
+      logger.info('高优先级同步成功', { count: totalCount, types: priorityTypes.join(',') });
+    } catch (err: unknown) {
+      this.handleSyncFailure(totalCount, err instanceof Error ? err.message : '高优先级同步异常');
+    } finally {
+      this.isSyncing = false;
+    }
   }
 
 

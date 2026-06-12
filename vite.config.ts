@@ -118,13 +118,12 @@ export default defineConfig({
           {
             // 缓存Supabase的REST API（核心：修复数据不一致问题）
             urlPattern: /^https:\/\/.*\.supabase\.co\/rest\/v1\/.*$/,
-            // 改为 NetworkFirst：确保用户在线时看到的是最新进度
-            handler: 'NetworkFirst',
+            // StaleWhileRevalidate：立即返回缓存，后台静默更新，确保秒开
+            handler: 'StaleWhileRevalidate',
             options: {
               cacheName: 'supabase-api-cache',
-              networkTimeoutSeconds: 5, // 如果5秒内网络没响应，再转用缓存，避免长时间白屏
               expiration: {
-                maxAgeSeconds: 7 * 24 * 60 * 60, // 增加到7天，方便离线时复习
+                maxAgeSeconds: 24 * 60 * 60, // 缓存24小时
                 maxEntries: 100
               },
               cacheableResponse: {

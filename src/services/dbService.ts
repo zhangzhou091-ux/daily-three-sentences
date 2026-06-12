@@ -56,7 +56,7 @@ interface CacheEntry<T> {
 class DataCache {
   private cache: Map<string, CacheEntry<Sentence>> = new Map();
   private allDataCache: CacheEntry<Sentence[]> | null = null;
-  private readonly TTL = 30000;
+  private readonly TTL = 300000; // 5分钟
   private readonly MAX_SIZE = 1000;
   private version = 0;
   private dbVersion = 0;

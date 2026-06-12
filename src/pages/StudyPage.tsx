@@ -82,6 +82,15 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   const isMarkLearnedSubmittingRef = useRef(false);
   const animationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasTriggeredRegenRef = useRef(false);
+
+  const TAB_ORDER: StudyStep[] = ['learn', 'review', 'dictation'];
+  const swipeContainerRef = useRef<HTMLDivElement>(null);
+  const [isSwiping, setIsSwiping] = useState(false);
+  const isSwipingRef = useRef(false);
+  const touchStartRef = useRef({ x: 0, y: 0 });
+  const touchCurrentRef = useRef({ x: 0, y: 0 });
+  const swipeDirectionRef = useRef<'horizontal' | 'vertical' | null>(null);
+  const [swipeOffset, setSwipeOffset] = useState(0);
   
   const [progressAdjusted, setProgressAdjusted] = useState(false);
   const [currentDateStr, setCurrentDateStr] = useState(() => getLocalDateString());
@@ -98,7 +107,38 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     setActiveTabState(tab);
     saveStudyTab(tab);
   }, []);
-  
+
+  const handleSwipeStart = useCallback((e: React.TouchEvent) => {
+    touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    touchCurrentRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    swipeDirectionRef.current = null;
+  }, []);
+
+  const handleSwipeMove = useCallback((e: React.TouchEvent) => {
+    const dx = e.touches[0].clientX - touchStartRef.current.x;
+    const dy = e.touches[0].clientY - touchStartRef.current.y;
+
+    if (swipeDirectionRef.current === null) {
+      if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+        swipeDirectionRef.current = Math.abs(dx) > Math.abs(dy) ? 'horizontal' : 'vertical';
+      }
+      return;
+    }
+
+    if (swipeDirectionRef.current === 'horizontal') {
+      isSwipingRef.current = true;
+      setIsSwiping(true);
+      touchCurrentRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+
+      const currentIdx = TAB_ORDER.indexOf(activeTab);
+      let offset = dx;
+      if ((currentIdx === 0 && dx > 0) || (currentIdx === TAB_ORDER.length - 1 && dx < 0)) {
+        offset = dx * 0.3;
+      }
+      setSwipeOffset(offset);
+    }
+  }, [activeTab]);
+
   useEffect(() => {
     const handleSettingsChange = () => {
       setSettings(storageService.getSettings());
@@ -262,7 +302,39 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     toggleDictationReading();
   }, [isRandomListeningActive, stopRandomListening, toggleDictationReading]);
 
-  
+  const handleSwipeEnd = useCallback(() => {
+    if (!isSwipingRef.current) {
+      swipeDirectionRef.current = null;
+      return;
+    }
+    isSwipingRef.current = false;
+    setIsSwiping(false);
+    swipeDirectionRef.current = null;
+
+    const dx = touchCurrentRef.current.x - touchStartRef.current.x;
+    const currentIdx = TAB_ORDER.indexOf(activeTab);
+    const containerWidth = swipeContainerRef.current?.offsetWidth || 375;
+    const threshold = containerWidth * 0.3;
+
+    if (Math.abs(dx) > threshold) {
+      geminiService.stop();
+      setSpeakingText(null);
+      if (isRandomListeningActive) stopRandomListening();
+      if (isDictationReadingActive) stopDictationReading();
+
+      if (dx < 0 && currentIdx < TAB_ORDER.length - 1) {
+        setActiveTab(TAB_ORDER[currentIdx + 1]);
+        setCurrentIndex(0);
+        setIsFlipped(TAB_ORDER[currentIdx + 1] === 'review');
+      } else if (dx > 0 && currentIdx > 0) {
+        setActiveTab(TAB_ORDER[currentIdx - 1]);
+        setCurrentIndex(0);
+        setIsFlipped(TAB_ORDER[currentIdx - 1] === 'review');
+      }
+    }
+
+    setSwipeOffset(0);
+  }, [activeTab, setActiveTab, isRandomListeningActive, stopRandomListening, isDictationReadingActive, stopDictationReading]);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -587,15 +659,31 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         </div>
       </div>
 
-      <div className="min-h-[460px]">
+      <div
+        ref={swipeContainerRef}
+        className="min-h-[460px] overflow-hidden"
+        style={{ touchAction: 'pan-y' }}
+        onTouchStart={handleSwipeStart}
+        onTouchMove={handleSwipeMove}
+        onTouchEnd={handleSwipeEnd}
+      >
+        <div
+          className="transition-transform duration-300"
+          style={{
+            transform: `translateX(${swipeOffset}px)`,
+            transitionDuration: isSwiping ? '0ms' : '300ms',
+          }}
+        >
         {activeTab === 'learn' && (
           dailySelection.length > 0 ? (
             (() => {
               if (!currentSentenceLatest) return null;
+              const sentence = currentSentenceLatest || currentSentence;
+              if (!sentence) return null;
               return (
             <div className="space-y-8">
               <LearnCard
-                sentence={currentSentenceLatest}
+                sentence={sentence}
                 onFlip={() => setIsFlipped(!isFlipped)}
                 isFlipped={isFlipped}
                 onMarkLearned={handleMarkLearned}
@@ -603,15 +691,21 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 isCurrentlyLearned={isCurrentlyLearned}
                 isAnimating={isAnimating}
                 isSavingLearned={isSavingLearned}
-                isSpeaking={speakingText === currentSentenceLatest.english}
+                isSpeaking={speakingText === sentence.english}
                 speechRate={settings.speechRate ?? 1}
-                onSpeechRateChange={handleSpeechRateChange}
+                onSpeechRateChange={(rate) => {
+                  const clampedRate = Math.max(0.1, Math.min(10, rate));
+                  const updated = { ...settings, speechRate: clampedRate, updatedAt: Date.now() };
+                  storageService.saveSettings(updated);
+                  setSettings(updated);
+                  geminiService.setPlaybackRate(clampedRate);
+                }}
               />
               <div className="flex flex-col gap-4">
                 {!isCurrentlyLearned && !isAnimating ? (
                   <>
                     <button
-                      onClick={() => handleMarkLearned(currentSentenceLatest.id)}
+                      onClick={() => handleMarkLearned(sentence.id)}
                       className="w-full bg-black text-white py-5 rounded-[2rem] font-black text-xl shadow-2xl shadow-black/10 hover:bg-gray-800 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
                     >
                       <span>标记掌握</span>
@@ -659,7 +753,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     </button>
                     <div className="flex items-center gap-2">
                        <span className="text-lg text-gray-900 font-black tracking-widest">{currentIndex + 1}</span>
-                       <span className="text-lg text-gray-600 font-black tracking-widest">{"/"}</span>
+                       <span className="text-lg text-gray-600 font-black tracking-widest">/</span>
                        <span className="text-lg text-gray-600 font-black tracking-widest">{dailySelection.length}</span>
                     </div>
                     <button 
@@ -685,7 +779,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
 
         {activeTab === 'review' && (
           reviewQueue.length > 0 ? (
-            <div className="space-y-8">
+            <div className="space-y-8 animate-in slide-in-from-right-4 duration-500">
               {trainingIds.length > 0 && (
                 <div className="bg-gradient-to-r from-orange-50 to-amber-50 text-orange-700 text-sm font-bold px-4 py-2 rounded-lg flex items-center justify-between border border-orange-100">
                   <span className="flex items-center gap-2">
@@ -709,9 +803,15 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 reps={reviewQueue[currentReviewIndex]?.reps || 0}
                 isSpeaking={speakingText === reviewQueue[currentReviewIndex]?.english}
                 speechRate={settings.speechRate ?? 1}
-                onSpeechRateChange={handleSpeechRateChange}
+                onSpeechRateChange={(rate) => {
+                  const clampedRate = Math.max(0.1, Math.min(10, rate));
+                  const updated = { ...settings, speechRate: clampedRate, updatedAt: Date.now() };
+                  storageService.saveSettings(updated);
+                  setSettings(updated);
+                  geminiService.setPlaybackRate(clampedRate);
+                }}
               />
-              
+
               {!isCurrentReviewed ? (
                 <div className={`grid grid-cols-4 gap-3 transition-opacity duration-300 ${isProcessingReview ? 'opacity-50 pointer-events-none grayscale' : ''}`}>
                   <button 
@@ -845,7 +945,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         )}
 
         {activeTab === 'dictation' && (
-          <div className="space-y-10 safe-area-bottom">
+          <div className="space-y-10 animate-in slide-in-from-left-4 duration-500 safe-area-bottom">
             {/* 合并朗读卡片：随机/顺序 模式切换 */}
             <div className="apple-card p-6 relative overflow-hidden" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left', paddingTop: '20px', paddingBottom: '20px' }}>
               {/* 顶部栏：模式切换 + 语速 + 信息 */}
@@ -1247,6 +1347,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
             </div>
           </div>
         )}
+        </div>
       </div>
     </div>
   );
