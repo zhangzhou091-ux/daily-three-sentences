@@ -267,6 +267,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     clearBlacklist,
     blacklistSize,
     REPEATS_PER_SENTENCE,
+    resetRandomListeningState,
   } = useRandomListening(sentences);
 
   const {
@@ -288,6 +289,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     clearBlacklist: clearDictationBlacklist,
     blacklistSize: dictationBlacklistSize,
     REPEATS_PER_SENTENCE: DICTATION_READING_REPEATS,
+    resetDictationReadingState,
   } = useDictationReading(sentences, dailySelection);
 
   const [dictationReadingMode, setDictationReadingMode] = useState<'random' | 'sequential'>('sequential');
@@ -960,7 +962,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 {/* 模式切换 */}
                 <div className="flex bg-gray-200/50 p-1 rounded-[1.2rem] self-start">
                   <button
-                    onClick={() => { if (isRandomListeningActive) stopRandomListening(); if (isDictationReadingActive) stopDictationReading(); setDictationReadingMode('random'); }}
+                    onClick={() => { if (isRandomListeningActive) stopRandomListening(); if (isDictationReadingActive) stopDictationReading(); resetDictationReadingState(); setDictationReadingMode('random'); }}
                     className={`px-3.5 py-1.5 text-[11px] font-black uppercase tracking-wider rounded-[1rem] transition-all duration-200 ${
                       dictationReadingMode === 'random' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'
                     }`}
@@ -968,7 +970,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                     随机
                   </button>
                   <button
-                    onClick={() => { if (isRandomListeningActive) stopRandomListening(); if (isDictationReadingActive) stopDictationReading(); setDictationReadingMode('sequential'); }}
+                    onClick={() => { if (isRandomListeningActive) stopRandomListening(); if (isDictationReadingActive) stopDictationReading(); resetRandomListeningState(); setDictationReadingMode('sequential'); }}
                     className={`px-3.5 py-1.5 text-[11px] font-black uppercase tracking-wider rounded-[1rem] transition-all duration-200 ${
                       dictationReadingMode === 'sequential' ? 'bg-white shadow-sm text-green-600' : 'text-gray-500 hover:text-gray-700'
                     }`}

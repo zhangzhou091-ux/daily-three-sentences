@@ -28,6 +28,7 @@ const WEIGHT_REPEAT_PENALTY_BASE = 0.12;
 
 const SESSION_RESET_KEY = 'd3s_random_listening_session_reset';
 const PRELOAD_LOOKAHEAD = 2;
+const RANDOM_PROGRESS_KEY = 'd3s_random_listening_progress';
 
 const WEIGHT_DIFFICULTY = 0.6;
 const WEIGHT_LOW_STABILITY = 1.5;
@@ -56,6 +57,20 @@ const hasAudioCache = (sentence: Sentence): boolean => {
 
 const isLearned = (sentence: Sentence): boolean => {
   return !!sentence.learnedAt;
+};
+
+const saveRandomProgress = (sentenceId: string | null, totalPlayed: number): void => {
+  try {
+    if (!sentenceId) return;
+    const progress = { sentenceId, totalPlayed };
+    localStorage.setItem(RANDOM_PROGRESS_KEY, JSON.stringify(progress));
+  } catch { /* ignore */ }
+};
+
+const clearRandomProgress = (): void => {
+  try {
+    localStorage.removeItem(RANDOM_PROGRESS_KEY);
+  } catch { /* ignore */ }
 };
 
 const getRecentAvoidCount = (poolSize: number): number => {
@@ -317,7 +332,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
     if (!result) {
       geminiService.stopLight();
-      continuousAudioPlayer.stop();
+      continuousAudioPlayer.stopLight();
     }
 
     return result;
@@ -523,6 +538,12 @@ export const useRandomListening = (sentences: Sentence[]) => {
   }, [runListeningLoop, getEligiblePool, state.blacklist]);
 
   const stopListening = useCallback(() => {
+    if (isActiveRef.current) {
+      saveRandomProgress(lastSentenceIdRef.current, totalPlayedRef.current);
+    } else {
+      clearRandomProgress();
+    }
+
     isActiveRef.current = false;
     playGenerationRef.current++;
     geminiService.stop();
@@ -550,14 +571,19 @@ export const useRandomListening = (sentences: Sentence[]) => {
     }
   }, [state.isActive, startListening, stopListening]);
 
+  const isTransitioningRef = useRef(false);
+
   const goToPreviousSentence = useCallback((preserveAudioSession: boolean = false) => {
     const idx = historyIndexRef.current;
     if (idx <= 0) return;
+    if (isTransitioningRef.current) return; // 防抖
     const newIdx = idx - 1;
     const sentence = historyRef.current[newIdx];
 
+    isTransitioningRef.current = true;
     const wasActive = isActiveRef.current;
     if (wasActive) {
+      continuousAudioPlayer.beginTransition();
       isActiveRef.current = false;
       playGenerationRef.current++;
       pendingSentenceRef.current = sentence;
@@ -584,7 +610,11 @@ export const useRandomListening = (sentences: Sentence[]) => {
     if (wasActive) {
       const gen = ++playGenerationRef.current;
       isActiveRef.current = true;
+      continuousAudioPlayer.endTransition();
+      isTransitioningRef.current = false;
       runListeningLoop(gen);
+    } else {
+      isTransitioningRef.current = false;
     }
   }, [runListeningLoop]);
 
@@ -594,12 +624,16 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
     const sentence = idx < histLen - 1 ? historyRef.current[idx + 1] : pickRandomSentence();
     if (!sentence) return;
+    if (isTransitioningRef.current) return; // 防抖
 
     const fromHistory = idx < histLen - 1;
     const newIdx = fromHistory ? idx + 1 : historyRef.current.length;
     const wasActive = isActiveRef.current;
 
+    isTransitioningRef.current = true;
+
     if (wasActive) {
+      continuousAudioPlayer.beginTransition();
       isActiveRef.current = false;
       playGenerationRef.current++;
       pendingSentenceRef.current = sentence;
@@ -628,7 +662,11 @@ export const useRandomListening = (sentences: Sentence[]) => {
     if (wasActive) {
       const gen = ++playGenerationRef.current;
       isActiveRef.current = true;
+      continuousAudioPlayer.endTransition();
+      isTransitioningRef.current = false;
       runListeningLoop(gen);
+    } else {
+      isTransitioningRef.current = false;
     }
   }, [runListeningLoop, pickRandomSentence, addToHistory]);
 
@@ -684,6 +722,8 @@ export const useRandomListening = (sentences: Sentence[]) => {
     const currentGen = playGenerationRef.current;
     return () => {
       if (isActiveRef.current) {
+        // 组件卸载前保存播放进度
+        saveRandomProgress(lastSentenceIdRef.current, totalPlayedRef.current);
         isActiveRef.current = false;
         playGenerationRef.current = currentGen + 1;
         geminiService.stop();
@@ -696,7 +736,25 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
   const eligibleCount = getEligiblePool().length;
   const canGoPrevious = state.historyIndex > 0;
-  const canGoNext = state.historyIndex < state.history.length - 1 || state.isActive;
+  const canGoNext = state.historyIndex < state.history.length - 1 || (state.isActive && eligibleCount > 1);
+
+  // 重置状态（模式切换时调用）
+  const resetRandomListeningState = useCallback((): void => {
+    setState({
+      isActive: false,
+      currentSentence: null,
+      currentRepeat: 0,
+      totalPlayed: 0,
+      historyIndex: -1,
+      errorMessage: null,
+      blacklist: state.blacklist,
+      history: [],
+    });
+    historyRef.current = [];
+    historyIndexRef.current = -1;
+    lastSentenceIdRef.current = null;
+    totalPlayedRef.current = 0;
+  }, [state.blacklist]);
 
   return {
     isRandomListeningActive: state.isActive,
@@ -717,5 +775,6 @@ export const useRandomListening = (sentences: Sentence[]) => {
     clearBlacklist,
     blacklistSize: state.blacklist.size,
     REPEATS_PER_SENTENCE,
+    resetRandomListeningState,
   };
 };

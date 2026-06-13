@@ -176,7 +176,7 @@ export const useDictationReading = (
 
     if (!result) {
       geminiService.stopLight();
-      continuousAudioPlayer.stop();
+      continuousAudioPlayer.stopLight();
     }
 
     return result;
@@ -401,13 +401,18 @@ export const useDictationReading = (
     }
   }, [state.isActive, startReading, stopReading]);
 
+  const isTransitioningRef = useRef(false);
+
   const goToPrevSentence = useCallback((preserveAudioSession: boolean = false) => {
-    if (!state.isActive) return;
+    if (!isActiveRef.current) return;
+    if (isTransitioningRef.current) return; // 防抖
     const pool = getReadingPool();
     if (pool.length === 0) return;
 
+    isTransitioningRef.current = true;
     const wasActive = isActiveRef.current;
     if (wasActive) {
+      continuousAudioPlayer.beginTransition();
       isActiveRef.current = false;
       playGenerationRef.current++;
       geminiService.stopLight();
@@ -424,6 +429,7 @@ export const useDictationReading = (
     setState(prev => ({
       ...prev,
       currentIndex: newIdx,
+      currentSentence: pool[newIdx],
       currentRepeat: 0,
       errorMessage: null,
     }));
@@ -431,17 +437,24 @@ export const useDictationReading = (
     if (wasActive) {
       isActiveRef.current = true;
       const gen = ++playGenerationRef.current;
+      continuousAudioPlayer.endTransition();
+      isTransitioningRef.current = false;
       runReadingLoop(gen, newIdx);
+    } else {
+      isTransitioningRef.current = false;
     }
-  }, [state.isActive, state.currentIndex, getReadingPool, runReadingLoop]);
+  }, [state.currentIndex, getReadingPool, runReadingLoop]);
 
   const goToNextSentence = useCallback((preserveAudioSession: boolean = false) => {
-    if (!state.isActive) return;
+    if (!isActiveRef.current) return;
+    if (isTransitioningRef.current) return; // 防抖
     const pool = getReadingPool();
     if (pool.length === 0) return;
 
+    isTransitioningRef.current = true;
     const wasActive = isActiveRef.current;
     if (wasActive) {
+      continuousAudioPlayer.beginTransition();
       isActiveRef.current = false;
       playGenerationRef.current++;
       geminiService.stopLight();
@@ -458,6 +471,7 @@ export const useDictationReading = (
     setState(prev => ({
       ...prev,
       currentIndex: newIdx,
+      currentSentence: pool[newIdx],
       currentRepeat: 0,
       errorMessage: null,
     }));
@@ -465,9 +479,13 @@ export const useDictationReading = (
     if (wasActive) {
       isActiveRef.current = true;
       const gen = ++playGenerationRef.current;
+      continuousAudioPlayer.endTransition();
+      isTransitioningRef.current = false;
       runReadingLoop(gen, newIdx);
+    } else {
+      isTransitioningRef.current = false;
     }
-  }, [state.isActive, state.currentIndex, getReadingPool, runReadingLoop]);
+  }, [state.currentIndex, getReadingPool, runReadingLoop]);
 
   useEffect(() => {
     goToPrevRef.current = goToPrevSentence;
@@ -478,6 +496,12 @@ export const useDictationReading = (
     const currentGen = playGenerationRef.current;
     return () => {
       if (isActiveRef.current) {
+        // 组件卸载前保存播放进度，防止应用被杀死后进度丢失
+        const pool = getReadingPool();
+        const currentIdx = startIdxRef.current || 0;
+        if (currentIdx >= 0 && currentIdx < pool.length) {
+          saveReadingProgress(pool[currentIdx].id, currentIdx);
+        }
         isActiveRef.current = false;
         playGenerationRef.current = currentGen + 1;
         geminiService.stop();
@@ -530,8 +554,20 @@ export const useDictationReading = (
 
   const pool = getReadingPool();
   const currentSentence = pool[state.currentIndex] || null;
-  const canGoPrev = pool.length > 1;
-  const canGoNext = pool.length > 1;
+  const canGoPrev = pool.length > 1 && state.isActive;
+  const canGoNext = pool.length > 1 && state.isActive;
+
+  // 重置状态（模式切换时调用）
+  const resetReadingState = useCallback((): void => {
+    setState({
+      isActive: false,
+      currentIndex: 0,
+      currentRepeat: 0,
+      totalPlayed: 0,
+      errorMessage: null,
+      blacklist: state.blacklist,
+    });
+  }, [state.blacklist]);
 
   return {
     isDictationReadingActive: state.isActive,
@@ -553,5 +589,6 @@ export const useDictationReading = (
     clearBlacklist,
     blacklistSize: state.blacklist.size,
     REPEATS_PER_SENTENCE,
+    resetDictationReadingState: resetReadingState,
   };
 };

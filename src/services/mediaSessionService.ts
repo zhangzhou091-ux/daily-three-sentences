@@ -109,7 +109,9 @@ const playBackgroundDelay = (ms: number): Promise<void> =>
     audio.onerror = finish;
     audio.load();
     audio.play().catch(() => {
-      finish();
+      // iOS 17 后台可能拒绝新的 Audio.play()，使用 setTimeout 兜底保证句子间延迟
+      console.log(`🔊 [AudioKeepAlive] 后台延迟音频播放失败，使用 setTimeout 兜底 ${ms}ms`);
+      setTimeout(finish, ms);
     });
   });
 

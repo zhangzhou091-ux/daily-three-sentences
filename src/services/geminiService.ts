@@ -17,6 +17,7 @@ import { ttsCloudCacheService } from './ttsCloudCacheService';
 import { dbService } from './dbService';
 import { elevenLabsCacheService } from './elevenLabsCacheService';
 import { cryptoService } from './cryptoService';
+import { supabaseService } from './supabaseService';
 
 const SPEAK_TIMEOUT = 15000;
 
@@ -565,8 +566,6 @@ const tryUnifiedCacheFirst = async (
   const trimmedText = text.trim();
   if (!trimmedText) return null;
 
-  if (engine === 'edgeTts' || engine === 'webSpeech') return null;
-
   const elVoiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
   const elModelId = elevenLabsService.getDefaultModel();
 
@@ -610,30 +609,52 @@ const tryUnifiedCacheFirst = async (
   } catch { /* ignore */ }
 
   try {
+    let cloudPathEl: string | null = null;
+    let cloudPathMm: string | null = null;
+
     const sentence = await dbService.findByEnglish(trimmedText);
     if (sentence) {
-      if (sentence.ttsAudioPathEl) {
-        try {
-          const cloudBlob = await ttsCloudCacheService.downloadByPath(sentence.ttsAudioPathEl);
-          if (cloudBlob) {
-            console.log(`🔊 [缓存] ElevenLabs 云端命中 | [路径] ${sentence.ttsAudioPathEl}`);
-            syncToLocalCache(trimmedText, cloudBlob, 'elevenlabs', settings);
-            const played = await playCachedBlob(cloudBlob, loop, rate);
-            if (played) return { success: true };
-          }
-        } catch { /* ignore */ }
-      }
-      if (sentence.ttsAudioPathMm) {
-        try {
-          const cloudBlob = await ttsCloudCacheService.downloadByPath(sentence.ttsAudioPathMm);
-          if (cloudBlob) {
-            console.log(`🔊 [缓存] MiniMax 云端命中 | [路径] ${sentence.ttsAudioPathMm}`);
-            syncToLocalCache(trimmedText, cloudBlob, 'minimax', settings);
-            const played = await playCachedBlob(cloudBlob, loop, rate);
-            if (played) return { success: true };
-          }
-        } catch { /* ignore */ }
-      }
+      cloudPathEl = sentence.ttsAudioPathEl || null;
+      cloudPathMm = sentence.ttsAudioPathMm || null;
+    }
+
+    // 兜底：本地 DB 无路径时，直连 Supabase sentences 表查询
+    if (!cloudPathEl && !cloudPathMm && supabaseService.client) {
+      try {
+        const { data } = await supabaseService.client
+          .from('sentences')
+          .select('tts_audio_path_el, tts_audio_path_mm')
+          .ilike('english', trimmedText)
+          .limit(1)
+          .single();
+        if (data) {
+          cloudPathEl = data.tts_audio_path_el || null;
+          cloudPathMm = data.tts_audio_path_mm || null;
+        }
+      } catch { /* Supabase 查询失败，忽略 */ }
+    }
+
+    if (cloudPathEl) {
+      try {
+        const cloudBlob = await ttsCloudCacheService.downloadByPath(cloudPathEl);
+        if (cloudBlob) {
+          console.log(`🔊 [缓存] ElevenLabs 云端命中 | [路径] ${cloudPathEl}`);
+          syncToLocalCache(trimmedText, cloudBlob, 'elevenlabs', settings);
+          const played = await playCachedBlob(cloudBlob, loop, rate);
+          if (played) return { success: true };
+        }
+      } catch { /* ignore */ }
+    }
+    if (cloudPathMm) {
+      try {
+        const cloudBlob = await ttsCloudCacheService.downloadByPath(cloudPathMm);
+        if (cloudBlob) {
+          console.log(`🔊 [缓存] MiniMax 云端命中 | [路径] ${cloudPathMm}`);
+          syncToLocalCache(trimmedText, cloudBlob, 'minimax', settings);
+          const played = await playCachedBlob(cloudBlob, loop, rate);
+          if (played) return { success: true };
+        }
+      } catch { /* ignore */ }
     }
   } catch { /* ignore */ }
 
@@ -904,27 +925,49 @@ export const geminiService = {
       ]);
       if (elFuzzy) { console.log(`🔊 [fetchBlob] ElevenLabs 本地模糊命中`); return elFuzzy; }
       if (mmFuzzy) { console.log(`🔊 [fetchBlob] MiniMax 本地模糊命中`); return mmFuzzy; }
+      let cloudPathEl: string | null = null;
+      let cloudPathMm: string | null = null;
+
       if (cloudSentence) {
-        if (cloudSentence.ttsAudioPathEl) {
-          try {
-            const cloudBlob = await ttsCloudCacheService.downloadByPath(cloudSentence.ttsAudioPathEl);
-            if (cloudBlob) {
-              console.log(`🔊 [fetchBlob] ElevenLabs 云端命中 | [路径] ${cloudSentence.ttsAudioPathEl}`);
-              syncToLocalCache(trimmedText, cloudBlob, 'elevenlabs', settings).catch(() => {});
-              return cloudBlob;
-            }
-          } catch { /* ignore */ }
-        }
-        if (cloudSentence.ttsAudioPathMm) {
-          try {
-            const cloudBlob = await ttsCloudCacheService.downloadByPath(cloudSentence.ttsAudioPathMm);
-            if (cloudBlob) {
-              console.log(`🔊 [fetchBlob] MiniMax 云端命中 | [路径] ${cloudSentence.ttsAudioPathMm}`);
-              syncToLocalCache(trimmedText, cloudBlob, 'minimax', settings).catch(() => {});
-              return cloudBlob;
-            }
-          } catch { /* ignore */ }
-        }
+        cloudPathEl = cloudSentence.ttsAudioPathEl || null;
+        cloudPathMm = cloudSentence.ttsAudioPathMm || null;
+      }
+
+      // 兜底：本地 DB 无路径时，直连 Supabase sentences 表查询
+      if (!cloudPathEl && !cloudPathMm && supabaseService.client) {
+        try {
+          const { data } = await supabaseService.client
+            .from('sentences')
+            .select('tts_audio_path_el, tts_audio_path_mm')
+            .ilike('english', trimmedText)
+            .limit(1)
+            .single();
+          if (data) {
+            cloudPathEl = data.tts_audio_path_el || null;
+            cloudPathMm = data.tts_audio_path_mm || null;
+          }
+        } catch { /* Supabase 查询失败，忽略 */ }
+      }
+
+      if (cloudPathEl) {
+        try {
+          const cloudBlob = await ttsCloudCacheService.downloadByPath(cloudPathEl);
+          if (cloudBlob) {
+            console.log(`🔊 [fetchBlob] ElevenLabs 云端命中 | [路径] ${cloudPathEl}`);
+            syncToLocalCache(trimmedText, cloudBlob, 'elevenlabs', settings).catch(() => {});
+            return cloudBlob;
+          }
+        } catch { /* ignore */ }
+      }
+      if (cloudPathMm) {
+        try {
+          const cloudBlob = await ttsCloudCacheService.downloadByPath(cloudPathMm);
+          if (cloudBlob) {
+            console.log(`🔊 [fetchBlob] MiniMax 云端命中 | [路径] ${cloudPathMm}`);
+            syncToLocalCache(trimmedText, cloudBlob, 'minimax', settings).catch(() => {});
+            return cloudBlob;
+          }
+        } catch { /* ignore */ }
       }
     } catch { /* ignore */ }
 

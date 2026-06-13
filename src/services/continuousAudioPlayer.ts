@@ -28,6 +28,8 @@ class ContinuousAudioPlayer {
   private visibilityHandler: (() => void) | null = null;
   private pendingPlayResolve: (() => void) | null = null;
   private resolving: boolean = false;
+  private primeInProgress: boolean = false;
+  private transitionInProgress: boolean = false;
 
   constructor() {
     this.audio = new Audio();
@@ -146,6 +148,21 @@ class ContinuousAudioPlayer {
     console.log(`🔊 [连续播放器] playBlob 开始 | [iOS] ${ios} | [Blob大小] ${blob.size} | [Blob类型] ${blob.type} | [代数] ${gen}`);
 
     this.revokeCurrentUrl();
+
+    // 如果静音接力正在进行，先清理 loop 状态避免与正式播放冲突
+    if (this.primeInProgress) {
+      this.primeInProgress = false;
+      console.log('🔊 [连续播放器] 检测到静音接力标记，清理 loop 状态');
+      try {
+        this.audio.loop = false;
+        this.audio.onpause = null;
+        this.audio.onended = null;
+        this.audio.onerror = null;
+        this.audio.pause();
+        this.audio.removeAttribute('src');
+        this.audio.load();
+      } catch { /* ignore */ }
+    }
 
     if (!blob || blob.size === 0) {
       throw new Error('音频数据为空');
@@ -316,8 +333,35 @@ class ContinuousAudioPlayer {
     console.log('🔊 [连续播放器] stop() 完成');
   }
 
+  // 轻量停止：不递增 generation，用于超时等需要清理但保留当前代数场景
+  stopLight(): void {
+    console.log(`🔊 [连续播放器] stopLight() 调用 | [active] ${this.active} | [代数] ${this.generation}`);
+    this.primeInProgress = false;
+    try {
+      this.audio.onpause = null;
+      this.audio.onended = null;
+      this.audio.onerror = null;
+      this.audio.pause();
+      this.audio.removeAttribute('src');
+      this.audio.load();
+    } catch { /* ignore */ }
+    this.revokeCurrentUrl();
+    console.log('🔊 [连续播放器] stopLight() 完成');
+  }
+
   getAudioElement(): HTMLAudioElement {
     return this.audio;
+  }
+
+  // 句子切换期间暂停恢复，防止 handleAudioPause 误触发
+  beginTransition(): void {
+    this.transitionInProgress = true;
+    console.log('🔊 [连续播放器] 句子切换开始，暂停恢复已抑制');
+  }
+
+  endTransition(): void {
+    this.transitionInProgress = false;
+    console.log('🔊 [连续播放器] 句子切换结束，暂停恢复已恢复');
   }
 
   resumeAudioFocus(): void {
@@ -343,6 +387,7 @@ class ContinuousAudioPlayer {
 
     this.generation++;
     this.recoveryRetryCount = 0;
+    this.primeInProgress = true;
 
     try {
       this.audio.onpause = null;
@@ -361,18 +406,25 @@ class ContinuousAudioPlayer {
         console.log('🔊 [连续播放器] 静音接力已启动 ✅');
       }).catch((e) => {
         console.warn(`🔊 [连续播放器] 静音接力启动失败 | [错误] ${e?.name}: ${e?.message}`);
+        this.primeInProgress = false;
       });
     } catch (e) {
       console.warn('🔊 [连续播放器] primeAudioChannelWithSilence 异常:', e);
+      this.primeInProgress = false;
     }
   }
 
   private handleAudioPause = (): void => {
-    console.log(`🔊 [连续播放器] onpause 触发 | [active] ${this.active} | [src] ${!!this.audio.src} | [ended] ${this.audio.ended} | [resolving] ${this.resolving} | [recoveryRetryCount] ${this.recoveryRetryCount} | [visibilityState] ${document.visibilityState}`);
+    console.log(`🔊 [连续播放器] onpause 触发 | [active] ${this.active} | [src] ${!!this.audio.src} | [ended] ${this.audio.ended} | [resolving] ${this.resolving} | [transition] ${this.transitionInProgress} | [recoveryRetryCount] ${this.recoveryRetryCount} | [visibilityState] ${document.visibilityState}`);
     if (!this.active) return;
     // 如果 doResolve 正在清理，不恢复 — 这是正常结束而非意外中断
     if (this.resolving) {
       console.log('🔊 [连续播放器] onpause: doResolve 正在处理，跳过恢复');
+      return;
+    }
+    // 句子切换期间暂停恢复，避免与新的播放操作竞争
+    if (this.transitionInProgress) {
+      console.log('🔊 [连续播放器] onpause: 句子切换中，跳过恢复');
       return;
     }
     if (!this.audio.src) {
