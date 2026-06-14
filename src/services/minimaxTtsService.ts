@@ -691,7 +691,7 @@ export const minimaxTtsService = {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: 'speech-02-hd',
+            model: 'speech-2.8-hd',
             text: trimmedText,
             stream: false,
             voice_setting: {
@@ -836,7 +836,7 @@ export const minimaxTtsService = {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'speech-02-hd',
+          model: 'speech-2.8-hd',
           text: 'Hi',
           stream: false,
           voice_setting: {
@@ -1018,7 +1018,7 @@ export const minimaxTtsService = {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'speech-02-hd',
+          model: 'speech-2.8-hd',
           text: trimmedText,
           stream: false,
           voice_setting: {

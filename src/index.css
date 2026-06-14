@@ -113,8 +113,7 @@ body {
   transform-style: preserve-3d;
   -webkit-transform-style: preserve-3d;
   cursor: pointer;
-  will-change: transform;
-}
+  }
 .card-flipped {
   transform: rotateY(180deg);
 }
@@ -263,5 +262,24 @@ body {
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* ========== 桌面端专属优化（不影响手机端） ========== */
+
+/* 桌面端：固定高度链，确保滚动只在 <main> 内发生 */
+@media (min-width: 768px) {
+  html, body {
+    height: 100%;
+  }
+  #root {
+    height: 100%;
+  }
+}
+
+/* 桌面端：背景固定，避免滚动时每帧重绘渐变 */
+@media (hover: hover) {
+  body {
+    background-attachment: fixed;
   }
 }

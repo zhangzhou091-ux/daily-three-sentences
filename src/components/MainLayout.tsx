@@ -415,7 +415,7 @@ const MainLayout: React.FC = () => {
       )}
 
       {/* Main Content */}
-      <main className="w-full max-w-5xl mx-auto px-4 pt-20 pb-28 sm:pt-28 sm:pb-12 overflow-y-auto custom-scrollbar">
+      <main className="w-full max-w-5xl mx-auto px-4 pt-20 pb-28 sm:pt-28 sm:pb-12 h-full overflow-y-auto custom-scrollbar">
         <div className="w-full h-full">
            {renderView()}
         </div>

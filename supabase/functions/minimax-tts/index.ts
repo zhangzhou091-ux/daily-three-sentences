@@ -87,7 +87,7 @@ Deno.serve(async (req) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "speech-02-hd",
+        model: "speech-2.8-hd",
         text: text.trim(),
         stream: false,
         voice_setting: {

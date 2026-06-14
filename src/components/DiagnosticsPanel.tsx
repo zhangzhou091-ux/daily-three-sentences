@@ -573,7 +573,7 @@ const runAudioProbe = async (
         'Authorization': `Bearer ${settings.minimaxApiKey.trim()}`,
       },
       {
-        model: 'speech-02-hd',
+        model: 'speech-2.8-hd',
         text: testText,
         stream: false,
         voice_setting: {
