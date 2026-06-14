@@ -19,15 +19,15 @@ const READING_PROGRESS_KEY = 'd3s_dictation_reading_progress';
 
 const PRELOAD_LOOKAHEAD = 2;
 
-const saveReadingProgress = (sentenceId: string, index: number): void => {
+const saveReadingProgress = (sentenceId: string, index: number, totalPlayed: number): void => {
   try {
     const today = getLocalDateString();
-    const progress = { sentenceId, index, date: today };
+    const progress = { sentenceId, index, totalPlayed, date: today };
     localStorage.setItem(READING_PROGRESS_KEY, JSON.stringify(progress));
   } catch { /* ignore */ }
 };
 
-const loadReadingProgress = (): { sentenceId: string; index: number; date: string } | null => {
+const loadReadingProgress = (): { sentenceId: string; index: number; totalPlayed: number; date: string } | null => {
   try {
     const raw = localStorage.getItem(READING_PROGRESS_KEY);
     if (!raw) return null;
@@ -233,7 +233,7 @@ export const useDictationReading = (
         if (!isActiveRef.current || playGenerationRef.current !== gen) return;
 
         const sentence = pool[i];
-        saveReadingProgress(sentence.id, i);
+        saveReadingProgress(sentence.id, i, totalPlayedRef.current);
 
         mediaSessionService.updateMetadata(sentence.english);
         mediaSessionService.setActionHandlers({
@@ -276,23 +276,28 @@ export const useDictationReading = (
             preloadNextSentences(pool, i, gen);
           }
 
-          const success = await playSentenceOnce(sentence, gen, audioBlob);
+          // 进度条显示"正在播放第N遍"，播放成功后才更新次数
+          setState(prev => ({ ...prev, currentRepeat: completedRepeats + 1 }));
+
+          const success = await playSentenceOnce(sentence, gen, audioBlob).catch(() => false);
           if (!isActiveRef.current || playGenerationRef.current !== gen) return;
 
           if (!success) {
             consecutiveErrors++;
             if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-              break;
+              // 连续失败，暂停后重试，不跳出循环，保证朗读5次
+              await mediaSessionService.waitForPlaybackGap(3000);
+              consecutiveErrors = 0;
+            } else {
+              await mediaSessionService.waitForPlaybackGap(500);
             }
-            await mediaSessionService.waitForPlaybackGap(500);
             continue;
           }
 
           consecutiveErrors = 0;
           completedRepeats++;
           totalPlayedRef.current++;
-
-          setState(prev => ({ ...prev, currentRepeat: completedRepeats }));
+          setState(prev => ({ ...prev, currentRepeat: completedRepeats, totalPlayed: totalPlayedRef.current }));
 
           if (completedRepeats < REPEATS_PER_SENTENCE) {
             mediaSessionService.holdAudioFocus();
@@ -301,8 +306,6 @@ export const useDictationReading = (
         }
 
         if (!isActiveRef.current || playGenerationRef.current !== gen) return;
-
-        setState(prev => ({ ...prev, totalPlayed: totalPlayedRef.current }));
 
         mediaSessionService.holdAudioFocus();
         await mediaSessionService.waitForPlaybackGap(jitterDelay(INTER_SENTENCE_BASE_DELAY, INTER_SENTENCE_JITTER));
@@ -348,7 +351,7 @@ export const useDictationReading = (
       const foundIndex = pool.findIndex(s => s.id === savedProgress.sentenceId);
       if (foundIndex >= 0) {
         startIndex = foundIndex;
-        totalPlayedRef.current = savedProgress.index;
+        totalPlayedRef.current = savedProgress.totalPlayed ?? 0;
       }
     }
 
@@ -370,7 +373,7 @@ export const useDictationReading = (
       const pool = getReadingPool();
       const currentIdx = state.currentIndex;
       if (currentIdx >= 0 && currentIdx < pool.length) {
-        saveReadingProgress(pool[currentIdx].id, currentIdx);
+        saveReadingProgress(pool[currentIdx].id, currentIdx, totalPlayedRef.current);
       }
     }
 
@@ -424,7 +427,7 @@ export const useDictationReading = (
     }
 
     const newIdx = state.currentIndex > 0 ? state.currentIndex - 1 : pool.length - 1;
-    saveReadingProgress(pool[newIdx].id, newIdx);
+    saveReadingProgress(pool[newIdx].id, newIdx, totalPlayedRef.current);
 
     setState(prev => ({
       ...prev,
@@ -466,7 +469,7 @@ export const useDictationReading = (
     }
 
     const newIdx = state.currentIndex < pool.length - 1 ? state.currentIndex + 1 : 0;
-    saveReadingProgress(pool[newIdx].id, newIdx);
+    saveReadingProgress(pool[newIdx].id, newIdx, totalPlayedRef.current);
 
     setState(prev => ({
       ...prev,
@@ -500,7 +503,7 @@ export const useDictationReading = (
         const pool = getReadingPool();
         const currentIdx = startIdxRef.current || 0;
         if (currentIdx >= 0 && currentIdx < pool.length) {
-          saveReadingProgress(pool[currentIdx].id, currentIdx);
+          saveReadingProgress(pool[currentIdx].id, currentIdx, totalPlayedRef.current);
         }
         isActiveRef.current = false;
         playGenerationRef.current = currentGen + 1;

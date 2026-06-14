@@ -1098,7 +1098,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                           </button>
                         </div>
                         <p className="text-xs font-black text-gray-600 uppercase tracking-wide mt-4">
-                          第 {randomListeningTotal + 1} 句 · 已朗读 {randomListeningTotal} 遍
+                          已朗读 {randomListeningTotal} 次
                         </p>
                       </div>
                     </>
@@ -1196,7 +1196,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                           </button>
                         </div>
                         <p className="text-xs font-black text-gray-600 uppercase tracking-wide mt-4">
-                          第 {dictationReadingIndex + 1}/{dictationReadingPoolSize} 句 · 已朗读 {dictationReadingTotal} 遍
+                          第 {dictationReadingIndex + 1}/{dictationReadingPoolSize} 句 · 已朗读 {dictationReadingTotal} 次
                         </p>
                       </div>
                     </>
