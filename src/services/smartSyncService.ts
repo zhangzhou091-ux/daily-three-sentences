@@ -4,6 +4,7 @@
  */
 
 import { UserStats, UserSettings, Sentence } from '../types';
+import { generateUUID } from '../utils/uuid';
 
 type SyncMessage =
   | { type: 'stats_update'; data: UserStats; timestamp: number; tabId: string }
@@ -247,7 +248,7 @@ export class SmartSyncService {
 
   private getDefaultStats(): UserStats {
     return {
-      id: crypto.randomUUID(),
+      id: generateUUID(),
       streak: 0,
       lastLearnDate: '',
       totalPoints: 0,

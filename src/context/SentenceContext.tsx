@@ -114,6 +114,9 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
             console.log('📚 SentenceContext: 请求已过期，同步结果已缓存但不更新UI');
             console.log(`📚 SentenceContext: 缓存版本=${currentVersion}, 最新版本=${dataVersionRef.current}`);
           }
+
+          // 只有同步成功且有数据时才标记今日已同步，防止失败后下次打开跳过同步
+          localStorage.setItem(LAST_SYNC_DATE_KEY, today);
         } else if (result === undefined) {
           console.warn('📚 SentenceContext: 云端同步未执行（未配置或离线），保持本地数据');
           if (currentRequestId === lastRequestId.current) {
@@ -121,7 +124,6 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
           }
         }
 
-        localStorage.setItem(LAST_SYNC_DATE_KEY, today);
       } else {
         console.log('📚 SentenceContext: 跳过云端同步', { isConfigured: isConfiguredRef.current, isOnline: isOnlineRef.current });
       }

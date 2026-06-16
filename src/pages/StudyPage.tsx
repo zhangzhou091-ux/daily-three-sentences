@@ -267,7 +267,6 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     clearBlacklist,
     blacklistSize,
     REPEATS_PER_SENTENCE,
-    resetRandomListeningState,
   } = useRandomListening(sentences);
 
   const {
@@ -284,15 +283,8 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     goToNextReadingSentence,
     canGoPrevReadingSentence,
     canGoNextReadingSentence,
-    toggleBlacklist: dictationToggleBlacklist,
-    isBlacklisted: isDictationBlacklisted,
-    clearBlacklist: clearDictationBlacklist,
-    blacklistSize: dictationBlacklistSize,
     REPEATS_PER_SENTENCE: DICTATION_READING_REPEATS,
-    resetDictationReadingState,
   } = useDictationReading(sentences, dailySelection);
-
-  const [dictationReadingMode, setDictationReadingMode] = useState<'random' | 'sequential'>('sequential');
 
   const handleToggleRandomListening = useCallback(() => {
     if (isDictationReadingActive) stopDictationReading();
@@ -955,31 +947,143 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
 
         {activeTab === 'dictation' && (
           <div className="space-y-10 animate-in slide-in-from-left-4 duration-500 safe-area-bottom">
-            {/* 合并朗读卡片：随机/顺序 模式切换 */}
+            {/* 顺序朗读卡片 */}
             <div className="apple-card p-6 relative overflow-hidden" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left', paddingTop: '20px', paddingBottom: '20px' }}>
-              {/* 顶部栏：模式切换 + 语速 + 信息 */}
-              <div className="w-full flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-3">
-                {/* 模式切换 */}
-                <div className="flex bg-gray-200/50 p-1 rounded-[1.2rem] self-start">
-                  <button
-                    onClick={() => { if (isRandomListeningActive) stopRandomListening(); if (isDictationReadingActive) stopDictationReading(); resetDictationReadingState(); setDictationReadingMode('random'); }}
-                    className={`px-3.5 py-1.5 text-[11px] font-black uppercase tracking-wider rounded-[1rem] transition-all duration-200 ${
-                      dictationReadingMode === 'random' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    随机
-                  </button>
-                  <button
-                    onClick={() => { if (isRandomListeningActive) stopRandomListening(); if (isDictationReadingActive) stopDictationReading(); resetRandomListeningState(); setDictationReadingMode('sequential'); }}
-                    className={`px-3.5 py-1.5 text-[11px] font-black uppercase tracking-wider rounded-[1rem] transition-all duration-200 ${
-                      dictationReadingMode === 'sequential' ? 'bg-white shadow-sm text-green-600' : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    顺序
-                  </button>
+              <div className="w-full flex justify-between items-center mb-3">
+                <div>
+                  <h3 className="text-lg font-black text-gray-900 tracking-tight">顺序朗读</h3>
+                  <p className="text-xs font-black text-green-500 uppercase tracking-wide mt-0.5">Sequential Reading</p>
                 </div>
-                {/* 语速 + 信息 */}
-                <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  {blacklistSize > 0 && (
+                    <button
+                      onClick={clearBlacklist}
+                      className="text-xs font-bold text-gray-400 hover:text-red-500 transition-colors"
+                    >
+                      清除排除({blacklistSize})
+                    </button>
+                  )}
+                  <span className="text-xs font-bold text-gray-400">
+                    {dictationReadingPoolSize} 句可用
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-[1.5em] flex flex-col items-center w-full flex-1 overflow-y-auto min-h-0">
+                {isDictationReadingActive && dictationReadingSentence ? (
+                  <>
+                    <div className="w-full text-left space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <h3 className={`text-lg font-normal leading-normal w-full break-words whitespace-pre-wrap ${
+                            isBlacklisted(dictationReadingSentence.id) ? 'text-gray-300 line-through' : 'text-gray-900'
+                          }`}>
+                            {dictationReadingSentence.english}
+                          </h3>
+                          <p className={`text-sm leading-normal break-words ${
+                            isBlacklisted(dictationReadingSentence.id) ? 'text-gray-200 line-through' : 'text-gray-400'
+                          }`}>
+                            {dictationReadingSentence.chinese}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => toggleBlacklist(dictationReadingSentence.id)}
+                          className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs transition-all ${
+                            isBlacklisted(dictationReadingSentence.id)
+                              ? 'bg-red-100 text-red-500 hover:bg-red-200'
+                              : 'bg-gray-100 text-gray-400 hover:bg-gray-200 hover:text-gray-600'
+                          }`}
+                          title={isBlacklisted(dictationReadingSentence.id) ? '取消排除' : '排除此句'}
+                        >
+                          {isBlacklisted(dictationReadingSentence.id) ? '🚫' : '⊘'}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-auto flex flex-col items-center w-full">
+                      <div className="flex items-center gap-2 w-full mb-4">
+                        <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-green-500 rounded-full transition-all duration-500 ease-out"
+                            style={{ width: `${(dictationReadingRepeat / DICTATION_READING_REPEATS) * 100}%` }}
+                          />
+                        </div>
+                        <span className="text-xs font-bold text-gray-500 min-w-[2.5rem] text-right">
+                          {dictationReadingRepeat}/{DICTATION_READING_REPEATS}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-center gap-4 w-full">
+                        <button
+                          onClick={goToPrevReadingSentence}
+                          disabled={!canGoPrevReadingSentence}
+                          className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
+                            canGoPrevReadingSentence
+                              ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-90'
+                              : 'bg-gray-50 text-gray-300 cursor-not-allowed'
+                          }`}
+                          title="上一句"
+                          aria-label="上一句"
+                        >
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>
+                        </button>
+                        <button
+                          onClick={handleToggleDictationReading}
+                          className="w-14 h-14 rounded-full flex items-center justify-center transition-all z-20 bg-red-50 text-red-500 hover:scale-110 active:scale-95"
+                          title="停止"
+                          aria-label="停止朗读"
+                        >
+                          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                        </button>
+                        <button
+                          onClick={goToNextReadingSentence}
+                          disabled={!canGoNextReadingSentence}
+                          className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
+                            canGoNextReadingSentence
+                              ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-90'
+                              : 'bg-gray-50 text-gray-300 cursor-not-allowed'
+                          }`}
+                          title="下一句"
+                          aria-label="下一句"
+                        >
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
+                        </button>
+                      </div>
+                      <p className="text-xs font-black text-gray-600 uppercase tracking-wide mt-4">
+                        第 {dictationReadingIndex + 1}/{dictationReadingPoolSize} 句 · 已朗读 {dictationReadingTotal} 遍
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex flex-col items-center justify-center flex-1 w-full">
+                    <button
+                      onClick={handleToggleDictationReading}
+                      className="w-16 h-16 rounded-full flex items-center justify-center transition-all z-20 bg-green-50 text-green-600 hover:scale-110 active:scale-95"
+                      title="开始顺序朗读"
+                      aria-label="开始顺序朗读"
+                    >
+                      <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v14l11-7-11-7z"/></svg>
+                    </button>
+                    <p className="text-xs font-black text-gray-600 uppercase tracking-wide mt-6">
+                      点击开始顺序朗读
+                    </p>
+                    <p className="text-xs text-gray-400 mt-2">
+                      朗读今日学习与复习句子，每句 {DICTATION_READING_REPEATS} 遍后自动切换，循环播放
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {dictationReadingError && (
+                <div className="mt-2 p-3 bg-red-50 rounded-xl border border-red-100 w-full">
+                  <p className="text-sm text-red-600 font-medium text-center">{dictationReadingError}</p>
+                </div>
+              )}
+            </div>
+
+            {/* 随机朗读卡片 */}
+            <div className="apple-card p-6 relative overflow-hidden" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left', paddingTop: '20px', paddingBottom: '20px' }}>
+              <div className="w-full flex justify-between items-center mb-3">
+                <h3 className="text-sm font-black text-blue-600 uppercase tracking-wider">随机朗读</h3>
+                <div className="flex items-center gap-2">
                   {SPEECH_RATE_OPTIONS.map(opt => (
                     <button
                       key={opt.value}
@@ -999,236 +1103,126 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                       {opt.label}
                     </button>
                   ))}
-                  {(dictationReadingMode === 'random' ? blacklistSize : dictationBlacklistSize) > 0 && (
+                  {blacklistSize > 0 && (
                     <button
-                      onClick={() => {
-                        if (dictationReadingMode === 'random') {
-                          clearBlacklist();
-                        } else {
-                          clearDictationBlacklist();
-                        }
-                      }}
-                      className="text-xs font-bold text-gray-400 hover:text-red-500 transition-colors ml-1"
+                      onClick={clearBlacklist}
+                      className="text-xs font-bold text-gray-400 hover:text-red-500 transition-colors"
                     >
-                      清除排除({dictationReadingMode === 'random' ? blacklistSize : dictationBlacklistSize})
+                      清除排除({blacklistSize})
                     </button>
                   )}
-                  <span className="text-xs font-bold text-gray-400 ml-1">
-                    {dictationReadingMode === 'random' ? randomListeningPoolSize : dictationReadingPoolSize} 句可用
+                  <span className="text-xs font-bold text-gray-400">
+                    {randomListeningPoolSize} 句可用
                   </span>
                 </div>
               </div>
 
-              {/* 句子内容区 */}
               <div className="mt-[1.5em] flex flex-col items-center w-full flex-1 overflow-y-auto min-h-0">
-                {dictationReadingMode === 'random' ? (
-                  /* === 随机朗读 === */
-                  isRandomListeningActive && randomListeningSentence ? (
-                    <>
-                      <div className="w-full text-left space-y-2">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex-1 min-w-0">
-                            <h3 className={`text-lg font-normal leading-normal w-full break-words whitespace-pre-wrap ${
-                              isBlacklisted(randomListeningSentence.id) ? 'text-gray-300 line-through' : 'text-gray-900'
-                            }`}>
-                              {randomListeningSentence.english}
-                            </h3>
-                            <p className={`text-sm leading-normal break-words ${
-                              isBlacklisted(randomListeningSentence.id) ? 'text-gray-200 line-through' : 'text-gray-400'
-                            }`}>
-                              {randomListeningSentence.chinese}
-                            </p>
-                          </div>
-                          <button
-                            onClick={() => toggleBlacklist(randomListeningSentence.id)}
-                            className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs transition-all ${
-                              isBlacklisted(randomListeningSentence.id)
-                                ? 'bg-red-100 text-red-500 hover:bg-red-200'
-                                : 'bg-gray-100 text-gray-400 hover:bg-gray-200 hover:text-gray-600'
-                            }`}
-                            title={isBlacklisted(randomListeningSentence.id) ? '取消排除' : '排除此句'}
-                          >
-                            {isBlacklisted(randomListeningSentence.id) ? '🚫' : '⊘'}
-                          </button>
+                {isRandomListeningActive && randomListeningSentence ? (
+                  <>
+                    <div className="w-full text-left space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <h3 className={`text-lg font-normal leading-normal w-full break-words whitespace-pre-wrap ${
+                            isBlacklisted(randomListeningSentence.id) ? 'text-gray-300 line-through' : 'text-gray-900'
+                          }`}>
+                            {randomListeningSentence.english}
+                          </h3>
+                          <p className={`text-sm leading-normal break-words ${
+                            isBlacklisted(randomListeningSentence.id) ? 'text-gray-200 line-through' : 'text-gray-400'
+                          }`}>
+                            {randomListeningSentence.chinese}
+                          </p>
                         </div>
+                        <button
+                          onClick={() => toggleBlacklist(randomListeningSentence.id)}
+                          className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs transition-all ${
+                            isBlacklisted(randomListeningSentence.id)
+                              ? 'bg-red-100 text-red-500 hover:bg-red-200'
+                              : 'bg-gray-100 text-gray-400 hover:bg-gray-200 hover:text-gray-600'
+                          }`}
+                          title={isBlacklisted(randomListeningSentence.id) ? '取消排除' : '排除此句'}
+                        >
+                          {isBlacklisted(randomListeningSentence.id) ? '🚫' : '⊘'}
+                        </button>
                       </div>
-                      <div className="mt-auto flex flex-col items-center w-full">
-                        <div className="flex items-center gap-2 w-full mb-4">
-                          <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
-                              style={{ width: `${(randomListeningRepeat / REPEATS_PER_SENTENCE) * 100}%` }}
-                            />
-                          </div>
-                          <span className="text-xs font-bold text-gray-500 min-w-[2.5rem] text-right">
-                            {randomListeningRepeat}/{REPEATS_PER_SENTENCE}
-                          </span>
+                    </div>
+                    <div className="mt-auto flex flex-col items-center w-full">
+                      <div className="flex items-center gap-2 w-full mb-4">
+                        <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-blue-500 rounded-full transition-all duration-500 ease-out"
+                            style={{ width: `${(randomListeningRepeat / REPEATS_PER_SENTENCE) * 100}%` }}
+                          />
                         </div>
-                        <div className="flex items-center justify-center gap-4 w-full">
-                          <button
-                            onClick={() => goToPreviousSentence()}
-                            disabled={!canGoPrevious}
-                            className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
-                              canGoPrevious
-                                ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-90'
-                                : 'bg-gray-50 text-gray-300 cursor-not-allowed'
-                            }`}
-                            title="上一句" aria-label="上一句"
-                          >
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>
-                          </button>
-                          <button
-                            onClick={handleToggleRandomListening}
-                            className="w-14 h-14 rounded-full flex items-center justify-center transition-all z-20 bg-red-50 text-red-500 hover:scale-110 active:scale-95"
-                            title="停止" aria-label="停止朗读"
-                          >
-                            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-                          </button>
-                          <button
-                            onClick={() => goToNextSentence()}
-                            disabled={!canGoNext}
-                            className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
-                              canGoNext
-                                ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-90'
-                                : 'bg-gray-50 text-gray-300 cursor-not-allowed'
-                            }`}
-                            title="下一句" aria-label="下一句"
-                          >
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
-                          </button>
-                        </div>
-                        <p className="text-xs font-black text-gray-600 uppercase tracking-wide mt-4">
-                          已朗读 {randomListeningTotal} 次
-                        </p>
+                        <span className="text-xs font-bold text-gray-500 min-w-[2.5rem] text-right">
+                          {randomListeningRepeat}/{REPEATS_PER_SENTENCE}
+                        </span>
                       </div>
-                    </>
-                  ) : (
-                    <div className="flex flex-col items-center justify-center flex-1 w-full">
-                      <button
-                        onClick={handleToggleRandomListening}
-                        className="w-16 h-16 rounded-full flex items-center justify-center transition-all z-20 bg-blue-50 text-blue-600 hover:scale-110 active:scale-95"
-                        title="开始随机朗读" aria-label="开始随机朗读"
-                      >
-                        <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v14l11-7-11-7z"/></svg>
-                      </button>
-                      <p className="text-xs font-black text-gray-600 uppercase tracking-wide mt-6">
-                        点击开始随机朗读
-                      </p>
-                      <p className="text-xs text-gray-400 mt-2">
-                        每句连续朗读 {REPEATS_PER_SENTENCE} 遍后自动切换
+                      <div className="flex items-center justify-center gap-4 w-full">
+                        <button
+                          onClick={goToPreviousSentence}
+                          disabled={!canGoPrevious}
+                          className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
+                            canGoPrevious
+                              ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-90'
+                              : 'bg-gray-50 text-gray-300 cursor-not-allowed'
+                          }`}
+                          title="上一句"
+                          aria-label="上一句"
+                        >
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>
+                        </button>
+                        <button
+                          onClick={handleToggleRandomListening}
+                          className="w-14 h-14 rounded-full flex items-center justify-center transition-all z-20 bg-red-50 text-red-500 hover:scale-110 active:scale-95"
+                          title="停止"
+                          aria-label="停止朗读"
+                        >
+                          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                        </button>
+                        <button
+                          onClick={goToNextSentence}
+                          disabled={!canGoNext}
+                          className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
+                            canGoNext
+                              ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-90'
+                              : 'bg-gray-50 text-gray-300 cursor-not-allowed'
+                          }`}
+                          title="下一句"
+                          aria-label="下一句"
+                        >
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
+                        </button>
+                      </div>
+                      <p className="text-xs font-black text-gray-600 uppercase tracking-wide mt-4">
+                        第 {randomListeningTotal + 1} 句 · 已朗读 {randomListeningTotal} 遍
                       </p>
                     </div>
-                  )
+                  </>
                 ) : (
-                  /* === 顺序朗读 === */
-                  isDictationReadingActive && dictationReadingSentence ? (
-                    <>
-                      <div className="w-full text-left space-y-2">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex-1 min-w-0">
-                            <h3 className={`text-lg font-normal leading-normal w-full break-words whitespace-pre-wrap ${
-                              isDictationBlacklisted(dictationReadingSentence.id) ? 'text-gray-300 line-through' : 'text-gray-900'
-                            }`}>
-                              {dictationReadingSentence.english}
-                            </h3>
-                            <p className={`text-sm leading-normal break-words ${
-                              isDictationBlacklisted(dictationReadingSentence.id) ? 'text-gray-200 line-through' : 'text-gray-400'
-                            }`}>
-                              {dictationReadingSentence.chinese}
-                            </p>
-                          </div>
-                          <button
-                            onClick={() => dictationToggleBlacklist(dictationReadingSentence.id)}
-                            className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs transition-all ${
-                              isDictationBlacklisted(dictationReadingSentence.id)
-                                ? 'bg-red-100 text-red-500 hover:bg-red-200'
-                                : 'bg-gray-100 text-gray-400 hover:bg-gray-200 hover:text-gray-600'
-                            }`}
-                            title={isDictationBlacklisted(dictationReadingSentence.id) ? '取消排除' : '排除此句'}
-                          >
-                            {isDictationBlacklisted(dictationReadingSentence.id) ? '🚫' : '⊘'}
-                          </button>
-                        </div>
-                      </div>
-                      <div className="mt-auto flex flex-col items-center w-full">
-                        <div className="flex items-center gap-2 w-full mb-4">
-                          <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-green-500 rounded-full transition-all duration-500 ease-out"
-                              style={{ width: `${(dictationReadingRepeat / DICTATION_READING_REPEATS) * 100}%` }}
-                            />
-                          </div>
-                          <span className="text-xs font-bold text-gray-500 min-w-[2.5rem] text-right">
-                            {dictationReadingRepeat}/{DICTATION_READING_REPEATS}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-center gap-4 w-full">
-                          <button
-                            onClick={() => goToPrevReadingSentence()}
-                            disabled={!canGoPrevReadingSentence}
-                            className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
-                              canGoPrevReadingSentence
-                                ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-90'
-                                : 'bg-gray-50 text-gray-300 cursor-not-allowed'
-                            }`}
-                            title="上一句" aria-label="上一句"
-                          >
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>
-                          </button>
-                          <button
-                            onClick={handleToggleDictationReading}
-                            className="w-14 h-14 rounded-full flex items-center justify-center transition-all z-20 bg-red-50 text-red-500 hover:scale-110 active:scale-95"
-                            title="停止" aria-label="停止朗读"
-                          >
-                            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-                          </button>
-                          <button
-                            onClick={() => goToNextReadingSentence()}
-                            disabled={!canGoNextReadingSentence}
-                            className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
-                              canGoNextReadingSentence
-                                ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 active:scale-90'
-                                : 'bg-gray-50 text-gray-300 cursor-not-allowed'
-                            }`}
-                            title="下一句" aria-label="下一句"
-                          >
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
-                          </button>
-                        </div>
-                        <p className="text-xs font-black text-gray-600 uppercase tracking-wide mt-4">
-                          第 {dictationReadingIndex + 1}/{dictationReadingPoolSize} 句 · 已朗读 {dictationReadingTotal} 次
-                        </p>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="flex flex-col items-center justify-center flex-1 w-full">
-                      <button
-                        onClick={handleToggleDictationReading}
-                        className="w-16 h-16 rounded-full flex items-center justify-center transition-all z-20 bg-green-50 text-green-600 hover:scale-110 active:scale-95"
-                        title="开始顺序朗读" aria-label="开始顺序朗读"
-                      >
-                        <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v14l11-7-11-7z"/></svg>
-                      </button>
-                      <p className="text-xs font-black text-gray-600 uppercase tracking-wide mt-6">
-                        点击开始顺序朗读
-                      </p>
-                      <p className="text-xs text-gray-400 mt-2">
-                        朗读今日学习与复习句子，每句 {DICTATION_READING_REPEATS} 遍后自动切换，循环播放
-                      </p>
-                    </div>
-                  )
+                  <div className="flex flex-col items-center justify-center flex-1 w-full">
+                    <button
+                      onClick={handleToggleRandomListening}
+                      className="w-16 h-16 rounded-full flex items-center justify-center transition-all z-20 bg-blue-50 text-blue-600 hover:scale-110 active:scale-95"
+                      title="开始随机朗读"
+                      aria-label="开始随机朗读"
+                    >
+                      <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v14l11-7-11-7z"/></svg>
+                    </button>
+                    <p className="text-xs font-black text-gray-600 uppercase tracking-wide mt-6">
+                      点击开始随机朗读
+                    </p>
+                    <p className="text-xs text-gray-400 mt-2">
+                      每句连续朗读 {REPEATS_PER_SENTENCE} 遍后自动切换
+                    </p>
+                  </div>
                 )}
               </div>
 
-              {/* 错误提示（两种模式共享） */}
-              {dictationReadingMode === 'random' && randomListeningError && (
+              {randomListeningError && (
                 <div className="mt-2 p-3 bg-red-50 rounded-xl border border-red-100 w-full">
                   <p className="text-sm text-red-600 font-medium text-center">{randomListeningError}</p>
-                </div>
-              )}
-              {dictationReadingMode === 'sequential' && dictationReadingError && (
-                <div className="mt-2 p-3 bg-red-50 rounded-xl border border-red-100 w-full">
-                  <p className="text-sm text-red-600 font-medium text-center">{dictationReadingError}</p>
                 </div>
               )}
             </div>

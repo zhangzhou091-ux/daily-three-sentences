@@ -647,10 +647,9 @@ class SupabaseService {
 
   private async fetchCloudSentences(incremental: boolean = false): Promise<Map<string, CloudSentenceData>> {
     if (!this._client) {
-      console.warn('⚠️ Supabase 客户端未初始化，跳过云端数据获取');
-      return new Map();
+      throw new Error('Supabase 客户端未初始化，无法获取云端数据');
     }
-    
+
     const cleanUserName = this._userName;
     let query = this._client
       .from('sentences')
@@ -664,12 +663,8 @@ class SupabaseService {
     const { data: cloudData, error } = await query.order('updatedat', { ascending: true });
 
     if (error) {
-      if (error.message.includes('Failed to fetch') || error.message.includes('fetch')) {
-        console.warn("⚠️ 网络请求失败，使用本地数据:", error.message);
-      } else {
-        console.error("❌ Fetch cloud sentences error:", error.message);
-      }
-      return new Map();
+      console.error("❌ Fetch cloud sentences error:", error.message);
+      throw new Error(`获取云端数据失败: ${error.message}`);
     }
 
     const cloudEnglishMap = new Map<string, CloudSentenceData>();
@@ -831,6 +826,17 @@ class SupabaseService {
         this.lastCloudFetchTime = Date.now();
 
         const freshLocalSentences = await getLocalSentences();
+
+        // 保护：云端返回空数据但本地有数据 — 可能是网络异常，跳过同步防止数据丢失
+        if (cloudEnglishMap.size === 0 && freshLocalSentences.length > 0) {
+          console.warn('⚠️ syncSentencesWithFreshData: 云端返回空数据但本地有数据，跳过同步以保护本地数据');
+          return {
+            sentences: freshLocalSentences,
+            message: '云端数据为空，保留本地数据',
+            needsLocalUpdate: false,
+            deletedLocalIds: []
+          };
+        }
         
         const validLocalSentences = freshLocalSentences.filter(s =>
           s.id && s.english && s.chinese && s.updatedAt

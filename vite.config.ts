@@ -11,7 +11,7 @@ export default defineConfig({
   },
   base: '/daily-three-sentences/',
   optimizeDeps: {
-    include: ['react', 'react-dom', 'react-is'],
+    include: ['react'],
   },
   build: {
     modulePreload: {

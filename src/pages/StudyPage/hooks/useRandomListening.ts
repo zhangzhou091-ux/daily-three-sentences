@@ -4,38 +4,49 @@ import { geminiService } from '../../../services/geminiService';
 import { mediaSessionService } from '../../../services/mediaSessionService';
 import { continuousAudioPlayer } from '../../../services/continuousAudioPlayer';
 import { blacklistStorage } from '../../../services/blacklistStorage';
-import { storageService } from '../../../services/storage';
 
 const REPEATS_PER_SENTENCE = 5;
 const INTER_REPEAT_BASE_DELAY = 450;
 const INTER_REPEAT_JITTER = 200;
 const INTER_SENTENCE_BASE_DELAY = 900;
 const INTER_SENTENCE_JITTER = 300;
-const MAX_CONSECUTIVE_ERRORS = 3;
+const MAX_CONSECUTIVE_ERRORS = 5;
 const PLAY_TIMEOUT_MS = 15000;
 const PLAY_TIMEOUT_PER_CHAR_MS = 250;
 const SESSION_RESET_INTERVAL = 14 * 24 * 60 * 60 * 1000;
-const RECENT_AVOID_RATIO = 0.3;
-const MAX_RECENT_AVOID = 8;
-const FOCUS_BUCKET_WEIGHT = 0.5;
-const REGULAR_BUCKET_WEIGHT = 0.35;
-const EASY_BUCKET_WEIGHT = 0.15;
-const WEIGHT_LOW_STABILITY_THRESHOLD = 20;
-const WEIGHT_LOW_MASTERY_THRESHOLD = 3;
-const EASY_SENTENCE_LENGTH = 40;
-const WEIGHT_AUDIO_BONUS = 0.3;
-const WEIGHT_REPEAT_PENALTY_BASE = 0.12;
 
+// 纯延迟：不受 iOS 后台定时器节流影响（setTimeout 在后台的最小间隔 ~1s，不会像 waitVisible 那样阻塞 3s+）
+const waitDelay = (ms: number): Promise<void> =>
+  new Promise<void>(resolve => setTimeout(resolve, ms));
+
+// 仅用于错误恢复后的等待：需要等用户回到前台再继续
+const waitVisible = (ms: number): Promise<void> =>
+  new Promise<void>(resolve => {
+    setTimeout(() => {
+      if (document.visibilityState === 'visible') {
+        resolve();
+        return;
+      }
+      const forceResolveTimer = setTimeout(() => {
+        document.removeEventListener('visibilitychange', onVisible);
+        resolve();
+      }, 3000);
+      const onVisible = () => {
+        clearTimeout(forceResolveTimer);
+        document.removeEventListener('visibilitychange', onVisible);
+        resolve();
+      };
+      document.addEventListener('visibilitychange', onVisible);
+    }, ms);
+  });
 const SESSION_RESET_KEY = 'd3s_random_listening_session_reset';
 const PRELOAD_LOOKAHEAD = 2;
-const RANDOM_PROGRESS_KEY = 'd3s_random_listening_progress';
 
-const WEIGHT_DIFFICULTY = 0.6;
+const WEIGHT_DIFFICULTY = 2.0;
 const WEIGHT_LOW_STABILITY = 1.5;
-const WEIGHT_WRONG_DICTATIONS = 1.8;
-const WEIGHT_LOW_MASTERY = 1.2;
-
-type ListeningBucket = 'focus' | 'regular' | 'easy';
+const WEIGHT_WRONG_DICTATIONS = 1.5;
+const WEIGHT_LOW_MASTERY = 1.0;
+const WEIGHT_HAS_AUDIO = 1.0;
 
 interface RandomListeningState {
   isActive: boolean;
@@ -59,109 +70,12 @@ const isLearned = (sentence: Sentence): boolean => {
   return !!sentence.learnedAt;
 };
 
-const saveRandomProgress = (sentenceId: string | null, totalPlayed: number): void => {
-  try {
-    if (!sentenceId) return;
-    const progress = { sentenceId, totalPlayed };
-    localStorage.setItem(RANDOM_PROGRESS_KEY, JSON.stringify(progress));
-  } catch { /* ignore */ }
-};
-
-const clearRandomProgress = (): void => {
-  try {
-    localStorage.removeItem(RANDOM_PROGRESS_KEY);
-  } catch { /* ignore */ }
-};
-
-const loadRandomProgress = (): { sentenceId: string; totalPlayed: number } | null => {
-  try {
-    const raw = localStorage.getItem(RANDOM_PROGRESS_KEY);
-    if (!raw) return null;
-    const progress = JSON.parse(raw);
-    if (progress && typeof progress.totalPlayed === 'number' && typeof progress.sentenceId === 'string') {
-      return progress;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-};
-
-const getRecentAvoidCount = (poolSize: number): number => {
-  if (poolSize <= 1) return 0;
-  return Math.max(1, Math.min(Math.floor(poolSize * RECENT_AVOID_RATIO), MAX_RECENT_AVOID));
-};
-
-const isFocusSentence = (sentence: Sentence): boolean => {
-  const wrongDict = sentence.wrongDictations ?? 0;
-  const stability = sentence.stability ?? 0;
-  const mastery = sentence.masteryLevel ?? 0;
-  return wrongDict > 0 || stability === 0 || stability < WEIGHT_LOW_STABILITY_THRESHOLD || mastery < WEIGHT_LOW_MASTERY_THRESHOLD;
-};
-
-const isEasySentence = (sentence: Sentence): boolean => {
-  const wrongDict = sentence.wrongDictations ?? 0;
-  const mastery = sentence.masteryLevel ?? 0;
-  const stability = sentence.stability ?? 0;
-  const difficulty = sentence.difficulty ?? 0;
-  return (
-    wrongDict === 0 &&
-    sentence.english.trim().length < EASY_SENTENCE_LENGTH &&
-    mastery >= 4 &&
-    stability >= WEIGHT_LOW_STABILITY_THRESHOLD &&
-    difficulty <= 4
-  );
-};
-
-const classifySentenceBucket = (sentence: Sentence): ListeningBucket => {
-  if (isFocusSentence(sentence)) return 'focus';
-  if (isEasySentence(sentence)) return 'easy';
-  return 'regular';
-};
-
-const buildBucketMap = (candidates: Sentence[]): Record<ListeningBucket, Sentence[]> => {
-  const buckets: Record<ListeningBucket, Sentence[]> = {
-    focus: [],
-    regular: [],
-    easy: [],
-  };
-
-  candidates.forEach(sentence => {
-    buckets[classifySentenceBucket(sentence)].push(sentence);
-  });
-
-  return buckets;
-};
-
-const pickBucket = (buckets: Record<ListeningBucket, Sentence[]>): Sentence[] => {
-  const weightedBuckets: Array<{ weight: number; sentences: Sentence[] }> = [];
-
-  if (buckets.focus.length > 0) {
-    weightedBuckets.push({ weight: FOCUS_BUCKET_WEIGHT, sentences: buckets.focus });
-  }
-  if (buckets.regular.length > 0) {
-    weightedBuckets.push({ weight: REGULAR_BUCKET_WEIGHT, sentences: buckets.regular });
-  }
-  if (buckets.easy.length > 0) {
-    weightedBuckets.push({ weight: EASY_BUCKET_WEIGHT, sentences: buckets.easy });
-  }
-
-  if (weightedBuckets.length === 0) return [];
-  if (weightedBuckets.length === 1) return weightedBuckets[0].sentences;
-
-  const totalWeight = weightedBuckets.reduce((sum, item) => sum + item.weight, 0);
-  let random = Math.random() * totalWeight;
-
-  for (const item of weightedBuckets) {
-    random -= item.weight;
-    if (random <= 0) return item.sentences;
-  }
-
-  return weightedBuckets[weightedBuckets.length - 1].sentences;
-};
-
 const computeWeight = (sentence: Sentence, sessionCounts: Map<string, number>): number => {
   let weight = 1.0;
+
+  if (hasAudioCache(sentence)) {
+    weight += WEIGHT_HAS_AUDIO;
+  }
 
   const difficulty = sentence.difficulty ?? 0;
   if (difficulty > 0) {
@@ -169,10 +83,10 @@ const computeWeight = (sentence: Sentence, sessionCounts: Map<string, number>): 
   }
 
   const stability = sentence.stability ?? 0;
-  if (stability === 0) {
+  if (stability > 0 && stability < 30) {
+    weight += WEIGHT_LOW_STABILITY * (1 - stability / 30);
+  } else if (stability === 0) {
     weight += WEIGHT_LOW_STABILITY;
-  } else if (stability < WEIGHT_LOW_STABILITY_THRESHOLD) {
-    weight += WEIGHT_LOW_STABILITY * (1 - stability / WEIGHT_LOW_STABILITY_THRESHOLD);
   }
 
   const wrongDict = sentence.wrongDictations ?? 0;
@@ -181,20 +95,16 @@ const computeWeight = (sentence: Sentence, sessionCounts: Map<string, number>): 
   }
 
   const mastery = sentence.masteryLevel ?? 0;
-  if (mastery < WEIGHT_LOW_MASTERY_THRESHOLD) {
-    weight += WEIGHT_LOW_MASTERY * (1 - mastery / WEIGHT_LOW_MASTERY_THRESHOLD);
-  }
-
-  if (hasAudioCache(sentence)) {
-    weight += WEIGHT_AUDIO_BONUS;
+  if (mastery < 5) {
+    weight += WEIGHT_LOW_MASTERY * (1 - mastery / 5);
   }
 
   const sessionCount = sessionCounts.get(sentence.id) ?? 0;
   if (sessionCount > 0) {
-    weight *= Math.pow(WEIGHT_REPEAT_PENALTY_BASE, sessionCount);
+    weight *= Math.pow(0.15, sessionCount);
   }
 
-  return Math.max(weight, 0.05);
+  return Math.max(weight, 0.1);
 };
 
 const weightedRandomPick = (candidates: Sentence[], sessionCounts: Map<string, number>): Sentence => {
@@ -208,37 +118,6 @@ const weightedRandomPick = (candidates: Sentence[], sessionCounts: Map<string, n
   }
 
   return candidates[candidates.length - 1];
-};
-
-const selectRandomListeningSentence = (
-  eligiblePool: Sentence[],
-  recentIds: string[],
-  lastSentenceId: string | null,
-  sessionCounts: Map<string, number>
-): Sentence | null => {
-  if (eligiblePool.length === 0) return null;
-  if (eligiblePool.length === 1) return eligiblePool[0];
-
-  const recentSet = new Set(recentIds);
-  let candidates = eligiblePool.filter(s => !recentSet.has(s.id));
-
-  if (candidates.length === 0) {
-    candidates = eligiblePool.filter(s => s.id !== lastSentenceId);
-  }
-  if (candidates.length === 0) {
-    candidates = eligiblePool;
-  }
-
-  const selectedBucket = pickBucket(buildBucketMap(candidates));
-  const bucketCandidates = selectedBucket.length > 0 ? selectedBucket : candidates;
-  return weightedRandomPick(bucketCandidates, sessionCounts);
-};
-
-export const __randomListeningTestUtils = {
-  getRecentAvoidCount,
-  classifySentenceBucket,
-  computeWeight,
-  selectRandomListeningSentence,
 };
 
 export const useRandomListening = (sentences: Sentence[]) => {
@@ -263,9 +142,8 @@ export const useRandomListening = (sentences: Sentence[]) => {
   const historyRef = useRef<Sentence[]>([]);
   const historyIndexRef = useRef(-1);
   const preloadCacheRef = useRef<Map<string, Blob>>(new Map());
-  const goToPrevRef = useRef<((preserveAudioSession?: boolean) => void) | null>(null);
-  const goToNextRef = useRef<((preserveAudioSession?: boolean) => void) | null>(null);
-  const pendingSentenceRef = useRef<Sentence | null>(null);
+  const goToPrevRef = useRef<(() => void) | null>(null);
+  const goToNextRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     poolRef.current = sentences;
@@ -278,12 +156,33 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
   const pickRandomSentence = useCallback((): Sentence | null => {
     const eligiblePool = getEligiblePool();
-    return selectRandomListeningSentence(
-      eligiblePool,
-      recentIdsRef.current,
-      lastSentenceIdRef.current,
-      sessionCountsRef.current
-    );
+    if (eligiblePool.length === 0) return null;
+    if (eligiblePool.length === 1) return eligiblePool[0];
+
+    const recentSet = new Set(recentIdsRef.current);
+    let candidates = eligiblePool.filter(s => !recentSet.has(s.id));
+
+    if (candidates.length === 0) {
+      candidates = eligiblePool.filter(s => s.id !== lastSentenceIdRef.current);
+    }
+    if (candidates.length === 0) {
+      candidates = eligiblePool;
+    }
+
+    const withAudio = candidates.filter(hasAudioCache);
+    const withoutAudio = candidates.filter(s => !hasAudioCache(s));
+
+    if (withAudio.length > 0 && withoutAudio.length > 0) {
+      const audioRatio = withAudio.length / candidates.length;
+      const pickAudioProbability = Math.min(0.85, audioRatio + 0.15);
+      if (Math.random() < pickAudioProbability) {
+        return weightedRandomPick(withAudio, sessionCountsRef.current);
+      } else {
+        return weightedRandomPick(withoutAudio, sessionCountsRef.current);
+      }
+    }
+
+    return weightedRandomPick(candidates, sessionCountsRef.current);
   }, [getEligiblePool]);
 
   const playSentenceOnce = useCallback(async (
@@ -295,9 +194,15 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
     const doPlay = async (): Promise<boolean> => {
       if (cachedBlob) {
-        await continuousAudioPlayer.playBlob(cachedBlob);
-        if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
-        return true;
+        try {
+          await continuousAudioPlayer.playBlob(cachedBlob);
+          if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
+          return true;
+        } catch (err) {
+          if (!isActiveRef.current || playGenerationRef.current !== gen) return false;
+          console.warn('🔊 [随机朗读] playBlob 失败:', err instanceof Error ? err.message : String(err));
+          return false;
+        }
       }
 
       try {
@@ -345,8 +250,8 @@ export const useRandomListening = (sentences: Sentence[]) => {
     const result = await Promise.race([doPlay(), timeoutPromise]);
 
     if (!result) {
-      geminiService.stopLight();
-      continuousAudioPlayer.stopLight();
+      geminiService.stop();
+      continuousAudioPlayer.stop();
     }
 
     return result;
@@ -379,8 +284,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
   const runListeningLoop = useCallback(async (gen: number) => {
     while (isActiveRef.current && playGenerationRef.current === gen) {
-      const sentence = pendingSentenceRef.current || pickRandomSentence();
-      pendingSentenceRef.current = null;
+      const sentence = pickRandomSentence();
       if (!sentence) {
         const eligiblePool = getEligiblePool();
         const message = eligiblePool.length === 0
@@ -397,7 +301,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
       }
 
       lastSentenceIdRef.current = sentence.id;
-      const dynamicAvoidCount = getRecentAvoidCount(getEligiblePool().length);
+      const dynamicAvoidCount = Math.min(Math.floor(getEligiblePool().length * 0.6), 50);
       recentIdsRef.current = [
         sentence.id,
         ...recentIdsRef.current.slice(0, dynamicAvoidCount - 1),
@@ -410,10 +314,10 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
       mediaSessionService.updateMetadata(sentence.english);
       mediaSessionService.setActionHandlers({
-        onPause: () => { geminiService.stopLight(); continuousAudioPlayer.stop(); isActiveRef.current = false; },
-        onStop: () => { geminiService.stopLight(); continuousAudioPlayer.stop(); isActiveRef.current = false; },
-        onPrevTrack: () => { goToPrevRef.current?.(true); },
-        onNextTrack: () => { goToNextRef.current?.(true); },
+        onPause: () => { geminiService.stop(); continuousAudioPlayer.stop(); isActiveRef.current = false; },
+        onStop: () => { geminiService.stop(); continuousAudioPlayer.stop(); isActiveRef.current = false; },
+        onPrevTrack: () => { goToPrevRef.current?.(); },
+        onNextTrack: () => { goToNextRef.current?.(); },
       });
 
       setState(prev => ({
@@ -461,46 +365,44 @@ export const useRandomListening = (sentences: Sentence[]) => {
           }
         }
 
-        // 进度条显示"正在播放第N遍"，播放成功后才更新次数
-        setState(prev => ({ ...prev, currentRepeat: completedRepeats + 1 }));
-
-        const success = await playSentenceOnce(sentence, gen, audioBlob).catch(() => false);
+        const success = await playSentenceOnce(sentence, gen, audioBlob);
         if (!isActiveRef.current || playGenerationRef.current !== gen) return;
 
         if (!success) {
           consecutiveErrors++;
           if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-            // 连续失败，暂停后重试，不跳出循环，保证朗读5次
-            await mediaSessionService.waitForPlaybackGap(3000);
-            consecutiveErrors = 0;
-          } else {
-            await mediaSessionService.waitForPlaybackGap(500);
+            break;
           }
+          await waitDelay(500);
           continue;
         }
 
         consecutiveErrors = 0;
         completedRepeats++;
         totalPlayedRef.current++;
-        setState(prev => ({ ...prev, currentRepeat: completedRepeats, totalPlayed: totalPlayedRef.current }));
+
+        setState(prev => ({ ...prev, currentRepeat: completedRepeats }));
 
         if (completedRepeats < REPEATS_PER_SENTENCE) {
           mediaSessionService.holdAudioFocus();
-          await mediaSessionService.waitForPlaybackGap(jitterDelay(INTER_REPEAT_BASE_DELAY, INTER_REPEAT_JITTER));
+          await waitDelay(jitterDelay(INTER_REPEAT_BASE_DELAY, INTER_REPEAT_JITTER));
         }
       }
 
       if (!isActiveRef.current || playGenerationRef.current !== gen) return;
 
+      setState(prev => ({ ...prev, totalPlayed: totalPlayedRef.current }));
+
+      // 句子切换：用静音保持主音频通道，防止 iOS 回收音频会话
+      continuousAudioPlayer.beginTransition();
+      continuousAudioPlayer.primeAudioChannelWithSilence();
       mediaSessionService.holdAudioFocus();
-      await mediaSessionService.waitForPlaybackGap(jitterDelay(INTER_SENTENCE_BASE_DELAY, INTER_SENTENCE_JITTER));
+      await waitDelay(jitterDelay(INTER_SENTENCE_BASE_DELAY, INTER_SENTENCE_JITTER));
+      continuousAudioPlayer.endTransition();
     }
   }, [pickRandomSentence, playSentenceOnce, getEligiblePool, addToHistory]);
 
-  const startListening = useCallback(async () => {
-    // 同步抢占音频通道，在异步请求前锁定 User Gesture Token
-    continuousAudioPlayer.primeAudioChannelWithSilence();
-
+  const startListening = useCallback(() => {
     const eligiblePool = getEligiblePool();
     if (eligiblePool.length === 0) {
       const totalPool = poolRef.current;
@@ -515,12 +417,8 @@ export const useRandomListening = (sentences: Sentence[]) => {
       return;
     }
 
-    await continuousAudioPlayer.activate();
+    continuousAudioPlayer.activate();
     mediaSessionService.startSilenceKeepAlive();
-
-    if (typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent) && storageService.getSettings().ttsEngine === 'webSpeech') {
-      console.warn('🔊 [随机朗读] 当前使用系统语音，iOS 锁屏后连续播放可能被系统中断；本次不会自动降级语音引擎。');
-    }
 
     // 通知系统这是音频应用，需要后台播放权限
     if ('mediaSession' in navigator) {
@@ -529,12 +427,6 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
     isActiveRef.current = true;
     totalPlayedRef.current = 0;
-
-    // 恢复上次保存的进度（同一天内有效）
-    const savedProgress = loadRandomProgress();
-    if (savedProgress) {
-      totalPlayedRef.current = savedProgress.totalPlayed;
-    }
 
     const now = Date.now();
     const lastReset = parseInt(localStorage.getItem(SESSION_RESET_KEY) || '0', 10);
@@ -550,7 +442,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
       isActive: true,
       currentSentence: null,
       currentRepeat: 0,
-      totalPlayed: totalPlayedRef.current,
+      totalPlayed: 0,
       errorMessage: null,
       blacklist: state.blacklist,
       history: historyRef.current,
@@ -561,12 +453,6 @@ export const useRandomListening = (sentences: Sentence[]) => {
   }, [runListeningLoop, getEligiblePool, state.blacklist]);
 
   const stopListening = useCallback(() => {
-    if (isActiveRef.current) {
-      saveRandomProgress(lastSentenceIdRef.current, totalPlayedRef.current);
-    } else {
-      clearRandomProgress();
-    }
-
     isActiveRef.current = false;
     playGenerationRef.current++;
     geminiService.stop();
@@ -594,31 +480,21 @@ export const useRandomListening = (sentences: Sentence[]) => {
     }
   }, [state.isActive, startListening, stopListening]);
 
-  const isTransitioningRef = useRef(false);
-
-  const goToPreviousSentence = useCallback((preserveAudioSession: boolean = false) => {
+  const goToPreviousSentence = useCallback(() => {
     const idx = historyIndexRef.current;
     if (idx <= 0) return;
-    if (isTransitioningRef.current) return; // 防抖
-    const newIdx = idx - 1;
-    const sentence = historyRef.current[newIdx];
 
-    isTransitioningRef.current = true;
     const wasActive = isActiveRef.current;
     if (wasActive) {
-      continuousAudioPlayer.beginTransition();
       isActiveRef.current = false;
       playGenerationRef.current++;
-      pendingSentenceRef.current = sentence;
-      geminiService.stopLight();
-      if (preserveAudioSession) {
-        continuousAudioPlayer.primeAudioChannelWithSilence();
-      } else {
-        continuousAudioPlayer.stop();
-      }
+      geminiService.stop();
+      continuousAudioPlayer.stop();
     }
 
+    const newIdx = idx - 1;
     historyIndexRef.current = newIdx;
+    const sentence = historyRef.current[newIdx];
 
     lastSentenceIdRef.current = sentence.id;
 
@@ -633,63 +509,56 @@ export const useRandomListening = (sentences: Sentence[]) => {
     if (wasActive) {
       const gen = ++playGenerationRef.current;
       isActiveRef.current = true;
-      continuousAudioPlayer.endTransition();
-      isTransitioningRef.current = false;
       runListeningLoop(gen);
-    } else {
-      isTransitioningRef.current = false;
     }
   }, [runListeningLoop]);
 
-  const goToNextSentence = useCallback((preserveAudioSession: boolean = false) => {
+  const goToNextSentence = useCallback(() => {
     const idx = historyIndexRef.current;
     const histLen = historyRef.current.length;
 
-    const sentence = idx < histLen - 1 ? historyRef.current[idx + 1] : pickRandomSentence();
-    if (!sentence) return;
-    if (isTransitioningRef.current) return; // 防抖
-
-    const fromHistory = idx < histLen - 1;
-    const newIdx = fromHistory ? idx + 1 : historyRef.current.length;
-    const wasActive = isActiveRef.current;
-
-    isTransitioningRef.current = true;
-
-    if (wasActive) {
-      continuousAudioPlayer.beginTransition();
-      isActiveRef.current = false;
-      playGenerationRef.current++;
-      pendingSentenceRef.current = sentence;
-      geminiService.stopLight();
-      if (preserveAudioSession) {
-        continuousAudioPlayer.primeAudioChannelWithSilence();
-      } else {
+    if (idx < histLen - 1) {
+      const wasActive = isActiveRef.current;
+      if (wasActive) {
+        isActiveRef.current = false;
+        playGenerationRef.current++;
+        geminiService.stop();
         continuousAudioPlayer.stop();
       }
-    }
 
-    lastSentenceIdRef.current = sentence.id;
-    if (!fromHistory) {
-      addToHistory(sentence);
-    }
+      const newIdx = idx + 1;
+      historyIndexRef.current = newIdx;
+      const sentence = historyRef.current[newIdx];
 
-    historyIndexRef.current = fromHistory ? newIdx : historyRef.current.length - 1;
-    setState(prev => ({
-      ...prev,
-      currentSentence: sentence,
-      currentRepeat: 0,
-      historyIndex: fromHistory ? newIdx : historyRef.current.length - 1,
-      errorMessage: null,
-    }));
+      lastSentenceIdRef.current = sentence.id;
 
-    if (wasActive) {
-      const gen = ++playGenerationRef.current;
-      isActiveRef.current = true;
-      continuousAudioPlayer.endTransition();
-      isTransitioningRef.current = false;
-      runListeningLoop(gen);
+      setState(prev => ({
+        ...prev,
+        currentSentence: sentence,
+        currentRepeat: 0,
+        historyIndex: newIdx,
+        errorMessage: null,
+      }));
+
+      if (wasActive) {
+        const gen = ++playGenerationRef.current;
+        isActiveRef.current = true;
+        runListeningLoop(gen);
+      }
     } else {
-      isTransitioningRef.current = false;
+      if (!isActiveRef.current) {
+        const sentence = pickRandomSentence();
+        if (sentence) {
+          lastSentenceIdRef.current = sentence.id;
+          addToHistory(sentence);
+          setState(prev => ({
+            ...prev,
+            currentSentence: sentence,
+            currentRepeat: 0,
+            errorMessage: null,
+          }));
+        }
+      }
     }
   }, [runListeningLoop, pickRandomSentence, addToHistory]);
 
@@ -745,8 +614,6 @@ export const useRandomListening = (sentences: Sentence[]) => {
     const currentGen = playGenerationRef.current;
     return () => {
       if (isActiveRef.current) {
-        // 组件卸载前保存播放进度
-        saveRandomProgress(lastSentenceIdRef.current, totalPlayedRef.current);
         isActiveRef.current = false;
         playGenerationRef.current = currentGen + 1;
         geminiService.stop();
@@ -759,25 +626,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
   const eligibleCount = getEligiblePool().length;
   const canGoPrevious = state.historyIndex > 0;
-  const canGoNext = state.historyIndex < state.history.length - 1 || (state.isActive && eligibleCount > 1);
-
-  // 重置状态（模式切换时调用）
-  const resetRandomListeningState = useCallback((): void => {
-    setState({
-      isActive: false,
-      currentSentence: null,
-      currentRepeat: 0,
-      totalPlayed: 0,
-      historyIndex: -1,
-      errorMessage: null,
-      blacklist: state.blacklist,
-      history: [],
-    });
-    historyRef.current = [];
-    historyIndexRef.current = -1;
-    lastSentenceIdRef.current = null;
-    totalPlayedRef.current = 0;
-  }, [state.blacklist]);
+  const canGoNext = state.historyIndex < state.history.length - 1 || state.isActive;
 
   return {
     isRandomListeningActive: state.isActive,
@@ -798,6 +647,5 @@ export const useRandomListening = (sentences: Sentence[]) => {
     clearBlacklist,
     blacklistSize: state.blacklist.size,
     REPEATS_PER_SENTENCE,
-    resetRandomListeningState,
   };
 };

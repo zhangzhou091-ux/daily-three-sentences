@@ -76,15 +76,15 @@ export const storageSentenceService = {
    * 添加句子
    */
   addSentence: async (sentence: Sentence, syncToCloud: boolean = true): Promise<{ success: boolean; message: string; duplicate?: Sentence }> => {
-    const trimmedEnglish = sentence.english.trim().toLowerCase();
-    const existing = await dbService.findByEnglish(trimmedEnglish);
+    const normalizedEnglish = sentence.english.trim().toLowerCase();
+    const existing = await dbService.findByEnglish(normalizedEnglish);
 
     if (existing) {
       const updatedSentence = {
         ...existing,
         ...sentence,
         id: existing.id,
-        english: trimmedEnglish,
+        english: sentence.english.trim(),
         updatedAt: Date.now()
       };
 
@@ -102,7 +102,7 @@ export const storageSentenceService = {
 
     const entry = {
       ...sentence,
-      english: trimmedEnglish,
+      english: sentence.english.trim(),
       updatedAt: Date.now()
     };
     await dbService.put(entry);

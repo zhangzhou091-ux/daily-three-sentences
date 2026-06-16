@@ -13,24 +13,15 @@ interface UseDictationLogicProps {
   isMountedRef: RefObject<boolean>;
 }
 
-export interface DictationMessage {
-  type: 'success' | 'error' | 'info';
-  text: string;
-}
-
 interface UseDictationLogicReturn {
   dictationPool: Sentence[];
   targetDictationId: string | null;
   dictationList: DictationRecord[];
-  dictationRound: number;
   userInput: string;
   setUserInput: (input: string) => void;
   isDictationRefreshDisabled: boolean;
   isDictationChecking: boolean;
-  dictationMessage: DictationMessage | null;
-  clearDictationMessage: () => void;
   handleDictationRefresh: () => void;
-  handleDictationSkip: () => void;
   handleDictationCheck: () => Promise<void>;
 }
 
@@ -47,10 +38,7 @@ export const useDictationLogic = ({
   const [userInput, setUserInput] = useState('');
   const [isDictationRefreshDisabled, setIsDictationRefreshDisabled] = useState(false);
   const [isDictationChecking, setIsDictationChecking] = useState(false);
-  const [dictationMessage, setDictationMessage] = useState<DictationMessage | null>(null);
-  const [dictationRound, setDictationRound] = useState(0);
   
-  const messageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isDictationCheckingRef = useRef(false);
   const dictationRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dictationPoolRef = useRef<Sentence[]>([]);
@@ -59,22 +47,6 @@ export const useDictationLogic = ({
   const dictationPool = useMemo(() => {
     return sentences.filter(s => s.intervalIndex > 0);
   }, [sentences]);
-
-  const showMessage = useCallback((type: DictationMessage['type'], text: string) => {
-    setDictationMessage({ type, text });
-    if (messageTimerRef.current) clearTimeout(messageTimerRef.current);
-    messageTimerRef.current = setTimeout(() => {
-      setDictationMessage(null);
-    }, 2000);
-  }, []);
-
-  const clearDictationMessage = useCallback(() => {
-    setDictationMessage(null);
-    if (messageTimerRef.current) {
-      clearTimeout(messageTimerRef.current);
-      messageTimerRef.current = null;
-    }
-  }, []);
 
   useEffect(() => {
     dictationPoolRef.current = dictationPool;
@@ -94,12 +66,11 @@ export const useDictationLogic = ({
     setTargetDictationId(dictationPool[randomIdx].id);
     setIsFlipped(false);
     setUserInput('');
-    setDictationRound(prev => prev + 1);
   }, [dictationPool]);
 
   const handleDictationRefresh = useCallback(() => {
     if (dictationPool.length === 0) {
-      showMessage('error', '暂无可默写的句子，请先学习句子');
+      alert('暂无可默写的句子，请先学习句子');
       return;
     }
     setIsDictationRefreshDisabled(true);
@@ -111,12 +82,6 @@ export const useDictationLogic = ({
     }, 1000);
   }, [dictationPool, pickNewDictationTarget]);
 
-  const handleDictationSkip = useCallback(() => {
-    if (dictationPool.length === 0) return;
-    pickNewDictationTarget();
-    showMessage('info', '已跳过');
-  }, [dictationPool, pickNewDictationTarget, showMessage]);
-
   const DICTATION_CHECK_TIMEOUT = 10000;
   const dictationCheckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -127,12 +92,12 @@ export const useDictationLogic = ({
     const currentInput = userInput.trim();
     
     if (!currentInput) {
-      showMessage('error', '请输入默写内容后再核对');
+      alert('请输入默写内容后再核对');
       return;
     }
 
     if (!currentTargetId) {
-      showMessage('error', '目标句子不存在');
+      alert('目标句子不存在');
       return;
     }
 
@@ -144,7 +109,7 @@ export const useDictationLogic = ({
       if (isDictationCheckingRef.current) {
         isDictationCheckingRef.current = false;
         setIsDictationChecking(false);
-        showMessage('error', '核对超时，请重试');
+        alert('核对超时，请重试');
       }
     }, DICTATION_CHECK_TIMEOUT);
 
@@ -180,7 +145,6 @@ export const useDictationLogic = ({
 
       if (isCorrect) {
         setUserInput('');
-        showMessage('success', `正确！+${DICTATION_XP} XP`);
         
         const currentPool = dictationPoolRef.current;
         const remainingPool = currentPool.filter(s => s.id !== currentTargetId);
@@ -221,7 +185,6 @@ export const useDictationLogic = ({
         }
       } else {
         setIsFlipped(true);
-        showMessage('error', '不正确，请查看答案');
       }
 
       if (!isOnline) {
@@ -240,10 +203,10 @@ export const useDictationLogic = ({
     } catch (err: unknown) {
       if (err instanceof Error) {
         console.warn('默写核对过程中发生异常:', err.message);
-        showMessage('error', err.message);
+        alert(err.message);
       } else {
         console.warn('默写核对过程中发生异常:', String(err));
-        showMessage('error', '默写核对失败，请重试');
+        alert('默写核对失败，请重试');
       }
       
       if (err instanceof Error && err.message.includes('已完成默写')) {
@@ -276,15 +239,11 @@ export const useDictationLogic = ({
     dictationPool,
     targetDictationId,
     dictationList,
-    dictationRound,
     userInput,
     setUserInput,
     isDictationRefreshDisabled,
     isDictationChecking,
-    dictationMessage,
-    clearDictationMessage,
     handleDictationRefresh,
-    handleDictationSkip,
     handleDictationCheck,
   };
 };

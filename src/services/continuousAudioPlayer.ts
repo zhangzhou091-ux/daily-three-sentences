@@ -27,9 +27,11 @@ class ContinuousAudioPlayer {
   private recoveryRetryCount: number = 0;
   private visibilityHandler: (() => void) | null = null;
   private pendingPlayResolve: (() => void) | null = null;
-  private resolving: boolean = false;
   private primeInProgress: boolean = false;
   private transitionInProgress: boolean = false;
+  private freezeHandler: (() => void) | null = null;
+  private resumeHandler: (() => void) | null = null;
+  private wasActiveBeforeFreeze: boolean = false;
 
   constructor() {
     this.audio = new Audio();
@@ -103,6 +105,37 @@ class ContinuousAudioPlayer {
       console.log('🔊 [连续播放器] iOS: visibilitychange 监听器已注册 | onpause 处理器已绑定');
     }
 
+    // Page Lifecycle API: freeze/resume 事件（iOS Safari 页面冻结/解冻）
+    if ('onfreeze' in document || 'onresume' in document) {
+      const handleFreeze = () => {
+        this.wasActiveBeforeFreeze = this.active;
+        console.log(`🔊 [连续播放器] 页面冻结 | [active] ${this.active} | [paused] ${this.audio.paused}`);
+      };
+      const handleResume = () => {
+        console.log(`🔊 [连续播放器] 页面解冻 | [active] ${this.active} | [wasActiveBeforeFreeze] ${this.wasActiveBeforeFreeze} | [paused] ${this.audio.paused}`);
+        if (this.active && this.wasActiveBeforeFreeze) {
+          // 恢复音频上下文
+          if (this.audioContext && this.audioContext.state === 'suspended') {
+            this.audioContext.resume().catch(() => {});
+          }
+          // 如果主音频有 src 且处于暂停状态，尝试恢复
+          if (this.audio.src && !this.audio.ended) {
+            this.audio.play().then(() => {
+              console.log('🔊 [连续播放器] 解冻后恢复播放成功 ✅');
+            }).catch((e) => {
+              console.warn(`🔊 [连续播放器] 解冻后恢复播放失败 | [错误] ${e?.name}: ${e?.message}`);
+            });
+          }
+        }
+        this.wasActiveBeforeFreeze = false;
+      };
+      this.freezeHandler = handleFreeze;
+      this.resumeHandler = handleResume;
+      document.addEventListener('freeze', handleFreeze);
+      document.addEventListener('resume', handleResume);
+      console.log('🔊 [连续播放器] freeze/resume 监听器已注册');
+    }
+
     console.log(`🔊 [连续播放器] 已激活 ✅ | [代数] ${this.generation}`);
     return true;
   }
@@ -118,6 +151,17 @@ class ContinuousAudioPlayer {
       this.visibilityHandler = null;
       console.log('🔊 [连续播放器] visibilitychange 监听器已移除');
     }
+
+    if (this.freezeHandler) {
+      document.removeEventListener('freeze', this.freezeHandler);
+      this.freezeHandler = null;
+    }
+    if (this.resumeHandler) {
+      document.removeEventListener('resume', this.resumeHandler);
+      this.resumeHandler = null;
+    }
+    this.wasActiveBeforeFreeze = false;
+    this.transitionInProgress = false;
 
     try {
       this.audio.onpause = null;
@@ -142,10 +186,15 @@ class ContinuousAudioPlayer {
       throw new Error('播放器未激活');
     }
 
+    // 递增 generation，使之前 handleAudioPause 中遗留的 setTimeout 回调失效
+    this.generation++;
+    // 每次新播放重置恢复重试计数，防止跨句子累积耗尽
+    this.recoveryRetryCount = 0;
+
     const gen = this.generation;
     const isCurrentGen = () => gen === this.generation && this.active;
 
-    console.log(`🔊 [连续播放器] playBlob 开始 | [iOS] ${ios} | [Blob大小] ${blob.size} | [Blob类型] ${blob.type} | [代数] ${gen}`);
+    console.log(`🔊 [连续播放器] playBlob 开始 | [iOS] ${ios} | [Blob大小] ${blob.size} | [Blob类型] ${blob.type} | [代数] ${gen} | [generation] ${this.generation} | [recoveryRetryCount] ${this.recoveryRetryCount}`);
 
     this.revokeCurrentUrl();
 
@@ -175,6 +224,9 @@ class ContinuousAudioPlayer {
     this.audio.src = url;
     console.log(`🔊 [连续播放器] audio.src 已设置 | [iOS] ${ios}`);
 
+    // 每次 playBlob 都重新绑定 onpause，因为在 doResolve/stopLight 中可能被移除
+    this.audio.onpause = this.handleAudioPause;
+
     return new Promise((resolve, reject) => {
       let settled = false;
       let retryCount = 0;
@@ -184,17 +236,6 @@ class ContinuousAudioPlayer {
         settled = true;
         this.pendingPlayResolve = null;
         console.log(`🔊 [连续播放器] doResolve | [代数] ${gen}`);
-        // 设置 resolving 标志，防止 handleAudioPause 在 pause() 期间触发恢复
-        this.resolving = true;
-        // iOS: 先移除 onpause 防止 pause() 触发恢复逻辑
-        if (isIOS()) {
-          this.audio.onpause = null;
-        }
-        this.audio.pause();
-        this.audio.removeAttribute('src');
-        this.audio.load();
-        this.revokeCurrentUrl();
-        this.resolving = false;
         resolve();
       };
 
@@ -203,7 +244,9 @@ class ContinuousAudioPlayer {
         settled = true;
         this.pendingPlayResolve = null;
         console.warn(`🔊 [连续播放器] doReject | [代数] ${gen} | [错误] ${error.message}`);
-        this.revokeCurrentUrl();
+        // 使用闭包捕获的 url 而非 this.currentBlobUrl，防止旧 Promise 的定时器/回调
+        // 在下一轮 playBlob 之后才触发，错误地吊销了新 play 的 Blob URL
+        try { URL.revokeObjectURL(url); } catch { /* ignore */ }
         reject(error);
       };
 
@@ -237,6 +280,7 @@ class ContinuousAudioPlayer {
       this.audio.onended = () => {
         if (!isCurrentGen()) return;
         console.log(`🔊 [连续播放器] onended 触发 | [代数] ${gen}`);
+        this.revokeCurrentUrl();
         doResolve();
       };
 
@@ -415,13 +459,9 @@ class ContinuousAudioPlayer {
   }
 
   private handleAudioPause = (): void => {
-    console.log(`🔊 [连续播放器] onpause 触发 | [active] ${this.active} | [src] ${!!this.audio.src} | [ended] ${this.audio.ended} | [resolving] ${this.resolving} | [transition] ${this.transitionInProgress} | [recoveryRetryCount] ${this.recoveryRetryCount} | [visibilityState] ${document.visibilityState}`);
+    const genAtPause = this.generation;
+    console.log(`🔊 [连续播放器] onpause 触发 | [gen] ${genAtPause} | [active] ${this.active} | [src] ${!!this.audio.src} | [ended] ${this.audio.ended} | [transition] ${this.transitionInProgress} | [recoveryRetryCount] ${this.recoveryRetryCount} | [visibilityState] ${document.visibilityState}`);
     if (!this.active) return;
-    // 如果 doResolve 正在清理，不恢复 — 这是正常结束而非意外中断
-    if (this.resolving) {
-      console.log('🔊 [连续播放器] onpause: doResolve 正在处理，跳过恢复');
-      return;
-    }
     // 句子切换期间暂停恢复，避免与新的播放操作竞争
     if (this.transitionInProgress) {
       console.log('🔊 [连续播放器] onpause: 句子切换中，跳过恢复');
@@ -433,6 +473,10 @@ class ContinuousAudioPlayer {
     }
     if (this.audio.ended) {
       console.log('🔊 [连续播放器] onpause: 音频已结束，跳过恢复');
+      // iOS: onended 可能不触发，onpause 检测到 ended 时兜底 resolve
+      if (this.pendingPlayResolve) {
+        this.pendingPlayResolve();
+      }
       return;
     }
 
@@ -460,6 +504,11 @@ class ContinuousAudioPlayer {
     console.log(`🔊 [连续播放器] 句子音频被中断（${currentTime.toFixed(1)}s / ${duration ? duration.toFixed(1) + 's' : '未知'}），第 ${this.recoveryRetryCount}/${PAUSE_RECOVERY_RETRIES} 次尝试恢复... [后台:${isBackground}] [延迟:${delay}ms]`);
 
     setTimeout(() => {
+      // 如果在此期间新的 playBlob 已开始（generation 已递增），放弃旧的回调
+      if (genAtPause !== this.generation) {
+        console.log(`🔊 [连续播放器] 恢复回调: 代数已过期 (${genAtPause} → ${this.generation})，跳过恢复`);
+        return;
+      }
       if (!this.active || !this.audio.src) {
         console.log(`🔊 [连续播放器] 恢复重试时状态已变 | [active] ${this.active} | [src] ${!!this.audio.src}`);
         return;

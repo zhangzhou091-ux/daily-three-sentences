@@ -5,6 +5,7 @@ import { indexedDBService } from '../indexedDBService';
 import { syncQueueService } from '../syncQueueService';
 import { getLocalDateString } from '../../utils/date';
 import { cryptoService } from '../cryptoService';
+import { generateUUID } from '../../utils/uuid';
 
 const STORAGE_KEYS = {
   STATS: 'd3s_user_stats_v3',
@@ -359,7 +360,7 @@ export const localStorageService = {
   getStats(): UserStats {
     const data = localStorage.getItem(STORAGE_KEYS.STATS);
     const defaultStats: UserStats = {
-      id: crypto.randomUUID(),
+      id: generateUUID(),
       streak: 0,
       lastLearnDate: '',
       totalPoints: 0,
