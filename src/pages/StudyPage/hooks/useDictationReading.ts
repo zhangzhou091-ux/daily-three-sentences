@@ -3,6 +3,7 @@ import { Sentence } from '../../../types';
 import { geminiService } from '../../../services/geminiService';
 import { mediaSessionService } from '../../../services/mediaSessionService';
 import { continuousAudioPlayer } from '../../../services/continuousAudioPlayer';
+import { blacklistStorage } from '../../../services/blacklistStorage';
 import { getLocalDateString } from '../../../utils/date';
 
 const REPEATS_PER_SENTENCE = 5;
@@ -134,7 +135,9 @@ export const useDictationReading = (
       }
     }
 
-    return pool;
+    // 过滤黑名单中的句子
+    const blacklist = blacklistStorage.getBlacklist();
+    return blacklist.size > 0 ? pool.filter(s => !blacklist.has(s.id)) : pool;
   }, []);
 
   const playSentenceOnce = useCallback(async (
@@ -296,6 +299,11 @@ export const useDictationReading = (
 
         while (completedRepeats < REPEATS_PER_SENTENCE) {
           if (!isActiveRef.current || playGenerationRef.current !== gen) return;
+
+          // 实时检查黑名单，被排除则跳到下一句
+          if (blacklistStorage.isBlacklisted(sentence.id)) {
+            break;
+          }
 
           if (!preloadTriggered) {
             preloadTriggered = true;
