@@ -340,7 +340,8 @@ export const useDictationReading = (
 
         // 句子切换：用静音保持主音频通道，防止 iOS 回收音频会话
         continuousAudioPlayer.beginTransition();
-        continuousAudioPlayer.primeAudioChannelWithSilence();
+        // await 等待 prime 内部的 80ms 硬件释放完成，确保静音接力在干净的硬件状态上启动
+        await continuousAudioPlayer.primeAudioChannelWithSilence();
         mediaSessionService.holdAudioFocus();
         await waitDelay(jitterDelay(INTER_SENTENCE_BASE_DELAY, INTER_SENTENCE_JITTER));
         continuousAudioPlayer.endTransition();

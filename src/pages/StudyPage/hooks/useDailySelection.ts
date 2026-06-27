@@ -316,6 +316,41 @@ export const useDailySelection = ({
     }
   }, [sentences, generateDailySelection]);
 
+  // 跨日检测：独立 Effect，不依赖 sentences。
+  // 解决 SPA 跨夜场景：用户不刷新页面跨过午夜后，原 useEffect 因 [sentences, generateDailySelection]
+  // 依赖未变化而不再执行，isNewDay 检测形同虚设，导致今日预约句子不出现、昨日数据被沿用。
+  // 双保险：
+  //   1. visibilitychange — 用户从后台/息屏切回前台时立即检测（覆盖手机端最常见的场景）
+  //   2. setInterval(120s) — 即使用户一直停留前台也能在 2 分钟内感知跨日
+  useEffect(() => {
+    const checkCrossDay = () => {
+      if (isGeneratingRef.current) return;
+
+      const today = getLocalDateString();
+      // 仅在已生成过（lastGeneratedDateRef 非空）且日期不一致时触发
+      if (lastGeneratedDateRef.current && lastGeneratedDateRef.current !== today) {
+        console.log(`📚 useDailySelection: 检测到跨日（上次生成日期: ${lastGeneratedDateRef.current}，今天: ${today}），触发重新生成`);
+        hasGeneratedTodayRef.current = false;
+        lastGeneratedDateRef.current = today;
+        generateDailySelection();
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      checkCrossDay();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    const intervalId = window.setInterval(checkCrossDay, 120000);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.clearInterval(intervalId);
+    };
+  }, [generateDailySelection]);
+
   return {
     dailySelection,
     setDailySelection,

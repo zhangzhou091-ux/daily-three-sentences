@@ -352,7 +352,7 @@ const stopCurrentAudio = (): void => {
   revokeAllLoopUrls();
 };
 
-const AUDIO_GAIN = 1.5;
+const AUDIO_GAIN = 1.0;
 
 let audioContext: AudioContext | null = null;
 let gainNode: GainNode | null = null;
@@ -697,7 +697,7 @@ export const minimaxTtsService = {
             voice_setting: {
               voice_id: voiceId,
               speed: 1,
-              vol: 1.5,
+              vol: 1.0,
               pitch: 0,
             },
             audio_setting: {
@@ -842,7 +842,7 @@ export const minimaxTtsService = {
           voice_setting: {
             voice_id: RECOMMENDED_VOICES[0].id,
             speed: 1,
-            vol: 1.5,
+            vol: 1.0,
             pitch: 0,
           },
           audio_setting: {
@@ -1024,7 +1024,7 @@ export const minimaxTtsService = {
           voice_setting: {
             voice_id: voiceId,
             speed: 1,
-            vol: 1.5,
+            vol: 1.0,
             pitch: 0,
           },
           audio_setting: {

@@ -579,7 +579,7 @@ const runAudioProbe = async (
         voice_setting: {
           voice_id: settings.minimaxVoiceId || 'English_expressive_narrator',
           speed: 1,
-          vol: 1.5,
+          vol: 1.0,
           pitch: 0,
         },
         audio_setting: {

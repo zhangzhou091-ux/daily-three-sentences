@@ -10,6 +10,7 @@ import { useSentenceContext } from '../context/SentenceContext';
 import { syncQueueService } from '../services/syncQueueService';
 import { SyncStatus, SyncEventData, QueueWarningData } from '../types';
 import { supabaseService } from '../services/supabaseService';
+import { ErrorBoundary } from './ErrorBoundary';
 import { useAchievementNotifications } from '../core/hooks/useAchievementNotifications';
 import { AchievementNotificationManager } from '../components/achievements/AchievementNotification';
 
@@ -316,7 +317,20 @@ const MainLayout: React.FC = () => {
         {(() => {
           switch (currentView) {
             case 'study': return <StudyPage sentences={sentences} onUpdate={refreshSentences} />;
-            case 'manage': return <ManagePage sentences={sentences} onUpdate={refreshSentences} />;
+            case 'manage': return (
+              // 局部 ErrorBoundary：ManagePage 渲染异常（如脏数据导致搜索崩溃）时不拖垮整个 App，
+              // 切换页面时本节点 unmount → ErrorBoundary 状态自动重置，切回时是干净的
+              <ErrorBoundary fallback={
+                <div className="flex flex-col items-center justify-center min-h-[60vh] p-8 text-center space-y-4">
+                  <h2 className="text-base font-black text-gray-800 uppercase tracking-widest">页面出错</h2>
+                  <p className="text-xs text-gray-500 max-w-xs leading-relaxed">
+                    仓库页面渲染时发生错误。请尝试切换到其他页面后返回，或刷新页面。
+                  </p>
+                </div>
+              }>
+                <ManagePage sentences={sentences} onUpdate={refreshSentences} />
+              </ErrorBoundary>
+            );
             case 'achievements': return <AchievementPage sentences={sentences} />;
             case 'settings': return <SettingsPage sentencesCount={sentences.length} onConfigUpdate={refreshSentences} />;
             default: return <StudyPage sentences={sentences} onUpdate={refreshSentences} />;

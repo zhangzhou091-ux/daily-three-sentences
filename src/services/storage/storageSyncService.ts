@@ -13,8 +13,10 @@ let isPullingDailySelection = false;
 function mapCloudToLocal(db: CloudSentenceData): Sentence {
   return {
     id: db.id,
-    english: db.english,
-    chinese: db.chinese,
+    // 兜底：云端字段类型声明为 string，但历史数据/异常数据可能为 null/undefined，
+    // 不兜底会导致下游搜索（s.english.toLowerCase()）等处崩溃
+    english: db.english ?? '',
+    chinese: db.chinese ?? '',
     addedAt: db.addedat,
     intervalIndex: db.intervalindex,
     nextReviewDate: db.nextreviewdate,

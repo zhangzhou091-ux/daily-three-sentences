@@ -55,7 +55,8 @@ const ensureDelayAudio = (): HTMLAudioElement => {
   return delayAudio;
 };
 
-const createSilenceWavBlob = (durationMs: number): Blob => {
+// 导出供 continuousAudioPlayer 复用，避免重复实现
+export const createSilenceWavBlob = (durationMs: number): Blob => {
   const sampleRate = 8000;
   const channelCount = 1;
   const bytesPerSample = 2;
@@ -115,10 +116,21 @@ const playBackgroundDelay = (ms: number): Promise<void> =>
     });
   });
 
+// 循环保活用的静音 WAV URL（懒加载，永久持有；WAV 无编码器延迟，loop 边界无缝，
+// 不会产生 MP3 循环时的 click/pop 杂音）。页面卸载时由浏览器自动清理。
+let silenceWavUrl: string | null = null;
+const getSilenceWavUrl = (): string => {
+  if (!silenceWavUrl) {
+    silenceWavUrl = URL.createObjectURL(createSilenceWavBlob(1000));
+    console.log(`🔊 [AudioKeepAlive] 创建静音 WAV URL（循环保活用）| [url] ${silenceWavUrl}`);
+  }
+  return silenceWavUrl;
+};
+
 const ensureSilenceAudio = (): HTMLAudioElement => {
   if (!silenceAudio) {
-    console.log(`🔊 [AudioKeepAlive] 创建 silenceAudio 实例 | [iOS] ${isIOSAudio()} | [visibilityState] ${document.visibilityState}`);
-    silenceAudio = new Audio(SILENCE_MP3_BASE64);
+    console.log(`🔊 [AudioKeepAlive] 创建 silenceAudio 实例 | [iOS] ${isIOSAudio()} | [visibilityState] ${document.visibilityState} | [src=WAV]`);
+    silenceAudio = new Audio(getSilenceWavUrl());
     silenceAudio.loop = true;
     silenceAudio.volume = 0.01;
     silenceAudio.preload = 'auto';

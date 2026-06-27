@@ -703,9 +703,13 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
     if (!deferredQuery || deferredQuery.trim() === '') return sentences;
     const query = deferredQuery.toLowerCase();
     return sentences.filter(s => {
+      // 字段兜底：mapCloudToLocal 虽已加默认值，但本地历史数据/异常数据仍可能为 undefined，
+      // 这里再防御一层，避免 undefined.toLowerCase() 导致搜索时整页崩溃
       const tags = sentenceTagsMap.get(s.id) || [];
-      return s.english.toLowerCase().includes(query) || 
-        s.chinese.includes(query) ||
+      const en = (s.english || '').toLowerCase();
+      const zh = s.chinese || '';
+      return en.includes(query) ||
+        zh.includes(query) ||
         tags.some(t => t.toLowerCase().includes(query));
     });
   }, [sentences, deferredQuery, sentenceTagsMap]);

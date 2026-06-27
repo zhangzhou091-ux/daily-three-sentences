@@ -100,7 +100,7 @@ const generateSSML = (text: string, voice: string, rate: string, pitch: string):
   </speak>`;
 };
 
-const AUDIO_GAIN = 1.5;
+const AUDIO_GAIN = 1.0;
 
 const isIOSAudio = (): boolean => {
   if (typeof navigator === 'undefined') return false;

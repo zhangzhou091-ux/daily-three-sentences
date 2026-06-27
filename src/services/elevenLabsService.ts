@@ -226,7 +226,7 @@ const stopCurrentAudio = (): void => {
   revokeAllLoopUrls();
 };
 
-const AUDIO_GAIN = 1.5;
+const AUDIO_GAIN = 1.0;
 
 let audioContext: AudioContext | null = null;
 let gainNode: GainNode | null = null;

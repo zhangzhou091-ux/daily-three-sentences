@@ -1,6 +1,5 @@
-import { mediaSessionService } from './mediaSessionService';
-
-const SILENCE_MP3_BASE64 = 'data:audio/mp3;base64,//OQxAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq';
+import { mediaSessionService, createSilenceWavBlob } from './mediaSessionService';
+import { unlockAudioEngine } from './audioUnlockService';
 
 const isIOS = (): boolean => {
   if (typeof navigator === 'undefined') return false;
@@ -11,7 +10,7 @@ const isIOS = (): boolean => {
 const IOS_PLAY_RETRIES = 3;
 const IOS_PLAY_RETRY_DELAY = 200;
 const PLAY_TIMEOUT = 120000;
-const AUDIO_GAIN = 1.5;
+const AUDIO_GAIN = 1.0;
 const PAUSE_RECOVERY_RETRIES = 20;
 const PAUSE_RECOVERY_DELAY_MS = 500;
 
@@ -54,27 +53,22 @@ class ContinuousAudioPlayer {
 
     if (!this.initialized && ios) {
       this.initialized = true;
-      console.log('🔊 [连续播放器] 首次激活，执行 iOS 原生解锁...');
-      this.audio.src = SILENCE_MP3_BASE64;
-      this.audio.volume = 0.01;
+      console.log('🔊 [连续播放器] 首次激活，调用 unlockAudioEngine 解锁 iOS 音频引擎...');
+      // 使用独立的解锁服务：解锁在临时 Audio 元素上进行，绝不触碰 this.audio（主播放元素）
+      // 之前内联解锁在 this.audio 上 play() → .then() 异步 pause()/removeAttribute('src')/load()，
+      // 会与随后的 primeAudioChannelWithSilence / playBlob 产生竞态：
+      //   1. removeAttribute('src') 覆盖 playBlob 刚设置的 blobUrl → 播放失败（发音按钮需点 2 次）
+      //   2. pause() 触发 handleAudioPause 误恢复机制 → 500ms × 多次重试累加（首句 5 遍中的长暂停）
+      // 改用独立元素解锁后，this.audio 始终保持干净状态，彻底消除两类竞态。
+      // unlockAudioEngine 是幂等的，已在页面首次点击时被调用过，重复调用无副作用。
       try {
-        // 火种取栗：静音播放不阻塞主流程，避免消耗 User Gesture Token
-        this.audio.play().then(() => {
-          this.audio.pause();
-          this.audio.currentTime = 0;
-          this.audio.volume = 1.0;
-          this.audio.removeAttribute('src');
-          this.audio.load();
-          console.log('🔊 [连续播放器] iOS 原生解锁成功 ✅');
+        unlockAudioEngine().then((ok: boolean) => {
+          console.log(`🔊 [连续播放器] unlockAudioEngine 完成 | [成功] ${ok}`);
         }).catch((e: any) => {
-          this.audio.volume = 1.0;
-          this.audio.removeAttribute('src');
-          console.warn(`🔊 [连续播放器] iOS 原生解锁失败 | [错误] ${e?.name}: ${e?.message}`);
+          console.warn(`🔊 [连续播放器] unlockAudioEngine 异常 | [错误] ${e?.name}: ${e?.message}`);
         });
       } catch (e: any) {
-        this.audio.volume = 1.0;
-        this.audio.removeAttribute('src');
-        console.warn(`🔊 [连续播放器] iOS 原生解锁异常 | [错误] ${e?.message}`);
+        console.warn(`🔊 [连续播放器] unlockAudioEngine 调用异常 | [错误] ${e?.message}`);
       }
     }
 
@@ -186,6 +180,10 @@ class ContinuousAudioPlayer {
       throw new Error('播放器未激活');
     }
 
+    // 恢复音量到 1.0：primeAudioChannelWithSilence 循环静音时会把 volume 压到 0.01，
+    // 这里在播放真句子前恢复，确保正式播放音量正常
+    this.audio.volume = 1.0;
+
     // 递增 generation，使之前 handleAudioPause 中遗留的 setTimeout 回调失效
     this.generation++;
     // 每次新播放重置恢复重试计数，防止跨句子累积耗尽
@@ -280,6 +278,13 @@ class ContinuousAudioPlayer {
       this.audio.onended = () => {
         if (!isCurrentGen()) return;
         console.log(`🔊 [连续播放器] onended 触发 | [代数] ${gen}`);
+        // 优雅收尾：先解绑 onpause 防止下面的 pause() 触发 handleAudioPause 误恢复，
+        // 再 pause + currentTime=0 清硬件状态，避免末尾瞬态残留产生杂音
+        try {
+          this.audio.onpause = null;
+          this.audio.pause();
+          this.audio.currentTime = 0;
+        } catch { /* ignore */ }
         this.revokeCurrentUrl();
         doResolve();
       };
@@ -420,7 +425,7 @@ class ContinuousAudioPlayer {
     }
   }
 
-  primeAudioChannelWithSilence(): void {
+  async primeAudioChannelWithSilence(): Promise<void> {
     console.log(`🔊 [连续播放器] primeAudioChannelWithSilence | [active] ${this.active} | [src] ${!!this.audio.src}`);
 
     // 先显式 resolve 任何 pending 的 playBlob Promise，避免因 onended 被清除导致悬挂
@@ -440,21 +445,36 @@ class ContinuousAudioPlayer {
       this.audio.oncanplay = null;
       this.audio.onloadeddata = null;
       this.audio.pause();
+      this.audio.currentTime = 0;
       this.revokeCurrentUrl();
       this.audio.removeAttribute('src');
       this.audio.loop = true;
-      this.audio.src = SILENCE_MP3_BASE64;
+      // 硬件释放等待：iOS audio session 从"播放句子"切到"播放静音"时，
+      // 若不等待硬件状态归零就切 src，可能在切换瞬间产生瞬态杂音（click/pop）。
+      // 80ms 是经验值，足够让 iOS 完成硬件状态切换，又不明显影响句间延迟体感。
+      await new Promise(r => setTimeout(r, 80));
+      // 使用 WAV 静音替代 MP3：MP3 有编码器延迟/尾部 padding，loop=true 时每个循环
+      // 边界都会产生瞬态 discontinuity（"哒"的点击声），WAV 无此问题，循环无缝。
+      const silenceBlob = createSilenceWavBlob(1000);
+      const url = URL.createObjectURL(silenceBlob);
+      this.currentBlobUrl = url;
+      this.audio.src = url;
+      // 循环静音期间压低音量到 0.01，避免静音 WAV 启动瞬间的残余噪声 bleed 到断句位置
+      this.audio.volume = 0.01;
       this.audio.load();
       this.audio.onpause = this.handleAudioPause;
       this.audio.play().then(() => {
-        console.log('🔊 [连续播放器] 静音接力已启动 ✅');
+        console.log('🔊 [连续播放器] 静音接力已启动 ✅ | [WAV] [volume=0.01] | [硬件释放等待] 80ms');
       }).catch((e) => {
         console.warn(`🔊 [连续播放器] 静音接力启动失败 | [错误] ${e?.name}: ${e?.message}`);
         this.primeInProgress = false;
+        // 失败时恢复音量，避免影响下次 playBlob
+        this.audio.volume = 1.0;
       });
     } catch (e) {
       console.warn('🔊 [连续播放器] primeAudioChannelWithSilence 异常:', e);
       this.primeInProgress = false;
+      this.audio.volume = 1.0;
     }
   }
 
@@ -473,6 +493,12 @@ class ContinuousAudioPlayer {
     }
     if (this.audio.ended) {
       console.log('🔊 [连续播放器] onpause: 音频已结束，跳过恢复');
+      // 优雅收尾：清硬件状态 + 解绑 onpause，防止末尾瞬间触发恢复产生杂音
+      try {
+        this.audio.onpause = null;
+        this.audio.pause();
+        this.audio.currentTime = 0;
+      } catch { /* ignore */ }
       // iOS: onended 可能不触发，onpause 检测到 ended 时兜底 resolve
       if (this.pendingPlayResolve) {
         this.pendingPlayResolve();
@@ -489,9 +515,21 @@ class ContinuousAudioPlayer {
     const currentTime = this.audio.currentTime;
     const duration = this.audio.duration;
 
-    // 如果音频已播到末尾 0.3 秒内，说明是自然结束前的暂停，不恢复
-    if (duration && currentTime > duration - 0.3) {
-      console.log('🔊 [连续播放器] 音频已接近末尾（剩余<0.3s），跳过恢复');
+    // 如果音频已播到末尾 0.5 秒内，说明是自然结束前的暂停，不恢复。
+    // 阈值从 0.3s 放宽到 0.5s：更早跳过恢复，减少末尾瞬态。
+    if (duration && Number.isFinite(duration) && currentTime > duration - 0.5) {
+      console.log(`🔊 [连续播放器] 音频已接近末尾（剩余<0.5s），跳过恢复 | [当前] ${currentTime.toFixed(2)}s [时长] ${duration.toFixed(2)}s`);
+      return;
+    }
+
+    // iOS 兜底：Blob URL 的 duration 经常是 NaN/Infinity（iOS Safari 已知行为），
+    // 此时上面的 duration 保护失效。如果 currentTime 已超过 0.5s，
+    // 保守判断为"自然结束前的暂停"（iOS 正常播放中极少无故暂停，大概率是即将结束），
+    // 跳过恢复避免末尾瞬态 play() 产生杂音。
+    // 第一句特殊：iOS 首次解析 Blob URL 时 duration 元数据可能尚未就绪（NaN），
+    // 这里是第一句杂音的主要来源。
+    if (isIOS() && (!duration || !Number.isFinite(duration)) && currentTime > 0.5) {
+      console.log(`🔊 [连续播放器] iOS: duration 不可靠 (${duration}) 且 currentTime=${currentTime.toFixed(2)}s > 0.5s，判定为接近末尾，跳过恢复`);
       return;
     }
 
