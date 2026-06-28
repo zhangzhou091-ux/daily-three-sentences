@@ -320,14 +320,7 @@ const MainLayout: React.FC = () => {
             case 'manage': return (
               // 局部 ErrorBoundary：ManagePage 渲染异常（如脏数据导致搜索崩溃）时不拖垮整个 App，
               // 切换页面时本节点 unmount → ErrorBoundary 状态自动重置，切回时是干净的
-              <ErrorBoundary fallback={
-                <div className="flex flex-col items-center justify-center min-h-[60vh] p-8 text-center space-y-4">
-                  <h2 className="text-base font-black text-gray-800 uppercase tracking-widest">页面出错</h2>
-                  <p className="text-xs text-gray-500 max-w-xs leading-relaxed">
-                    仓库页面渲染时发生错误。请尝试切换到其他页面后返回，或刷新页面。
-                  </p>
-                </div>
-              }>
+              <ErrorBoundary>
                 <ManagePage sentences={sentences} onUpdate={refreshSentences} />
               </ErrorBoundary>
             );
@@ -393,7 +386,7 @@ const MainLayout: React.FC = () => {
 
       {/* Header */}
       {localIsConfigured && (
-        <header className="fixed top-0 left-0 right-0 h-16 sm:h-20 bg-white/85 backdrop-blur-md z-40 border-b border-black/[0.03] px-4 sm:px-8 flex items-center justify-between transition-all duration-300 safe-area-top">
+        <header className="fixed top-0 left-0 right-0 app-header bg-white/85 backdrop-blur-md z-40 border-b border-black/[0.03] px-4 sm:px-8 flex items-center justify-between transition-all duration-300">
           <div className="flex flex-col">
             <span className="text-[9px] sm:text-[11px] font-black text-blue-600 uppercase tracking-[0.2em] leading-none mb-1">D3S Platform</span>
             <h1 className="text-lg sm:text-xl font-extrabold tracking-tight">每日三句</h1>
@@ -429,7 +422,7 @@ const MainLayout: React.FC = () => {
       )}
 
       {/* Main Content */}
-      <main className="w-full max-w-5xl mx-auto px-4 pt-20 pb-28 sm:pt-28 sm:pb-12 h-full overflow-y-auto custom-scrollbar">
+      <main className="w-full max-w-5xl mx-auto px-4 app-main-top pb-28 sm:pb-12 h-full overflow-y-auto custom-scrollbar">
         <div className="w-full h-full">
            {renderView()}
         </div>

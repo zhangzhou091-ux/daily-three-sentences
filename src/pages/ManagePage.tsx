@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useDeferredValue, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { Sentence } from '../types';
 import { storageService } from '../services/storage';
 import { sentenceAudioService } from '../services/sentenceAudioService';
@@ -104,7 +104,6 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
     return getLocalDateString(tomorrow);
   });
   const [searchQuery, setSearchQuery] = useState('');
-  const deferredQuery = useDeferredValue(searchQuery);
   
   const [duplicateWarning, setDuplicateWarning] = useState<{ show: boolean; existing?: Sentence }>({ show: false });
   const [isAddingSentence, setIsAddingSentence] = useState(false);
@@ -700,11 +699,9 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
   }, [sentences]);
 
   const filteredSentences = useMemo(() => {
-    if (!deferredQuery || deferredQuery.trim() === '') return sentences;
-    const query = deferredQuery.toLowerCase();
+    if (!searchQuery || searchQuery.trim() === '') return sentences;
+    const query = searchQuery.toLowerCase();
     return sentences.filter(s => {
-      // 字段兜底：mapCloudToLocal 虽已加默认值，但本地历史数据/异常数据仍可能为 undefined，
-      // 这里再防御一层，避免 undefined.toLowerCase() 导致搜索时整页崩溃
       const tags = sentenceTagsMap.get(s.id) || [];
       const en = (s.english || '').toLowerCase();
       const zh = s.chinese || '';
@@ -712,7 +709,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
         zh.includes(query) ||
         tags.some(t => t.toLowerCase().includes(query));
     });
-  }, [sentences, deferredQuery, sentenceTagsMap]);
+  }, [sentences, searchQuery, sentenceTagsMap]);
 
   const exportToExcel = useCallback(async () => {
     const XLSX = await loadXlsx();

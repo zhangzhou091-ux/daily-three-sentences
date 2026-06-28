@@ -65,6 +65,7 @@ const SentenceRow = memo(({ index, style, ...data }: RowComponentProps<RowData>)
   } = data;
 
   const s = sentences[index];
+  if (!s) return null;
   const isEditing = editingId === s.id;
   const enChanged = isEditing && editEn.trim() !== s.english;
 
@@ -140,7 +141,7 @@ const SentenceRow = memo(({ index, style, ...data }: RowComponentProps<RowData>)
                 ))}
                 {s.scheduledDate && (
                   <span className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-1">
-                    📅 {s.scheduledDate.replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2月$3日')}
+                    📅 {String(s.scheduledDate).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2月$3日')}
                   </span>
                 )}
               </div>
@@ -270,19 +271,16 @@ export const SentenceList: React.FC<SentenceListProps> = memo(({ sentences, onDe
 
   useEffect(() => {
     if (!generatingAudioId) return;
-
     const sentence = sentences.find(s => s.id === generatingAudioId);
     if (sentence && hasAudioCache(sentence)) {
       setGeneratingAudioId(null);
       setGeneratingEngine(null);
       return;
     }
-
     const timeout = setTimeout(() => {
       setGeneratingAudioId(null);
       setGeneratingEngine(null);
     }, 30000);
-
     return () => clearTimeout(timeout);
   }, [sentences, generatingAudioId]);
 
@@ -330,12 +328,6 @@ export const SentenceList: React.FC<SentenceListProps> = memo(({ sentences, onDe
     setEditingId(null);
   };
 
-  if (sentences.length === 0) {
-    return (
-      <div className="p-20 text-center opacity-50 text-xs font-black uppercase tracking-widest">No entries found</div>
-    );
-  }
-
   /** 构建 rowProps，sentences 引用变化时整个对象更新，触发 List 重渲染 */
   const rowProps: RowData = useMemo(() => ({
     sentences,
@@ -357,6 +349,12 @@ export const SentenceList: React.FC<SentenceListProps> = memo(({ sentences, onDe
     return _rowProps.sentences[index]?.id === _rowProps.editingId ? EDIT_ROW_HEIGHT : NORMAL_ROW_HEIGHT;
   }, []);
 
+  if (sentences.length === 0) {
+    return (
+      <div className="p-20 text-center opacity-50 text-xs font-black uppercase tracking-widest">No entries found</div>
+    );
+  }
+
   return (
     <div className="pb-20">
       <List
@@ -365,7 +363,7 @@ export const SentenceList: React.FC<SentenceListProps> = memo(({ sentences, onDe
         rowHeight={getRowHeight}
         rowProps={rowProps}
         overscanCount={3}
-        style={{ height: '100%', minHeight: '400px' }}
+        style={{ height: 'calc(100dvh - 280px)', minHeight: '400px' }}
       />
     </div>
   );

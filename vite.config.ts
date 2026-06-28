@@ -18,9 +18,10 @@ export default defineConfig({
       polyfill: false,
       resolveDependencies: (filename, deps) => {
         if (filename.includes('index')) {
-          return deps.filter(dep => 
-            dep.includes('vendor-react') || 
-            dep.includes('fsrs')
+          return deps.filter(dep =>
+            dep.includes('vendor-react') ||
+            dep.includes('fsrs') ||
+            dep.includes('vendor-supabase')
           );
         }
         return deps;

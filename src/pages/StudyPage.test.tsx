@@ -13,7 +13,9 @@ const mockCalculateNextReview = vi.fn();
 
 vi.mock('../services/geminiService', () => ({
   geminiService: {
-    speak: vi.fn()
+    speak: vi.fn(),
+    stop: vi.fn(),
+    setPlaybackRate: vi.fn()
   }
 }));
 

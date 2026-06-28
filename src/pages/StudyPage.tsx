@@ -15,6 +15,7 @@ import { useReviewLogic } from './StudyPage/hooks/useReviewLogic';
 import { useDictationLogic } from './StudyPage/hooks/useDictationLogic';
 import { useRandomListening } from './StudyPage/hooks/useRandomListening';
 import { useDictationReading } from './StudyPage/hooks/useDictationReading';
+import { useDictationTimer, TIMER_DURATION_OPTIONS, formatTimer } from './StudyPage/hooks/useDictationTimer';
 import { LearnCard } from './StudyPage/components/LearnCard';
 import { ReviewCard } from './StudyPage/components/ReviewCard';
 
@@ -296,6 +297,33 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     toggleDictationReading();
   }, [isRandomListeningActive, stopRandomListening, toggleDictationReading]);
 
+  // 用 ref 存最新活跃状态，避免 onExpire 闭包捕获旧值
+  const isRandomListeningActiveRef = useRef(isRandomListeningActive);
+  const isDictationReadingActiveRef = useRef(isDictationReadingActive);
+  isRandomListeningActiveRef.current = isRandomListeningActive;
+  isDictationReadingActiveRef.current = isDictationReadingActive;
+
+  // 朗读定时器：到期自动停止当前活跃的播放
+  const dictationTimer = useDictationTimer({
+    onExpire: () => {
+      if (isRandomListeningActiveRef.current) stopRandomListening();
+      if (isDictationReadingActiveRef.current) stopDictationReading();
+    },
+  });
+
+  // 监听"任一朗读激活"的合并状态：无→有启动定时器，有→无停止
+  // React 18+ 批处理：模式切换时 stop+start 在同一回调中，合并状态 anyActive 始终为 true，不会误触发 stop→start
+  const wasAnyReadingActiveRef = useRef(false);
+  useEffect(() => {
+    const anyActive = isRandomListeningActive || isDictationReadingActive;
+    if (anyActive && !wasAnyReadingActiveRef.current) {
+      dictationTimer.start();
+    } else if (!anyActive && wasAnyReadingActiveRef.current) {
+      dictationTimer.stop();
+    }
+    wasAnyReadingActiveRef.current = anyActive;
+  }, [isRandomListeningActive, isDictationReadingActive, dictationTimer]);
+
   const handleSwipeEnd = useCallback(() => {
     if (!isSwipingRef.current) {
       swipeDirectionRef.current = null;
@@ -308,7 +336,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
     const dx = touchCurrentRef.current.x - touchStartRef.current.x;
     const currentIdx = TAB_ORDER.indexOf(activeTab);
     const containerWidth = swipeContainerRef.current?.offsetWidth || 375;
-    const threshold = containerWidth * 0.3;
+    const threshold = containerWidth * 0.2;
 
     if (Math.abs(dx) > threshold) {
       geminiService.stop();
@@ -669,14 +697,15 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         onTouchEnd={handleSwipeEnd}
       >
         <div
-          className="transition-transform duration-300"
+          className="flex transition-transform duration-300"
           style={{
-            transform: `translateX(${swipeOffset}px)`,
+            transform: `translateX(calc(-${TAB_ORDER.indexOf(activeTab) * (100 / TAB_ORDER.length)}% + ${swipeOffset}px))`,
             transitionDuration: isSwiping ? '0ms' : '300ms',
+            width: `${TAB_ORDER.length * 100}%`,
           }}
         >
-        {activeTab === 'learn' && (
-          dailySelection.length > 0 ? (
+        <div style={{ flex: `0 0 ${100 / TAB_ORDER.length}%`, pointerEvents: activeTab === 'learn' ? 'auto' : 'none' }}>
+          {dailySelection.length > 0 ? (
             (() => {
               if (!currentSentenceLatest) return null;
               const sentence = currentSentenceLatest || currentSentence;
@@ -779,12 +808,12 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
               <h2 className="text-2xl font-black text-gray-900 tracking-tight">库中暂无可学内容</h2>
               <p className="text-gray-600 font-medium">请到仓库页添加新句子。</p>
             </div>
-          )
-        )}
+          )}
+        </div>
 
-        {activeTab === 'review' && (
-          reviewQueue.length > 0 ? (
-            <div className="space-y-8 animate-in slide-in-from-right-4 duration-500">
+        <div style={{ flex: `0 0 ${100 / TAB_ORDER.length}%`, pointerEvents: activeTab === 'review' ? 'auto' : 'none' }}>
+          {reviewQueue.length > 0 ? (
+            <div className="space-y-8">
               {trainingIds.length > 0 && (
                 <div className="bg-gradient-to-r from-orange-50 to-amber-50 text-orange-700 text-sm font-bold px-4 py-2 rounded-lg flex items-center justify-between border border-orange-100">
                   <span className="flex items-center gap-2">
@@ -946,11 +975,11 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 </button>
               </div>
             </div>
-          )
-        )}
+          )}
+        </div>
 
-        {activeTab === 'dictation' && (
-          <div className="space-y-10 animate-in slide-in-from-left-4 duration-500 safe-area-bottom">
+        <div style={{ flex: `0 0 ${100 / TAB_ORDER.length}%`, pointerEvents: activeTab === 'dictation' ? 'auto' : 'none' }}>
+          <div className="space-y-10 safe-area-bottom">
             {/* 顺序朗读卡片 */}
             <div className="apple-card p-6 relative overflow-hidden" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left', paddingTop: '20px', paddingBottom: '20px' }}>
               <div className="w-full flex justify-between items-center mb-3">
@@ -1230,6 +1259,32 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 </div>
               )}
             </div>
+            {/* 定时关闭 */}
+            <div className="flex items-center justify-between flex-wrap gap-3 px-4 py-3 bg-white/70 backdrop-blur-xl rounded-2xl border border-gray-100/80 shadow-sm">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-gray-600">⏱ 定时关闭</span>
+                {dictationTimer.isRunning && (
+                  <span className={`text-sm font-semibold tabular-nums transition-colors duration-300 ${dictationTimer.remainingSec <= 60 ? 'text-red-500' : 'text-orange-400'}`}>
+                    {formatTimer(dictationTimer.remainingSec)}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1 flex-wrap">
+                {TIMER_DURATION_OPTIONS.map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => dictationTimer.changeDuration(opt.value)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium transition-all duration-200 ease-out active:scale-95 ${
+                      dictationTimer.durationMin === opt.value
+                        ? 'bg-orange-400 text-white shadow-sm'
+                        : 'bg-gray-50 text-gray-500 hover:bg-gray-100'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             {dictationPool.length > 0 ? (
               <div className="apple-card p-4 relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-orange-100/30 rounded-full blur-3xl -mr-10 -mt-10" />
@@ -1353,7 +1408,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
               </div>
             </div>
           </div>
-        )}
+        </div>
         </div>
       </div>
     </div>

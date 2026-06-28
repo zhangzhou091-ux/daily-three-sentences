@@ -37,7 +37,7 @@ function mapCloudToLocal(db: CloudSentenceData): Sentence {
     learnedAt: db.learnedat || undefined,
     ttsAudioPathEl: db.tts_audio_path_el || undefined,
     ttsAudioPathMm: db.tts_audio_path_mm || undefined,
-    scheduledDate: db.scheduleddate || undefined,
+    scheduledDate: typeof db.scheduleddate === 'string' ? db.scheduleddate : undefined,
   };
 }
 
