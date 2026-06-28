@@ -913,7 +913,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
           <input value={newTags} onChange={(e) => setNewTags(e.target.value)} placeholder="标签 (用逗号分隔)" className="px-6 py-4 bg-gray-50 rounded-2xl border-none focus:ring-2 focus:ring-gray-200 outline-none text-sm font-medium" />
           
           <div className="flex items-center gap-3">
-            <label className="text-sm font-bold text-gray-500 shrink-0">学习时间</label>
+            <label className="text-sm font-bold text-gray-500 shrink-0">预约日期</label>
             <div className="flex items-center gap-2">
               {(() => {
                 const today = getLocalDateString();
@@ -923,13 +923,9 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
                 const dayAfterTomorrow = new Date();
                 dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 2);
                 const dayAfterTomorrowStr = getLocalDateString(dayAfterTomorrow);
-                const threeDaysLater = new Date();
-                threeDaysLater.setDate(threeDaysLater.getDate() + 3);
-                const threeDaysLaterStr = getLocalDateString(threeDaysLater);
                 const options = [
                   { value: tomorrowStr, label: '次日' },
                   { value: dayAfterTomorrowStr, label: '后天' },
-                  { value: threeDaysLaterStr, label: '大后天' },
                 ];
                 return options.map(opt => (
                   <button

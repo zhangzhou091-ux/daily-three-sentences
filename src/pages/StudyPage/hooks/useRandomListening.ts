@@ -142,6 +142,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
   const historyRef = useRef<Sentence[]>([]);
   const historyIndexRef = useRef(-1);
   const preloadCacheRef = useRef<Map<string, Blob>>(new Map());
+  const nextSentenceRef = useRef<Sentence | null>(null);
   const goToPrevRef = useRef<(() => void) | null>(null);
   const goToNextRef = useRef<(() => void) | null>(null);
 
@@ -284,7 +285,9 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
   const runListeningLoop = useCallback(async (gen: number) => {
     while (isActiveRef.current && playGenerationRef.current === gen) {
-      const sentence = pickRandomSentence();
+      // 优先使用预加载阶段选定的下一句，避免重复随机导致预加载缓存白费
+      const sentence = nextSentenceRef.current || pickRandomSentence();
+      nextSentenceRef.current = null;
       if (!sentence) {
         const eligiblePool = getEligiblePool();
         const message = eligiblePool.length === 0
@@ -356,6 +359,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
           preloadTriggered = true;
           const nextSentence = pickRandomSentence();
           if (nextSentence && nextSentence.id !== sentence.id) {
+            nextSentenceRef.current = nextSentence;
             geminiService.fetchAudioBlob(nextSentence.english).then(blob => {
               if (blob && isActiveRef.current && playGenerationRef.current === gen) {
                 preloadCacheRef.current.set(nextSentence.id, blob);
@@ -428,6 +432,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
 
     isActiveRef.current = true;
     totalPlayedRef.current = 0;
+    nextSentenceRef.current = null;
 
     const now = Date.now();
     const lastReset = parseInt(localStorage.getItem(SESSION_RESET_KEY) || '0', 10);
@@ -510,6 +515,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
     if (wasActive) {
       const gen = ++playGenerationRef.current;
       isActiveRef.current = true;
+      nextSentenceRef.current = null;
       runListeningLoop(gen);
     }
   }, [runListeningLoop]);
@@ -544,6 +550,7 @@ export const useRandomListening = (sentences: Sentence[]) => {
       if (wasActive) {
         const gen = ++playGenerationRef.current;
         isActiveRef.current = true;
+        nextSentenceRef.current = null;
         runListeningLoop(gen);
       }
     } else {

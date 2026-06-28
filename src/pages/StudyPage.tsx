@@ -3,7 +3,7 @@ import { Sentence, StudyStep } from '../types';
 import { geminiService } from '../services/geminiService';
 import { storageService } from '../services/storage';
 import { syncQueueService } from '../services/syncQueueService';
-import { unlockAudioEngine, isIOSAudio } from '../services/audioUnlockService';
+import { unlockAudioEngine, isAudioEngineUnlocked, isIOSAudio } from '../services/audioUnlockService';
 import { continuousAudioPlayer } from '../services/continuousAudioPlayer';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { getLocalDateString } from '../utils/date';
@@ -99,6 +99,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   const [speakingText, setSpeakingText] = useState<string | null>(null);
   
   const [settings, setSettings] = useState(() => storageService.getSettings());
+  const [isTodayResultsCollapsed, setIsTodayResultsCollapsed] = useState(true);
   const todayStr = useMemo(() => {
     const d = new Date();
     return d.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
@@ -482,6 +483,14 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   const speak = useCallback(async (text: string, loop: boolean = true) => {
     if (!text?.trim()) return;
 
+    // 在用户手势窗口内同步解锁 iOS 音频引擎，避免后续异步 play() 被 iOS 拒绝
+    // unlockAudioEngine 内部在临时 Audio 元素上执行 play()，落在当前手势上下文 → iOS 放行
+    // 解锁后，后续 geminiService.speak() 内的任何 audio.play() 都不会再被拒绝
+    // 幂等：isAudioEngineUnlocked() 守卫避免重复创建 AudioContext，已解锁直接返回
+    if (isIOSAudio() && !isAudioEngineUnlocked()) {
+      unlockAudioEngine();
+    }
+
     // 同步抢占音频通道，在异步请求前锁定 User Gesture Token
     // 注意：发音按钮场景下不 await prime（prime 现为 async，内含 80ms 硬件释放等待），
     // 因为 speak 后续走 geminiService.speak（用独立 Audio 元素播放），不依赖 this.audio 的 prime 完成；
@@ -624,7 +633,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
   }, [isProcessingReview]);
 
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-700 pb-20 max-w-2xl mx-auto">
+    <div className="space-y-4 sm:space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-700 pb-4 sm:pb-12 max-w-2xl mx-auto">
       {!isOnline && (
         <div className="bg-orange-50 text-orange-600 text-sm font-bold px-4 py-2 rounded-lg flex items-center gap-2">
           <span>📴 离线模式</span>
@@ -663,13 +672,13 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         </div>
       )}
 
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 px-2">
+      <div className="flex flex-row items-center justify-between gap-4 px-2">
         <div>
           <p className="text-gray-600 text-xs font-bold uppercase tracking-widest mb-1 flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
             {todayStr}
           </p>
-          <h2 className="text-3xl font-black tracking-tight text-gray-900 leading-tight">
+          <h2 className="text-xl font-black tracking-tight text-gray-900 leading-tight">
             你好, {settings.userName}
           </h2>
         </div>
@@ -688,24 +697,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
         </div>
       </div>
 
-      <div
-        ref={swipeContainerRef}
-        className="min-h-[460px] overflow-hidden"
-        style={{ touchAction: 'pan-y' }}
-        onTouchStart={handleSwipeStart}
-        onTouchMove={handleSwipeMove}
-        onTouchEnd={handleSwipeEnd}
-      >
-        <div
-          className="flex transition-transform duration-300"
-          style={{
-            transform: `translateX(calc(-${TAB_ORDER.indexOf(activeTab) * (100 / TAB_ORDER.length)}% + ${swipeOffset}px))`,
-            transitionDuration: isSwiping ? '0ms' : '300ms',
-            width: `${TAB_ORDER.length * 100}%`,
-          }}
-        >
-        <div style={{ flex: `0 0 ${100 / TAB_ORDER.length}%`, pointerEvents: activeTab === 'learn' ? 'auto' : 'none' }}>
-          {dailySelection.length > 0 ? (
+      <div className="min-h-[460px]">
+        {activeTab === 'learn' && (
+          dailySelection.length > 0 ? (
             (() => {
               if (!currentSentenceLatest) return null;
               const sentence = currentSentenceLatest || currentSentence;
@@ -808,11 +802,11 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
               <h2 className="text-2xl font-black text-gray-900 tracking-tight">库中暂无可学内容</h2>
               <p className="text-gray-600 font-medium">请到仓库页添加新句子。</p>
             </div>
-          )}
-        </div>
+          )
+        )}
 
-        <div style={{ flex: `0 0 ${100 / TAB_ORDER.length}%`, pointerEvents: activeTab === 'review' ? 'auto' : 'none' }}>
-          {reviewQueue.length > 0 ? (
+        {activeTab === 'review' && (
+          reviewQueue.length > 0 ? (
             <div className="space-y-8">
               {trainingIds.length > 0 && (
                 <div className="bg-gradient-to-r from-orange-50 to-amber-50 text-orange-700 text-sm font-bold px-4 py-2 rounded-lg flex items-center justify-between border border-orange-100">
@@ -845,7 +839,6 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                   geminiService.setPlaybackRate(clampedRate);
                 }}
               />
-
               {!isCurrentReviewed ? (
                 <div className={`grid grid-cols-4 gap-3 transition-opacity duration-300 ${isProcessingReview ? 'opacity-50 pointer-events-none grayscale' : ''}`}>
                   <button 
@@ -975,13 +968,13 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                 </button>
               </div>
             </div>
-          )}
-        </div>
+          )
+        )}
 
-        <div style={{ flex: `0 0 ${100 / TAB_ORDER.length}%`, pointerEvents: activeTab === 'dictation' ? 'auto' : 'none' }}>
+        {activeTab === 'dictation' && (
           <div className="space-y-10 safe-area-bottom">
             {/* 顺序朗读卡片 */}
-            <div className="apple-card p-6 relative overflow-hidden" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left', paddingTop: '20px', paddingBottom: '20px' }}>
+            <div className="apple-card px-6 py-3 sm:py-5 relative overflow-hidden" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left' }}>
               <div className="w-full flex justify-between items-center mb-3">
                 <div>
                   <h3 className="text-lg font-black text-gray-900 tracking-tight">顺序朗读</h3>
@@ -1113,7 +1106,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
             </div>
 
             {/* 随机朗读卡片 */}
-            <div className="apple-card p-6 relative overflow-hidden" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left', paddingTop: '20px', paddingBottom: '20px' }}>
+            <div className="apple-card px-6 py-3 sm:py-5 relative overflow-hidden" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left' }}>
               <div className="w-full flex justify-between items-center mb-3">
                 <h3 className="text-sm font-black text-blue-600 uppercase tracking-wider">随机朗读</h3>
                 <div className="flex items-center gap-2">
@@ -1321,7 +1314,7 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
                   autoCorrect="off"
                   autoCapitalize="off"
                   spellCheck={false}
-                  className="w-full p-8 bg-gray-50 rounded-[2rem] border-none focus:ring-4 focus:ring-orange-100 outline-none min-h-[160px] text-lg font-semibold placeholder:text-gray-500 transition-all text-left"
+                  className="w-full p-8 bg-gray-50 rounded-[2rem] border-none focus:ring-4 focus:ring-orange-100 outline-none min-h-[120px] text-lg font-semibold placeholder:text-gray-500 transition-all text-left"
                   placeholder="请输入听到的内容..."
                 />
                 <div className="text-[10px] text-gray-400 text-right mt-1">
@@ -1386,30 +1379,37 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
             )}
             
             <div className="space-y-4 pb-10">
-              <h4 className="text-[11px] font-black text-gray-600 uppercase tracking-widest ml-4">今日成果 ({dictationList.filter(item => sentences.some(s => s.id === item.sentenceId)).length})</h4>
-              <div className="space-y-3">
-                {dictationList.filter(item => sentences.some(s => s.id === item.sentenceId)).map((item) => {
-                  const s = sentences.find(sent => sent.id === item.sentenceId);
-                  if (!s) return null;
-                  return (
-                    <div key={`${item.sentenceId}-${item.timestamp}`} className="apple-card p-5 flex items-center justify-between group bg-white/60 hover:bg-white transition-all">
-                      <div className="flex-1 pr-4">
-                        <p className="text-sm font-bold text-gray-800 line-clamp-1">{s.english}</p>
-                        <p className="text-xs text-gray-600 font-medium">{s.chinese}</p>
+              <button
+                onClick={() => setIsTodayResultsCollapsed(v => !v)}
+                className="text-[11px] font-black text-gray-600 uppercase tracking-widest ml-4 flex items-center gap-1"
+              >
+                今日成果 ({dictationList.filter(item => sentences.some(s => s.id === item.sentenceId)).length})
+                <span className="text-gray-400">{isTodayResultsCollapsed ? '▸' : '▾'}</span>
+              </button>
+              {!isTodayResultsCollapsed && (
+                <div className="space-y-3">
+                  {dictationList.filter(item => sentences.some(s => s.id === item.sentenceId)).map((item) => {
+                    const s = sentences.find(sent => sent.id === item.sentenceId);
+                    if (!s) return null;
+                    return (
+                      <div key={`${item.sentenceId}-${item.timestamp}`} className="apple-card p-5 flex items-center justify-between group bg-white/60 hover:bg-white transition-all">
+                        <div className="flex-1 pr-4">
+                          <p className="text-sm font-bold text-gray-800 line-clamp-1">{s.english}</p>
+                          <p className="text-xs text-gray-600 font-medium">{s.chinese}</p>
+                        </div>
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black ${
+                          item.status === 'correct' ? 'bg-green-100 text-green-600' : 'bg-red-50 text-red-400'
+                        }`}>
+                          {item.status === 'correct' ? '✓' : '×'}
+                        </div>
                       </div>
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black ${
-                        item.status === 'correct' ? 'bg-green-100 text-green-600' : 'bg-red-50 text-red-400'
-                      }`}>
-                        {item.status === 'correct' ? '✓' : '×'}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
-        </div>
-        </div>
+        )}
       </div>
     </div>
   );

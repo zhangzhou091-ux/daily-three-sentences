@@ -140,8 +140,11 @@ const SentenceRow = memo(({ index, style, ...data }: RowComponentProps<RowData>)
                   <span key={tag} className="px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-[10px] font-black uppercase tracking-widest">{tag}</span>
                 ))}
                 {s.scheduledDate && (
-                  <span className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-1">
-                    📅 {String(s.scheduledDate).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2月$3日')}
+                  <span
+                    className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-1"
+                    title={`预约日期 ${String(s.scheduledDate)}`}
+                  >
+                    📅 预约 {String(s.scheduledDate).replace(/^(\d{4})-(\d{2})-(\d{2})$/, (_, m, d) => `${parseInt(m, 10)}月${parseInt(d, 10)}日`)}
                   </span>
                 )}
               </div>

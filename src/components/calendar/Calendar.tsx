@@ -184,53 +184,62 @@ export const Calendar: React.FC<CalendarProps> = ({ sentences = [] }) => {
       </div>
 
       {viewMode === 'month' && (
-        <div className="grid grid-cols-7 gap-1">
+        <div className="grid grid-cols-7 gap-0.5 sm:gap-1">
           {WEEKDAY_NAMES.map(name => (
             <div key={name} className="text-center text-[10px] font-bold text-gray-600 py-2">
               {name}
             </div>
           ))}
-          
+
           {((): React.ReactNode => {
-            return calendarWeeks.map((week, wi) => 
+            return calendarWeeks.map((week, wi) =>
               week.days.map((day, di) => {
                 const dateStr = getLocalDateString(day.date);
                 const daySentences = scheduledSentenceMap.get(dateStr);
                 const sentenceCount = daySentences ? daySentences.length : 0;
+                const hasSentenceLabel = sentenceCount > 0;
+                const eventSlotCount = hasSentenceLabel ? 1 : 2;
+                const displayedEvents = day.events.slice(0, eventSlotCount);
+                const totalSlots = (hasSentenceLabel ? 1 : 0) + day.events.length;
+                const displayedSlots = (hasSentenceLabel ? 1 : 0) + displayedEvents.length;
+                const hiddenCount = totalSlots - displayedSlots;
                 return (
                 <div
                   key={`${wi}-${di}`}
                   onClick={() => handleDateClick(day)}
                 className={`
-                  min-h-[60px] p-1 rounded-lg cursor-pointer transition-all
+                  min-h-[52px] sm:min-h-[60px] md:min-h-[80px] p-1 rounded-lg cursor-pointer transition-all
                   ${day.isCurrentMonth ? 'bg-gray-50' : 'bg-gray-50/50'}
                   ${day.isToday ? 'ring-2 ring-indigo-500' : ''}
                   hover:bg-indigo-50
                 `}
               >
                 <div className={`text-xs font-bold mb-1 ${
-                  day.isToday ? 'text-indigo-600' : 
+                  day.isToday ? 'text-indigo-600' :
                   day.isCurrentMonth ? 'text-gray-900' : 'text-gray-600'
                 }`}>
                   {day.date.getDate()}
                 </div>
-                {sentenceCount > 0 && (
-                  <div className="text-[8px] truncate px-1 py-0.5 rounded mb-0.5 bg-emerald-100 text-emerald-700 font-bold">
+                {hasSentenceLabel && (
+                  <div
+                    className="text-[9px] sm:text-[10px] truncate px-1 py-0.5 rounded mb-0.5 bg-emerald-100 text-emerald-700 font-bold"
+                    title={`预约 ${sentenceCount} 句`}
+                  >
                     📖 {sentenceCount}句
                   </div>
                 )}
-                {day.events.slice(0, sentenceCount > 0 ? 1 : 2).map(event => (
+                {displayedEvents.map(event => (
                   <div
                     key={event.id}
-                    className="text-[8px] truncate px-1 py-0.5 rounded mb-0.5"
+                    className="text-[9px] sm:text-[10px] truncate px-1 py-0.5 rounded mb-0.5"
                     style={{ backgroundColor: event.color + '20', color: event.color }}
                   >
                     {event.title}
                   </div>
                 ))}
-                {day.events.length + sentenceCount > 2 && (
-                  <div className="text-[8px] text-gray-600 text-center">
-                    +{day.events.length + sentenceCount - 2}
+                {hiddenCount > 0 && (
+                  <div className="text-[9px] sm:text-[10px] text-gray-600 text-center">
+                    +{hiddenCount}
                   </div>
                 )}
               </div>
@@ -242,7 +251,7 @@ export const Calendar: React.FC<CalendarProps> = ({ sentences = [] }) => {
       )}
 
       {viewMode === 'week' && (
-        <div className="grid grid-cols-7 gap-2">
+        <div className="grid grid-cols-7 gap-1 sm:gap-2">
           {((): React.ReactNode => {
             return weekDays.map((day, i) => {
             const dateStr = getLocalDateString(day.date);
@@ -264,7 +273,10 @@ export const Calendar: React.FC<CalendarProps> = ({ sentences = [] }) => {
               </div>
               <div className="mt-2 space-y-1">
                 {sentenceCount > 0 && (
-                  <div className="text-[8px] truncate px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 font-bold">
+                  <div
+                    className="text-[9px] sm:text-[10px] truncate px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 font-bold"
+                    title={`预约 ${sentenceCount} 句`}
+                  >
                     📖 {sentenceCount}句
                   </div>
                 )}
@@ -272,7 +284,7 @@ export const Calendar: React.FC<CalendarProps> = ({ sentences = [] }) => {
                   <div
                     key={event.id}
                     onClick={() => handleEditEvent(event)}
-                    className="text-[8px] truncate px-1 py-0.5 rounded cursor-pointer hover:opacity-80"
+                    className="text-[9px] sm:text-[10px] truncate px-1 py-0.5 rounded cursor-pointer hover:opacity-80"
                     style={{ backgroundColor: event.color + '20', color: event.color }}
                   >
                     {formatEventTime(event.start)} {event.title}
@@ -286,7 +298,7 @@ export const Calendar: React.FC<CalendarProps> = ({ sentences = [] }) => {
       )}
 
       {viewMode === 'day' && (
-        <div className="space-y-2 max-h-[300px] overflow-y-auto">
+        <div className="space-y-2 max-h-[50vh] sm:max-h-[300px] overflow-y-auto">
           {selectedDate && (() => {
             const dateStr = getLocalDateString(selectedDate);
             const daySentences = scheduledSentenceMap.get(dateStr);
@@ -294,7 +306,7 @@ export const Calendar: React.FC<CalendarProps> = ({ sentences = [] }) => {
             return (
               <div className="space-y-2 mb-3">
                 <div className="text-[10px] font-bold text-emerald-600 px-1">
-                  📖 预定学习句子 ({daySentences.length}句)
+                  📖 预约学习句子 ({daySentences.length}句)
                 </div>
                 {daySentences.map(s => (
                   <div
@@ -313,7 +325,7 @@ export const Calendar: React.FC<CalendarProps> = ({ sentences = [] }) => {
           })()}
           {dayEvents.length === 0 ? (
             <div className="text-center py-8 text-gray-600 text-sm">
-              无日程安排
+              {selectedDate && scheduledSentenceMap.has(getLocalDateString(selectedDate)) ? '暂无其他日程' : '无日程安排'}
             </div>
           ) : (
             dayEvents.map(event => (

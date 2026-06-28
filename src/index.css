@@ -22,6 +22,10 @@
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
 }
 
+html {
+  height: 100%;
+}
+
 body {
   font-family: var(--font-inter);
   background-color: var(--apple-bg);
@@ -31,20 +35,25 @@ body {
   color: var(--apple-text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  overflow-x: hidden;
+  overflow: hidden;
   /* 禁止双击缩放，iOS Safari 实际生效 */
   touch-action: manipulation;
   scroll-behavior: smooth;
   width: 100%;
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: 100%;
   margin: 0;
   padding: 0;
 }
 
 #root {
-  min-height: 100vh;
-  min-height: 100dvh;
+  /* height 而非 min-height：#root 作为内部滚动容器，严格限制为视口高度 */
+  /* 100dvh 在 PWA standalone 下等于 100% 视口；Safari 浏览器模式下随工具栏伸缩 */
+  height: 100dvh;
+  box-sizing: border-box;
+  padding-top: constant(safe-area-inset-top, 0px);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: constant(safe-area-inset-bottom, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   /* 防止 iOS 橡皮筋效果导致背景露出 */
@@ -66,18 +75,11 @@ body {
   padding-bottom: var(--safe-area-bottom);
 }
 
-/* PWA standalone 模式：body 兜底安全区 padding，防止灵动岛/Home Indicator 遮挡 */
-@media (display-mode: standalone) {
-  body {
-    padding-top: constant(safe-area-inset-top, 0px);
-    padding-top: env(safe-area-inset-top, 0px);
-    padding-bottom: constant(safe-area-inset-bottom, 0px);
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-  }
-}
-
-/* 固定定位 header：高度 = 安全区 + 原高度，避免 border-box 下 padding 挤压内容 */
+/* 固定定位 header：padding-top 把内容推到灵动岛下方，box-sizing 让 min-height 含 padding */
 .app-header {
+  box-sizing: border-box;
+  padding-top: constant(safe-area-inset-top, 0px);
+  padding-top: env(safe-area-inset-top, 0px);
   min-height: calc(var(--safe-area-top) + 4rem);
 }
 @media (min-width: 640px) {
@@ -86,13 +88,14 @@ body {
   }
 }
 
-/* main 内容区：padding-top = 安全区 + header 高度 + 间距，确保内容从 header 下方开始 */
+/* main 内容区：padding-top = header 高度 + 间距，确保内容从 header 下方开始 */
+/* safe-area 已由 #root 统一处理，此处不再叠加 */
 .app-main-top {
-  padding-top: calc(var(--safe-area-top) + 5rem);
+  padding-top: 5rem;
 }
 @media (min-width: 640px) {
   .app-main-top {
-    padding-top: calc(var(--safe-area-top) + 7rem);
+    padding-top: 7rem;
   }
 }
 
@@ -296,9 +299,6 @@ body {
 
 /* 桌面端：固定高度链，确保滚动只在 <main> 内发生 */
 @media (min-width: 768px) {
-  html, body {
-    height: 100%;
-  }
   #root {
     height: 100%;
   }

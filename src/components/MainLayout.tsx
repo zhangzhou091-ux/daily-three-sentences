@@ -334,7 +334,7 @@ const MainLayout: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen text-[#1d1d1f] flex flex-col items-center transition-colors duration-500 overflow-hidden" style={{ backgroundColor: settings.themeColor }}>
+    <div className="h-full text-[#1d1d1f] flex flex-col items-center transition-colors duration-500 overflow-hidden" style={{ backgroundColor: settings.themeColor }}>
       {/* 顶部提示条 */}
       {syncMessage && (
         <div className="fixed top-0 left-0 right-0 z-[100] bg-green-500 text-white text-[10px] font-black uppercase tracking-widest py-1 text-center safe-area-top animate-fade-in">
