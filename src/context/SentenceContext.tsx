@@ -3,6 +3,7 @@ import { Sentence } from '../types';
 import { storageService } from '../services/storage';
 import { useSync } from './SyncContext';
 import { useAppContext } from './AppContext';
+import { getLocalDateString } from '../utils/date';
 
 interface SentenceContextType {
   sentences: Sentence[];
@@ -60,6 +61,9 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
   isConfiguredRef.current = isConfigured;
   isOnlineRef.current = isOnline;
 
+  // 跨日检测相关 ref
+  const lastCrossDayDateRef = useRef<string>(getLocalDateString());
+
   const refreshSentences = useCallback(async () => {
     const currentRequestId = ++lastRequestId.current;
     const currentVersion = ++dataVersionRef.current;
@@ -85,7 +89,7 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
 
       if (isConfiguredRef.current && isOnlineRef.current) {
         const LAST_SYNC_DATE_KEY = 'd3s_last_sync_date';
-        const today = new Date().toISOString().split('T')[0];
+        const today = getLocalDateString();
         const lastSyncDate = localStorage.getItem(LAST_SYNC_DATE_KEY);
 
         if (lastSyncDate === today && localData.length > 0) {
@@ -142,6 +146,9 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
     }
   }, [syncData]);
 
+  const refreshSentencesRef = useRef(refreshSentences);
+  refreshSentencesRef.current = refreshSentences;
+
   useEffect(() => {
     if (previousSentencesRef.current.length > 0) {
       console.log('📚 SentenceContext: 使用缓存数据立即渲染');
@@ -150,6 +157,32 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
     }
     refreshSentences();
   }, [isConfigured, isOnline, refreshSentences]);
+
+  // 跨日检测：用户切回标签页或定时检查时，若日期变更则重新加载数据
+  useEffect(() => {
+    const checkCrossDay = () => {
+      const today = getLocalDateString();
+      if (lastCrossDayDateRef.current !== today) {
+        console.log(`📚 SentenceContext: 检测到跨日（${lastCrossDayDateRef.current} → ${today}），触发数据刷新`);
+        lastCrossDayDateRef.current = today;
+        refreshSentencesRef.current();
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkCrossDay();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    const intervalId = setInterval(checkCrossDay, 5 * 60 * 1000); // 每5分钟检查一次
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      clearInterval(intervalId);
+    };
+  }, []);
 
   return (
     <SentenceContext.Provider value={{ sentences, refreshSentences, isSyncing, syncMessage, isInitialLoading, syncError }}>
