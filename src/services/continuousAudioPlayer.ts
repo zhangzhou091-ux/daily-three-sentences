@@ -278,12 +278,10 @@ class ContinuousAudioPlayer {
       this.audio.onended = () => {
         if (!isCurrentGen()) return;
         console.log(`🔊 [连续播放器] onended 触发 | [代数] ${gen}`);
-        // 优雅收尾：先解绑 onpause 防止下面的 pause() 触发 handleAudioPause 误恢复，
-        // 再 pause + currentTime=0 清硬件状态，避免末尾瞬态残留产生杂音
+        // 音频已自然结束，不调用 pause()/currentTime=0 避免 iOS 末端瞬态杂音
+        // 只解绑 onpause 防止 handleAudioPause 误恢复
         try {
           this.audio.onpause = null;
-          this.audio.pause();
-          this.audio.currentTime = 0;
         } catch { /* ignore */ }
         this.revokeCurrentUrl();
         doResolve();
@@ -493,11 +491,9 @@ class ContinuousAudioPlayer {
     }
     if (this.audio.ended) {
       console.log('🔊 [连续播放器] onpause: 音频已结束，跳过恢复');
-      // 优雅收尾：清硬件状态 + 解绑 onpause，防止末尾瞬间触发恢复产生杂音
+      // 音频已自然结束，只解绑 onpause 防止循环触发，不调用 pause()/currentTime=0 避免 iOS 瞬态杂音
       try {
         this.audio.onpause = null;
-        this.audio.pause();
-        this.audio.currentTime = 0;
       } catch { /* ignore */ }
       // iOS: onended 可能不触发，onpause 检测到 ended 时兜底 resolve
       if (this.pendingPlayResolve) {

@@ -176,7 +176,10 @@ const playCachedBlob = async (blob: Blob, loop: boolean, rate: number): Promise<
         if (!isCurrentGen()) return;
         console.log(`🔊 [缓存播放] onended 触发 | [代数] ${gen}`);
         settled = true;
-        cleanup();
+        // 音频已自然结束，不调用 pause()/removeAttribute('src')/load() 避免 iOS 瞬态杂音
+        // 只清理引用和 blob URL，硬件清理留给下次 playBlob 开头处理
+        if (cachedAudioElement === audio) cachedAudioElement = null;
+        revokeCachedAudioUrl();
         resolve(true);
       };
     }

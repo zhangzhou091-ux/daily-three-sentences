@@ -215,12 +215,12 @@ export const mediaSessionService = {
       const audio = ensureSilenceAudio();
       console.log(`🔊 [AudioKeepAlive] holdAudioFocus: 播放 silenceAudio | [paused] ${audio.paused}`);
       audio.play().then(() => {
-        console.log(`🔊 [AudioKeepAlive] holdAudioFocus: silenceAudio.play() 成功 | [paused] ${audio.paused}`);
+        isHolding = true;
+        console.log(`🔊 [AudioKeepAlive] holdAudioFocus: silenceAudio.play() 成功 | [paused] ${audio.paused} | isHolding = true`);
       }).catch((e) => {
-        console.warn(`🔊 [AudioKeepAlive] holdAudioFocus: silenceAudio.play() 失败 ${e?.name}: ${e?.message}`);
+        isHolding = false;
+        console.warn(`🔊 [AudioKeepAlive] holdAudioFocus: silenceAudio.play() 失败 ${e?.name}: ${e?.message} | isHolding = false`);
       });
-      isHolding = true;
-      console.log(`🔊 [AudioKeepAlive] holdAudioFocus: isHolding = true`);
     } catch (e) {
       console.warn(`🔊 [AudioKeepAlive] holdAudioFocus 异常:`, e);
     }

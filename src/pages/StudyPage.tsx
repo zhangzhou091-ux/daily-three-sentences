@@ -491,12 +491,9 @@ const StudyPage: React.FC<StudyPageProps> = ({ sentences, onUpdate }) => {
       unlockAudioEngine();
     }
 
-    // 同步抢占音频通道，在异步请求前锁定 User Gesture Token
-    // 注意：发音按钮场景下不 await prime（prime 现为 async，内含 80ms 硬件释放等待），
-    // 因为 speak 后续走 geminiService.speak（用独立 Audio 元素播放），不依赖 this.audio 的 prime 完成；
-    // 且 await 会消耗宝贵的用户手势窗口，可能导致后续播放被 iOS 阻止。
-    // prime 的 Promise 内部会自行完成静音接力，无需调用方等待。
-    void continuousAudioPlayer.primeAudioChannelWithSilence();
+    // 发音按钮是单次播放场景，走独立 Audio 元素播放，不需要 continuousAudioPlayer 的静音接力。
+    // primeAudioChannelWithSilence 在 continuousAudioPlayer.audio 上播放静音，与发音按钮的
+    // 独立 Audio 元素是不同的元素，在 iOS 上反而会抢占音频会话，导致 TTS 播放被拒绝。
 
     if (loop && speakingText === text) {
       geminiService.stop();

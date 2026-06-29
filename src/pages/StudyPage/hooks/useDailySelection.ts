@@ -259,25 +259,39 @@ export const useDailySelection = ({
         tomorrowDate.setDate(tomorrowDate.getDate() + 1);
         const tomorrowStr = getLocalDateString(tomorrowDate);
 
-        const updatePromises = missedScheduled.map(sentence => {
-          const updated = { ...sentence, scheduledDate: tomorrowStr, updatedAt: Date.now() };
-          return storageService.addSentence(updated, false);
-        });
+        let rescheduledCount = 0;
+        let skippedCount = 0;
 
-        await Promise.all(updatePromises);
-        console.log(`📚 后台静默处理：${missedScheduled.length} 个预约句子顺延至 ${tomorrowStr}`);
+        for (const sentence of missedScheduled) {
+          // 方案A：顺延前用最新数据校验，避免过期快照覆盖已学状态
+          const latest = await storageService.checkDuplicate(sentence.english);
+          if (latest && latest.intervalIndex > 0) {
+            // 句子已被学习，不再顺延，并确保 scheduledDate 清空
+            await storageService.updateSentenceFields(sentence.english, { scheduledDate: undefined });
+            skippedCount++;
+            continue;
+          }
+          // 方案B：仅更新 scheduledDate 字段，不覆盖 intervalIndex 等学习状态
+          await storageService.updateSentenceFields(sentence.english, { scheduledDate: tomorrowStr });
+          rescheduledCount++;
+        }
+
+        if (rescheduledCount > 0 || skippedCount > 0) {
+          console.log(`📚 后台静默处理：${rescheduledCount} 个预约句子顺延至 ${tomorrowStr}，${skippedCount} 个已学句子跳过顺延`);
+        }
       }
 
-      const learnedButScheduled = sentencesSnapshot.filter(s =>
+      // 方案C：清理基于最新库数据，不使用过期快照
+      const allDbSentences = await storageService.getSentences();
+      const learnedButScheduled = allDbSentences.filter(s =>
         s.scheduledDate &&
         s.intervalIndex > 0
       );
 
       if (learnedButScheduled.length > 0) {
-        const clearPromises = learnedButScheduled.map(sentence => {
-          const updated = { ...sentence, scheduledDate: undefined, updatedAt: Date.now() };
-          return storageService.addSentence(updated, false);
-        });
+        const clearPromises = learnedButScheduled.map(sentence =>
+          storageService.updateSentenceFields(sentence.english, { scheduledDate: undefined })
+        );
         await Promise.all(clearPromises);
         console.log(`📚 后台静默清理：${learnedButScheduled.length} 个已学句子的预约日期已清除`);
       }

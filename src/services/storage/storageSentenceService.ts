@@ -137,6 +137,34 @@ export const storageSentenceService = {
     }
   },
 
+  /**
+   * 局部字段更新：仅更新指定字段，保留 existing 的 intervalIndex 等学习状态。
+   * 与 addSentence（全量 spread merge）不同，此方法不会用旧快照覆盖已变更的字段。
+   */
+  updateSentenceFields: async (english: string, fields: Partial<Sentence>, syncToCloud: boolean = true): Promise<Sentence | null> => {
+    const normalizedEnglish = english.trim().toLowerCase();
+    const existing = await dbService.findByEnglish(normalizedEnglish);
+    if (!existing) return null;
+
+    const updated: Sentence = {
+      ...existing,
+      ...fields,
+      id: existing.id,
+      english: existing.english,
+      updatedAt: Date.now(),
+    };
+
+    await dbService.put(updated);
+
+    if (syncToCloud && supabaseService.isReady) {
+      supabaseService.syncSentences([updated]).catch(err => {
+        console.warn('⚠️ updateSentenceFields 同步 Supabase 失败:', err instanceof Error ? err.message : String(err));
+      });
+    }
+
+    return updated;
+  },
+
   updateSentence: async (id: string, updates: Partial<Sentence>): Promise<Sentence | null> => {
     const all = await dbService.getAll();
     const sentence = all.find(s => s.id === id);

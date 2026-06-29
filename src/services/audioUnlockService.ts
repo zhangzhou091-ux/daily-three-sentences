@@ -64,10 +64,21 @@ export const unlockAudioEngine = (): Promise<boolean> => {
       audio.play().then(() => {
         clearTimeout(timeout);
         isAudioUnlocked = true;
-        audio.pause();
-        audio.removeAttribute('src');
-        audio.load();
         console.log('🔊 [AudioUnlock] iOS 音频引擎已成功解锁 ✅');
+        // 不立即 pause()！iOS 上 pause()+removeAttribute('src') 会让系统认为音频会话已结束，
+        // 重新锁定音频，导致后续 TTS 的 play() 被拒绝（发音按钮需点 2 次）。
+        // 改为循环静音维持 10 秒，确保 TTS 网络请求返回后 play() 不被拒绝。
+        audio.loop = true;
+        audio.volume = 0.001;
+        // 10 秒后自动清理（足够 TTS 网络请求完成并接管播放）
+        setTimeout(() => {
+          try {
+            audio.pause();
+            audio.removeAttribute('src');
+            audio.load();
+          } catch { /* ignore */ }
+          console.log('🔊 [AudioUnlock] 静音维持定时器已清理');
+        }, 10000);
         resolve(true);
       }).catch((e) => {
         clearTimeout(timeout);

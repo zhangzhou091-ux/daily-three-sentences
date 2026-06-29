@@ -47,6 +47,7 @@ export const storageService = {
   findDuplicates: storageSentenceService.findDuplicates,
   deleteSentence: storageSentenceService.deleteSentence,
   updateSentence: storageSentenceService.updateSentence,
+  updateSentenceFields: storageSentenceService.updateSentenceFields,
   clearSentenceAudio: storageSentenceService.clearSentenceAudio,
   clearVocabulary: storageSentenceService.clearVocabulary,
   clearAllData: storageSentenceService.clearAllData,

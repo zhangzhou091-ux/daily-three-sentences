@@ -54,7 +54,7 @@ interface PendingSpeakRequest {
 
 const API_BASE = 'https://api.elevenlabs.io';
 const DEFAULT_MODEL = 'eleven_v3';
-const DEFAULT_OUTPUT_FORMAT = 'mp3_44100_128';
+const DEFAULT_OUTPUT_FORMAT = 'pcm_44100';
 const BASE_SPEAK_TIMEOUT = 20000;
 const VOICES_CACHE_TTL = 30 * 60 * 1000;
 const VALIDATE_TIMEOUT = 15000;
@@ -65,6 +65,41 @@ const RETRY_BASE_DELAY = 1000;
 const IOS_PLAYBACK_RETRIES = 3;
 const IOS_PLAYBACK_DELAY = 200;
 const WEAK_NETWORK_LATENCY_THRESHOLD = 2000;
+
+/** 将 ElevenLabs pcm_44100 返回的原始 PCM 数据包装为 WAV Blob */
+const pcmToWavBlob = (pcmData: ArrayBuffer, sampleRate: number = 44100, channels: number = 1, bitsPerSample: number = 16): Blob => {
+  const bytesPerSample = bitsPerSample / 8;
+  const dataSize = pcmData.byteLength;
+  const headerSize = 44;
+  const buffer = new ArrayBuffer(headerSize + dataSize);
+  const view = new DataView(buffer);
+
+  const writeString = (offset: number, value: string) => {
+    for (let i = 0; i < value.length; i++) {
+      view.setUint8(offset + i, value.charCodeAt(i));
+    }
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * channels * bytesPerSample, true);
+  view.setUint16(32, channels * bytesPerSample, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeString(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  const pcmView = new Uint8Array(pcmData);
+  const wavView = new Uint8Array(buffer);
+  wavView.set(pcmView, headerSize);
+
+  return new Blob([buffer], { type: 'audio/wav' });
+};
 const MEDIUM_NETWORK_LATENCY_THRESHOLD = 800;
 const CONNECTIVITY_CHECK_INTERVAL = 30000;
 const MAX_PENDING_REQUESTS = 3;
@@ -269,7 +304,7 @@ const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: numbe
     throw new Error('音频数据为空');
   }
 
-  const mimeType = audioBlob.type || 'audio/mpeg';
+  const mimeType = audioBlob.type || 'audio/wav';
   console.log(`🔊 [ElevenLabs] MIME类型 | [iOS] ${ios} | [类型] ${audioBlob.type} | [最终] ${mimeType}`);
 
   const url = URL.createObjectURL(audioBlob);
@@ -656,7 +691,7 @@ export const elevenLabsService = {
             headers: {
               'Content-Type': 'application/json',
               'xi-api-key': apiKey.trim(),
-              Accept: 'audio/mpeg',
+              Accept: '*/*',
             },
             body: JSON.stringify(requestBody),
             signal: controller.signal,
@@ -736,26 +771,13 @@ export const elevenLabsService = {
 
       console.log(`🔊 [ElevenLabs] API 响应成功 | [状态码] ${response.status} | [Content-Type] ${response.headers.get('content-type')} | [Content-Length] ${response.headers.get('content-length') || '未知'} | [模型] ${modelId}`);
 
-      const ios = isIOS();
-      const contentType = response.headers.get('content-type') || 'audio/mpeg';
       let audioBlob: Blob;
 
-      if (ios) {
-        const buffer = await response.arrayBuffer();
-        console.log(`🔊 [ElevenLabs] response.arrayBuffer() | [iOS] true | [byteLength] ${buffer.byteLength}`);
-        audioBlob = new Blob([buffer], { type: contentType });
-        console.log(`🔊 [ElevenLabs] Blob 手动构造 | [iOS] true | [大小] ${audioBlob.size} | [类型] ${audioBlob.type}`);
-      } else {
-        try {
-          audioBlob = await response.blob();
-          console.log(`🔊 [ElevenLabs] response.blob() 成功 | [大小] ${audioBlob.size} | [类型] ${audioBlob.type}`);
-        } catch (blobErr) {
-          console.warn(`🔊 [ElevenLabs] response.blob() 失败，降级为 arrayBuffer | [错误] ${blobErr instanceof Error ? blobErr.message : String(blobErr)}`);
-          const buffer = await response.arrayBuffer();
-          audioBlob = new Blob([buffer], { type: 'audio/mpeg' });
-          console.log(`🔊 [ElevenLabs] arrayBuffer 降级成功 | [大小] ${audioBlob.size} | [类型] ${audioBlob.type}`);
-        }
-      }
+      // pcm_44100 返回原始 PCM 数据，需包装为 WAV 容器才能被 HTMLAudioElement 播放
+      const buffer = await response.arrayBuffer();
+      console.log(`🔊 [ElevenLabs] response.arrayBuffer() | [byteLength] ${buffer.byteLength}`);
+      audioBlob = pcmToWavBlob(buffer);
+      console.log(`🔊 [ElevenLabs] PCM → WAV 转换完成 | [大小] ${audioBlob.size} | [类型] ${audioBlob.type}`);
 
       if (!audioBlob || audioBlob.size === 0) {
         return { success: false, error: '未收到音频数据' };
@@ -872,7 +894,7 @@ export const elevenLabsService = {
         headers: {
           'Content-Type': 'application/json',
           'xi-api-key': trimmedKey,
-          'Accept': 'audio/mpeg',
+          'Accept': '*/*',
         },
         body: JSON.stringify({
           text: 'Hi',
@@ -1009,7 +1031,7 @@ export const elevenLabsService = {
         headers: {
           'Content-Type': 'application/json',
           'xi-api-key': apiKey.trim(),
-          Accept: 'audio/mpeg',
+          Accept: '*/*',
         },
         body: JSON.stringify({
           text: trimmedText,
@@ -1026,19 +1048,12 @@ export const elevenLabsService = {
         return null;
       }
 
-      const ios = isIOS();
-      const contentType = response.headers.get('content-type') || 'audio/mpeg';
+      // pcm_44100 返回原始 PCM 数据，需包装为 WAV 容器
       let blob: Blob;
-
-      if (ios) {
-        const buffer = await response.arrayBuffer();
-        console.log(`🔊 [ElevenLabs] fetchAudioBlob: response.arrayBuffer() | [iOS] true | [byteLength] ${buffer.byteLength}`);
-        blob = new Blob([buffer], { type: contentType });
-        console.log(`🔊 [ElevenLabs] fetchAudioBlob: Blob 手动构造 | [iOS] true | [大小] ${blob.size} | [类型] ${blob.type}`);
-      } else {
-        blob = await response.blob();
-        console.log(`🔊 [ElevenLabs] fetchAudioBlob: response.blob() | [大小] ${blob.size} | [类型] ${blob.type}`);
-      }
+      const buffer = await response.arrayBuffer();
+      console.log(`🔊 [ElevenLabs] fetchAudioBlob: response.arrayBuffer() | [byteLength] ${buffer.byteLength}`);
+      blob = pcmToWavBlob(buffer);
+      console.log(`🔊 [ElevenLabs] fetchAudioBlob: PCM → WAV 转换完成 | [大小] ${blob.size} | [类型] ${blob.type}`);
 
       if (!blob || blob.size === 0) {
         console.warn('🔊 [ElevenLabs] fetchAudioBlob: API 返回空音频');
