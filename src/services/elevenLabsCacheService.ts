@@ -22,7 +22,7 @@
  */
 
 const DB_NAME = 'D3S_ElevenLabs_Cache';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const STORE_NAME = 'audio_cache';
 const MAX_CACHE_SIZE = 100 * 1024 * 1024;
 
@@ -120,8 +120,8 @@ const getDB = (): Promise<IDBDatabase> => {
           store.createIndex('voiceId', 'voiceId', { unique: false });
           store.createIndex('createdAt', 'createdAt', { unique: false });
           store.createIndex('lastHitAt', 'lastHitAt', { unique: false });
-        } else if (oldVersion < 3) {
-          console.log(`🔊 [ElevenLabs缓存] 数据库升级 v${oldVersion} → v${DB_VERSION}，清理旧格式缓存`);
+        } else if (oldVersion < 4) {
+          console.log(`🔊 [ElevenLabs缓存] 数据库升级 v${oldVersion} → v${DB_VERSION}，清理 PCM→WAV 坏缓存`);
           const tx = (event.target as IDBOpenDBRequest).transaction;
           if (tx) {
             const store = tx.objectStore(STORE_NAME);

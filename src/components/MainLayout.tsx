@@ -143,6 +143,14 @@ const MainLayout: React.FC = () => {
     };
   }, []);
 
+  // 动态同步主题色到 CSS 变量和浏览器 chrome，确保安全区与主内容一致
+  useEffect(() => {
+    const color = settings.themeColor || '#f5f5f7';
+    document.documentElement.style.setProperty('--app-theme-color', color);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', color);
+  }, [settings.themeColor]);
+
   const handleSaveUser = async () => {
     if (!urlInput.trim() || !keyInput.trim() || !userNameInput.trim()) {
       setLoginError('请填写完整的配置信息');

@@ -52,12 +52,12 @@ body {
   box-sizing: border-box;
   padding-top: constant(safe-area-inset-top, 0px);
   padding-top: env(safe-area-inset-top, 0px);
-  padding-bottom: constant(safe-area-inset-bottom, 0px);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   /* 防止 iOS 橡皮筋效果导致背景露出 */
   overscroll-behavior-y: none;
+  /* 动态跟随用户主题色，覆盖安全区与 body 渐变的色差 */
+  background-color: var(--app-theme-color, #f5f5f7);
 }
 
 .glass {
