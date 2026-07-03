@@ -264,7 +264,7 @@ export const useDailySelection = ({
 
         for (const sentence of missedScheduled) {
           // 方案A：顺延前用最新数据校验，避免过期快照覆盖已学状态
-          const latest = await storageService.checkDuplicate(sentence.english);
+          const latest = await storageService.checkDuplicate(sentence.english, true);
           if (latest && latest.intervalIndex > 0) {
             // 句子已被学习，不再顺延，并确保 scheduledDate 清空
             await storageService.updateSentenceFields(sentence.english, { scheduledDate: undefined });

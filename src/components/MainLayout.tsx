@@ -430,7 +430,7 @@ const MainLayout: React.FC = () => {
       )}
 
       {/* Main Content */}
-      <main className="w-full max-w-5xl mx-auto px-4 app-main-top pb-28 sm:pb-12 h-full overflow-y-auto custom-scrollbar">
+      <main className="w-full max-w-5xl mx-auto px-4 app-main-top pb-24 sm:pb-12 h-full overflow-y-auto custom-scrollbar">
         <div className="w-full h-full">
            {renderView()}
         </div>
@@ -438,7 +438,7 @@ const MainLayout: React.FC = () => {
 
       {/* Mobile Bottom Nav */}
       {localIsConfigured && isNavVisible && (
-        <div className="md:hidden fixed bottom-6 left-4 right-4 z-50 safe-area-bottom">
+        <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 px-4 pt-2 pb-[max(env(safe-area-inset-bottom),0.5rem)]">
           <Navbar currentView={currentView} setView={setView} />
         </div>
       )}

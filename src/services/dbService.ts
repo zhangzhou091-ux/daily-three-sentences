@@ -1305,14 +1305,16 @@ class DBService {
     });
   }
 
-  async findByEnglish(english: string): Promise<Sentence | null> {
+  async findByEnglish(english: string, skipCache: boolean = false): Promise<Sentence | null> {
     const normalized = normalizeEnglish(english);
     
-    const cachedValues = this.cache.getAllValues();
-    const cached = cachedValues.find(s => normalizeEnglish(s.english) === normalized);
-    if (cached) {
-      logger.debug('findByEnglish: 从缓存命中', { english: normalized });
-      return cached;
+    if (!skipCache) {
+      const cachedValues = this.cache.getAllValues();
+      const cached = cachedValues.find(s => normalizeEnglish(s.english) === normalized);
+      if (cached) {
+        logger.debug('findByEnglish: 从缓存命中', { english: normalized });
+        return cached;
+      }
     }
 
     const fallback = await this.getStorage();

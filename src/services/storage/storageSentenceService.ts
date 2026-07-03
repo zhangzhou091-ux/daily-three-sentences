@@ -113,9 +113,9 @@ export const storageSentenceService = {
   /**
    * 检查重复
    */
-  checkDuplicate: async (english: string): Promise<Sentence | null> => {
+  checkDuplicate: async (english: string, skipCache: boolean = false): Promise<Sentence | null> => {
     const normalizedEnglish = english.trim().toLowerCase();
-    return dbService.findByEnglish(normalizedEnglish);
+    return dbService.findByEnglish(normalizedEnglish, skipCache);
   },
 
   /**
@@ -153,6 +153,15 @@ export const storageSentenceService = {
       english: existing.english,
       updatedAt: Date.now(),
     };
+
+    // 守卫：已学句子不允许设有 scheduledDate，防止脏数据写入
+    if (updated.intervalIndex > 0 && updated.scheduledDate) {
+      console.warn('⚠️ updateSentenceFields: 已学句子不允许设置 scheduledDate，已自动清除', {
+        english: updated.english,
+        intervalIndex: updated.intervalIndex,
+      });
+      updated.scheduledDate = undefined;
+    }
 
     await dbService.put(updated);
 
