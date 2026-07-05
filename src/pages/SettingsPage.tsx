@@ -13,6 +13,7 @@ import { ttsCloudCacheService } from '../services/ttsCloudCacheService';
 import { UserSettings } from '../types';
 import EnvCheckPanel from '../components/EnvCheckPanel';
 import DiagnosticsPanel from '../components/DiagnosticsPanel';
+import ScheduleDebugPanel from '../components/ScheduleDebugPanel';
 import SupabaseConfigPanel from '../components/SupabaseConfigPanel';
 
 const MESSAGE_DURATION = 3000;
@@ -974,6 +975,12 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
           <div className="space-y-2">
             <h3 className="text-[11px] font-black text-gray-600 uppercase tracking-[0.2em] ml-2">一键诊断</h3>
             <DiagnosticsPanel />
+          </div>
+
+          {/* 预约诊断面板 */}
+          <div className="space-y-2">
+            <h3 className="text-[11px] font-black text-gray-600 uppercase tracking-[0.2em] ml-2">预约诊断</h3>
+            <ScheduleDebugPanel />
           </div>
 
           {/* 环境配置信息 */}

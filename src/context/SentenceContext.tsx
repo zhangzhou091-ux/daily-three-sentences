@@ -37,7 +37,19 @@ export function mergeSentencesByUpdatedAt(
         const existingTime = existingSentence.updatedAt || 0;
         const incomingTime = s.updatedAt || 0;
         if (incomingTime > existingTime) {
-          map.set(s.id, s);
+          // 守卫：云端数据不可用未学状态覆盖本地已学状态
+          if (existingSentence.intervalIndex > 0 && (s.intervalIndex ?? 0) === 0) {
+            console.log('[TRACE-CACHE] mergeSentencesByUpdatedAt守卫 | 阻止云端覆盖本地已学状态 | id=' + s.id + ' | english="' + ((s.english || '').substring(0, 20)) + '" | localIntervalIndex=' + existingSentence.intervalIndex + ' | cloudIntervalIndex=' + (s.intervalIndex ?? 0) + ' | localUpdatedAt=' + existingTime + ' | cloudUpdatedAt=' + incomingTime);
+            map.set(s.id, { ...s, intervalIndex: existingSentence.intervalIndex });
+          } else {
+            map.set(s.id, s);
+          }
+        } else if (incomingTime === existingTime) {
+          // 时间戳相同，保留已学状态更高的版本
+          if ((s.intervalIndex || 0) > (existingSentence.intervalIndex || 0)) {
+            console.log('[TRACE-CACHE] mergeSentencesByUpdatedAt | 时间戳相同，保留已学更高版本 | id=' + s.id + ' | english="' + ((s.english || '').substring(0, 20)) + '" | localIntervalIndex=' + (existingSentence.intervalIndex || 0) + ' | cloudIntervalIndex=' + (s.intervalIndex || 0));
+            map.set(s.id, s);
+          }
         }
       }
     }
@@ -78,6 +90,13 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
       }
 
       console.log(`📚 SentenceContext: 本地句子加载完成，共${localData.length}条`);
+      const localScheduled = localData.filter(s => s.scheduledDate);
+      if (localScheduled.length > 0) {
+        console.log('[TRACE-SCHEDULE] SentenceContext本地数据 | 预约句子=' + localScheduled.length + '条');
+        localScheduled.forEach(s => {
+          console.log('[TRACE-SCHEDULE]   本地: english="' + (s.english || '').substring(0, 30) + '" | scheduledDate=' + s.scheduledDate + ' | intervalIndex=' + s.intervalIndex);
+        });
+      }
 
       if (localData.length > 0 || previousSentencesRef.current.length === 0) {
         setSentences(localData);
@@ -107,6 +126,20 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
             previousSentencesRef.current,
             result
           );
+          
+          // 埋点：检测云端同步是否覆盖了本地数据
+          const localMap = new Map(previousSentencesRef.current.map(s => [s.id, s]));
+          const mergedScheduled = mergedData.filter(s => s.scheduledDate);
+          const localScheduled = previousSentencesRef.current.filter(s => s.scheduledDate);
+          console.log('[TRACE-SCHEDULE] SentenceContext云端合并 | 合并前预约=' + localScheduled.length + '条 | 合并后预约=' + mergedScheduled.length + '条');
+          
+          // 检测学习状态是否被覆盖
+          result.forEach(cloudSentence => {
+            const localSentence = localMap.get(cloudSentence.id);
+            if (localSentence && localSentence.intervalIndex > 0 && cloudSentence.intervalIndex === 0) {
+              console.warn('[TRACE-SCHEDULE] ⚠️ 云端同步可能覆盖了学习状态 | english="' + (cloudSentence.english || '').substring(0, 30) + '" | local.intervalIndex=' + localSentence.intervalIndex + ' | cloud.intervalIndex=' + cloudSentence.intervalIndex + ' | cloud.updatedAt=' + (cloudSentence.updatedAt || 0) + ' | local.updatedAt=' + (localSentence.updatedAt || 0));
+            }
+          });
 
           previousSentencesRef.current = mergedData;
 

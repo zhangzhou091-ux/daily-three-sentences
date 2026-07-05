@@ -60,6 +60,11 @@ export const storageSentenceService = {
     
     await dbService.putAll(enriched);
     
+    // 修复F：有数据写入时更新驱逐检测基线
+    if (enriched.length > 0) {
+      try { localStorage.setItem('d3s_has_data', '1'); } catch { /* ignore */ }
+    }
+    
     if (supabaseService.isReady) {
       try {
         await supabaseService.syncSentences(enriched);
@@ -80,6 +85,7 @@ export const storageSentenceService = {
     const existing = await dbService.findByEnglish(normalizedEnglish);
 
     if (existing) {
+      console.log('[TRACE-SCHEDULE] addSentence | 句子已存在，执行合并 | english="' + (sentence.english || '').substring(0, 30) + '" | existing.intervalIndex=' + existing.intervalIndex + ' | existing.scheduledDate=' + (existing.scheduledDate || '无') + ' | new.scheduledDate=' + (sentence.scheduledDate || '无') + ' | new.intervalIndex=' + (sentence.intervalIndex ?? 'undefined'));
       const updatedSentence = {
         ...existing,
         ...sentence,
@@ -88,7 +94,23 @@ export const storageSentenceService = {
         updatedAt: Date.now()
       };
 
+      // 守卫：已学句子的 intervalIndex 不允许被重置为 0，scheduledDate 必须清除
+      if (existing.intervalIndex > 0 && updatedSentence.intervalIndex === 0) {
+        console.warn('[TRACE-SCHEDULE] ⚠️ addSentence覆盖了学习状态 | english="' + (sentence.english || '').substring(0, 30) + '" | intervalIndex: ' + existing.intervalIndex + ' → 0 | scheduledDate: ' + (existing.scheduledDate || '无') + ' → ' + (updatedSentence.scheduledDate || '无'));
+        console.log('[TRACE-CACHE] addSentence守卫触发 | 阻止覆盖已学状态 | oldIntervalIndex=' + existing.intervalIndex + ' | newIntervalIndex=0 | 保留intervalIndex=' + existing.intervalIndex + ' | 清除scheduledDate');
+        updatedSentence.intervalIndex = existing.intervalIndex;
+        updatedSentence.scheduledDate = undefined;
+      }
+      // 守卫：已学句子不允许保留 scheduledDate
+      if (updatedSentence.intervalIndex > 0 && updatedSentence.scheduledDate) {
+        console.log('[TRACE-CACHE] addSentence守卫 | 清除已学句子的scheduledDate | english="' + (sentence.english || '').substring(0, 30) + '" | scheduledDate=' + updatedSentence.scheduledDate + ' → undefined');
+        updatedSentence.scheduledDate = undefined;
+      }
+      console.log('[TRACE-SCHEDULE] addSentence合并结果 | intervalIndex=' + updatedSentence.intervalIndex + ' | scheduledDate=' + (updatedSentence.scheduledDate || '无'));
+
       await dbService.put(updatedSentence);
+      // 修复F：写入驱逐检测基线标记
+      try { localStorage.setItem('d3s_has_data', '1'); } catch { /* ignore */ }
       if (syncToCloud && supabaseService.isReady) {
         supabaseService.syncSentences([updatedSentence]);
       }
@@ -100,12 +122,15 @@ export const storageSentenceService = {
       };
     }
 
+    console.log('[TRACE-SCHEDULE] addSentence | 新句子 | english="' + (sentence.english || '').substring(0, 30) + '" | scheduledDate=' + (sentence.scheduledDate || '无') + ' | intervalIndex=' + (sentence.intervalIndex ?? 'undefined'));
     const entry = {
       ...sentence,
       english: sentence.english.trim(),
       updatedAt: Date.now()
     };
     await dbService.put(entry);
+    // 修复F：写入驱逐检测基线标记
+    try { localStorage.setItem('d3s_has_data', '1'); } catch { /* ignore */ }
     if (syncToCloud && supabaseService.isReady) supabaseService.syncSentences([entry]);
     return { success: true, message: '添加成功' };
   },
@@ -156,12 +181,15 @@ export const storageSentenceService = {
 
     // 守卫：已学句子不允许设有 scheduledDate，防止脏数据写入
     if (updated.intervalIndex > 0 && updated.scheduledDate) {
+      console.warn('[TRACE-SCHEDULE] ⚠️ updateSentenceFields守卫触发 | english="' + (updated.english || '').substring(0, 30) + '" | intervalIndex=' + updated.intervalIndex + ' | 清除scheduledDate=' + updated.scheduledDate);
       console.warn('⚠️ updateSentenceFields: 已学句子不允许设置 scheduledDate，已自动清除', {
         english: updated.english,
         intervalIndex: updated.intervalIndex,
       });
       updated.scheduledDate = undefined;
     }
+    
+    console.log('[TRACE-SCHEDULE] updateSentenceFields | english="' + (updated.english || '').substring(0, 30) + '" | 更新字段: ' + JSON.stringify(Object.keys(fields)) + ' | 结果intervalIndex=' + updated.intervalIndex + ' | 结果scheduledDate=' + (updated.scheduledDate || '无'));
 
     await dbService.put(updated);
 
@@ -228,6 +256,8 @@ export const storageSentenceService = {
     localStorage.removeItem('d3s_daily_selection');
     localStorage.removeItem('d3s_last_sync_time');
     localStorage.removeItem('d3s_last_incremental_sync_time');
+    // 修复F：数据已清除，移除驱逐检测基线
+    localStorage.removeItem('d3s_has_data');
     if (supabaseService.isReady) {
       supabaseService.syncSentences([]);
     }

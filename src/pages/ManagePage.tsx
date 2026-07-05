@@ -193,6 +193,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
         scheduledDate
       };
       
+      console.log('[TRACE-SCHEDULE] ManagePage预约 | english="' + english + '" | scheduledDate=' + scheduledDate + ' | intervalIndex=0');
       await storageService.addSentence(newItem);
       
       await onUpdate();

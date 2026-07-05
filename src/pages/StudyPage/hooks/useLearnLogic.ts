@@ -5,6 +5,7 @@ import { deviceService } from '../../../services/deviceService';
 import { syncQueueService } from '../../../services/syncQueueService';
 import { getLocalDateString } from '../../../utils/date';
 import { LEARN_XP, LEARNED_ANIMATION_DELAY, getNextReviewDate } from '../../../constants';
+import { syncMemoryDailyCache } from './useDailySelection';
 
 interface UseLearnLogicProps {
   sentences: Sentence[];
@@ -95,9 +96,13 @@ export const useLearnLogic = ({
       
       setCompletedIds(prev => new Set(prev).add(id));
       
-      setDailySelection(prev => 
-        prev.map(s => s.id === id ? { ...s, intervalIndex: 1 } : s)
-      );
+      setDailySelection(prev => {
+        const updated = prev.map(s => s.id === id ? { ...s, intervalIndex: 1, scheduledDate: undefined } : s);
+        // 同步更新模块级缓存，防止组件重新挂载时读取到旧数据
+        console.log('[TRACE-CACHE] useLearnLogic标为已学 | id=' + id + ' | intervalIndex: 0→1 | scheduledDate: 清除');
+        syncMemoryDailyCache(() => updated, 'useLearnLogic.markLearned');
+        return updated;
+      });
       
       try {
         await onUpdate();
@@ -130,9 +135,13 @@ export const useLearnLogic = ({
         return next;
       });
       
-      setDailySelection(prev => 
-        prev.map(s => s.id === id ? { ...s, intervalIndex: 0 } : s)
-      );
+      setDailySelection(prev => {
+        const rolledBack = prev.map(s => s.id === id ? { ...s, intervalIndex: 0 } : s);
+        // 回滚时同步缓存
+        console.log('[TRACE-CACHE] useLearnLogic回滚 | id=' + id + ' | intervalIndex: 回滚→0');
+        syncMemoryDailyCache(() => rolledBack, 'useLearnLogic.rollback');
+        return rolledBack;
+      });
       
       setAnimatingLearnedId(null);
       isMarkLearnedSubmittingRef.current = false;
