@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { Sentence } from '../types';
 import { storageService } from '../services/storage';
+import { supabaseService } from '../services/supabaseService';
 import { useSync } from './SyncContext';
 import { useAppContext } from './AppContext';
 import { getLocalDateString } from '../utils/date';
@@ -211,14 +212,92 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
   const refreshSentencesRef = useRef(refreshSentences);
   refreshSentencesRef.current = refreshSentences;
 
-  useEffect(() => {
-    if (previousSentencesRef.current.length > 0) {
-      console.log('📚 SentenceContext: 使用缓存数据立即渲染');
-      setSentences(previousSentencesRef.current);
-      setIsInitialLoading(false);
+  // 防线A：信号消费必须在同步前
+  // 先消费跨设备信号 → 覆盖本地 → 再 refreshSentences（加载已覆盖的本地数据 + 同步云端）
+  // 若 initSync 先跑，守卫会在信号消费前触发回推，污染云端
+  // 信号消费失败不阻塞主流程（防线C 会兜底：守卫检查未消费信号 → 跳过回推）
+  const consumeOverwriteSignalsBeforeSync = useCallback(async (): Promise<number> => {
+    if (!isConfiguredRef.current || !isOnlineRef.current) return 0;
+    if (!supabaseService.isReady) return 0;
+
+    try {
+      const signals = await supabaseService.checkAndConsumeSyncSignals();
+      if (!signals || signals.length === 0) return 0;
+
+      console.log(`[OVERWRITE-SIGNAL] 发现 ${signals.length} 条待消费的单句覆盖信号`);
+
+      // 顺带异步清理过期信号（30天前），避免 sync_signals 表无限增长
+      // 防线B：30天窗口，给离线设备充足时间消费信号
+      // 不阻塞当前流程，静默失败
+      supabaseService.cleanupExpiredSyncSignals(30).catch(() => { /* ignore */ });
+
+      let appliedCount = 0;
+      for (const signal of signals) {
+        // 拉取云端句子最新数据
+        const cloudSentence = await supabaseService.fetchSingleCloudSentence(
+          signal.sentenceId,
+          signal.english
+        );
+        if (!cloudSentence) {
+          console.warn(`[OVERWRITE-SIGNAL] 云端未找到句子: ${signal.sentenceId}`);
+          continue;
+        }
+
+        // 检查1：信号时间 vs 云端当前时间
+        // 若云端 updatedAt > 信号 originalUpdatedAt，说明信号已陈旧
+        if (signal.originalUpdatedAt > 0 &&
+            cloudSentence.updatedAt > signal.originalUpdatedAt) {
+          console.log(`[OVERWRITE-SIGNAL] 信号已陈旧(检查1) | english="${signal.english.substring(0, 20)}" | signalTime=${signal.originalUpdatedAt} | cloudTime=${cloudSentence.updatedAt}`);
+          continue;
+        }
+
+        // 检查2：本地 updatedAt vs 云端当前 updatedAt
+        // 若本地 updatedAt > 云端 updatedAt，说明本地有更新的进度，跳过保护
+        const localSentences = await storageService.getSentences();
+        const localSentence = localSentences.find(s =>
+          s.id === signal.sentenceId ||
+          s.english.trim().toLowerCase() === signal.english.trim().toLowerCase()
+        );
+        if (localSentence && cloudSentence.updatedAt > 0) {
+          if (localSentence.updatedAt > cloudSentence.updatedAt) {
+            console.log(`[OVERWRITE-SIGNAL] 本地进度更新(检查2) | english="${signal.english.substring(0, 20)}" | localTime=${localSentence.updatedAt} | cloudTime=${cloudSentence.updatedAt}`);
+            continue;
+          }
+        }
+
+        // 双重检查通过，执行静默覆盖
+        await storageService.overwriteSingleSentence(cloudSentence);
+        appliedCount++;
+        console.log(`[OVERWRITE-SIGNAL] 静默覆盖完成 | english="${signal.english.substring(0, 20)}"`);
+      }
+
+      return appliedCount;
+    } catch (err) {
+      console.error('[OVERWRITE-SIGNAL] 信号检查失败:', err instanceof Error ? err.message : String(err));
+      return 0;
     }
-    refreshSentences();
-  }, [isConfigured, isOnline, refreshSentences]);
+  }, []);
+
+  useEffect(() => {
+    const init = async () => {
+      if (previousSentencesRef.current.length > 0) {
+        console.log('📚 SentenceContext: 使用缓存数据立即渲染');
+        setSentences(previousSentencesRef.current);
+        setIsInitialLoading(false);
+      }
+
+      // 防线A：先消费跨设备覆盖信号，再执行同步
+      // 原因：若同步先跑，守卫会在信号消费前触发回推，污染云端
+      // 信号消费失败不阻塞主流程（防线C 会兜底）
+      const appliedCount = await consumeOverwriteSignalsBeforeSync();
+      if (appliedCount > 0) {
+        console.log(`[OVERWRITE-SIGNAL] 共静默覆盖 ${appliedCount} 条句子，继续执行同步`);
+      }
+
+      refreshSentences();
+    };
+    init();
+  }, [isConfigured, isOnline, refreshSentences, consumeOverwriteSignalsBeforeSync]);
 
   // 跨日检测：用户切回标签页或定时检查时，若日期变更则重新加载数据
   // F4/F5/F6: 补充 pageshow/focus 监听 + 后台恢复 forceSync + 60s 间隔
@@ -277,6 +356,9 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
       clearInterval(intervalId);
     };
   }, []);
+
+  // 注：原"延迟2秒检查信号"的 useEffect 已移除，改为防线A（信号消费前置在 refreshSentences 之前）
+  // 详见上方 consumeOverwriteSignalsBeforeSync + init useEffect
 
   return (
     <SentenceContext.Provider value={{ sentences, refreshSentences, isSyncing, syncMessage, isInitialLoading, syncError }}>

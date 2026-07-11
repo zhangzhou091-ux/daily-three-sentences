@@ -51,6 +51,9 @@ export const storageService = {
   clearSentenceAudio: storageSentenceService.clearSentenceAudio,
   clearVocabulary: storageSentenceService.clearVocabulary,
   clearAllData: storageSentenceService.clearAllData,
+  // 单句覆盖相关方法
+  overwriteSingleSentence: storageSentenceService.overwriteSingleSentence,
+  undoRestoreSingleSentence: storageSentenceService.undoRestoreSingleSentence,
 
   // ==============================================
   // 设置相关方法

@@ -2072,7 +2072,7 @@ class SyncQueueService {
   async clearCorruptedStorage(): Promise<void> {
     localStorage.removeItem(STORAGE_KEY_ALL_QUEUES);
     localStorage.removeItem(EMERGENCY_STORE_KEY);
-    
+
     this.markLearnedQueue.clear();
     this.reviewFeedbackQueue.clear();
     this.addSentenceQueue.clear();
@@ -2080,9 +2080,59 @@ class SyncQueueService {
     this.statsSyncQueue.clear();
     this.retryCount.clear();
     this.lastSyncTime = 0;
-    
+
     this.emit('queueChanged', this.getQueueStatus());
     logger.info('已清除损坏的存储数据');
+  }
+
+  /**
+   * 移除指定句子的所有待处理队列任务
+   *
+   * 使用场景：单句覆盖前清理本地待同步队列
+   *  - 覆盖前的本地状态（intervalIndex/reps 等）即将被云端数据覆盖
+   *  - 若不清队列，旧状态的同步任务可能在上传时把云端又改回旧状态
+   *
+   * 清理范围：
+   *  - markLearnedQueue（按 sentenceId 索引）
+   *  - reviewFeedbackQueue（按 sentenceId 索引）
+   *  - addSentenceQueue（按 sentence.id 索引）
+   *  - dictationRecordQueue（按 sentenceId_timestamp 索引，需前缀匹配）
+   *  - statsSyncQueue 不受影响（与单句无关）
+   *
+   * @param sentenceId 句子 ID
+   * @returns 清理的任务数量
+   */
+  removeTasksForSentence(sentenceId: string): number {
+    if (!sentenceId) return 0;
+    let removed = 0;
+
+    // markLearned / reviewFeedback / addSentence 均按 sentenceId 索引
+    if (this.markLearnedQueue.delete(sentenceId)) removed++;
+    if (this.reviewFeedbackQueue.delete(sentenceId)) removed++;
+    if (this.addSentenceQueue.delete(sentenceId)) removed++;
+
+    // dictationRecordQueue 按 `${sentenceId}_${timestamp}` 索引，需前缀匹配
+    const dictationKeysToRemove: string[] = [];
+    for (const key of this.dictationRecordQueue.keys()) {
+      if (typeof key === 'string' && key.startsWith(`${sentenceId}_`)) {
+        dictationKeysToRemove.push(key);
+      }
+    }
+    for (const key of dictationKeysToRemove) {
+      this.dictationRecordQueue.delete(key);
+      removed++;
+    }
+
+    // 清理对应的 retryCount
+    this.retryCount.delete(sentenceId);
+
+    if (removed > 0) {
+      this.saveToStorageImmediate();
+      this.emit('queueChanged', this.getQueueStatus());
+      logger.info(`已清理句子 ${sentenceId} 的 ${removed} 个待同步任务`);
+    }
+
+    return removed;
   }
 }
 

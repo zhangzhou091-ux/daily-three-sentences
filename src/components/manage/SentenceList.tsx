@@ -10,6 +10,8 @@ interface SentenceListProps {
   onDeleteAudio?: (sentence: Sentence) => void;
   onGenerateAudio?: (sentence: Sentence, engine: TTSEngine) => void;
   onEdit?: (sentence: Sentence, english: string, chinese: string, tags: string[]) => void;
+  /** 单句从云端恢复（覆盖本地） */
+  onOverwriteFromCloud?: (sentence: Sentence) => void;
 }
 
 const hasAudioCache = (s: Sentence): boolean => {
@@ -39,9 +41,12 @@ interface RowData {
   generatingAudioId: string | null;
   generatingEngine: TTSEngine | null;
   enginePopupId: string | null;
+  /** 正在执行云端恢复的句子 ID */
+  overwritingFromCloudId: string | null;
   onEdit: SentenceListProps['onEdit'];
   onDeleteAudio: SentenceListProps['onDeleteAudio'];
   onGenerateAudio: SentenceListProps['onGenerateAudio'];
+  onOverwriteFromCloud: SentenceListProps['onOverwriteFromCloud'];
   setEditEn: (v: string) => void;
   setEditZh: (v: string) => void;
   setEditTags: (v: string) => void;
@@ -58,7 +63,8 @@ const SentenceRow = memo(({ index, style, ...data }: RowComponentProps<RowData>)
   const {
     sentences, editingId, editEn, editZh, editTags,
     audioDeleteConfirmId, generatingAudioId, generatingEngine, enginePopupId,
-    onEdit, onDeleteAudio, onGenerateAudio,
+    overwritingFromCloudId,
+    onEdit, onDeleteAudio, onGenerateAudio, onOverwriteFromCloud,
     setEditEn, setEditZh, setEditTags,
     startEditing, cancelEditing, handleSaveEdit,
     handleAudioDeleteClick, handleGenerateClick, toggleEnginePopup,
@@ -236,9 +242,21 @@ const SentenceRow = memo(({ index, style, ...data }: RowComponentProps<RowData>)
                     <div key={i} className={`w-1.5 h-1.5 rounded-full ${i < s.intervalIndex ? 'bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)]' : 'bg-gray-200'}`} />
                   ))}
                 </div>
-                <span className="text-[10px] font-black text-gray-600 uppercase tracking-[0.2em]">
-                  {s.intervalIndex >= 9 ? 'MASTERED' : `STAGE ${s.intervalIndex}`}
-                </span>
+                <div className="flex items-center gap-3">
+                  {onOverwriteFromCloud && (
+                    <button
+                      onClick={() => onOverwriteFromCloud(s)}
+                      disabled={overwritingFromCloudId === s.id}
+                      className="text-[10px] font-bold text-gray-500 hover:text-blue-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      title="用云端最新数据覆盖本地（包括学习进度）"
+                    >
+                      {overwritingFromCloudId === s.id ? '⏳ 同步中...' : '☁️ 从云端恢复'}
+                    </button>
+                  )}
+                  <span className="text-[10px] font-black text-gray-600 uppercase tracking-[0.2em]">
+                    {s.intervalIndex >= 9 ? 'MASTERED' : `STAGE ${s.intervalIndex}`}
+                  </span>
+                </div>
               </div>
             </>
           )}
@@ -248,7 +266,7 @@ const SentenceRow = memo(({ index, style, ...data }: RowComponentProps<RowData>)
   );
 });
 
-export const SentenceList: React.FC<SentenceListProps> = memo(({ sentences, onDeleteAudio, onGenerateAudio, onEdit }) => {
+export const SentenceList: React.FC<SentenceListProps> = memo(({ sentences, onDeleteAudio, onGenerateAudio, onEdit, onOverwriteFromCloud }) => {
   const [audioDeleteConfirmId, setAudioDeleteConfirmId] = useState<string | null>(null);
   const [generatingAudioId, setGeneratingAudioId] = useState<string | null>(null);
   const [generatingEngine, setGeneratingEngine] = useState<TTSEngine | null>(null);
@@ -257,6 +275,7 @@ export const SentenceList: React.FC<SentenceListProps> = memo(({ sentences, onDe
   const [editEn, setEditEn] = useState('');
   const [editZh, setEditZh] = useState('');
   const [editTags, setEditTags] = useState('');
+  const [overwritingFromCloudId, setOverwritingFromCloudId] = useState<string | null>(null);
 
   useEffect(() => {
     if (audioDeleteConfirmId) {
@@ -331,12 +350,29 @@ export const SentenceList: React.FC<SentenceListProps> = memo(({ sentences, onDe
     setEditingId(null);
   };
 
+  // 包装云端恢复操作，管理 loading 状态
+  const handleOverwriteFromCloud = useCallback(async (s: Sentence) => {
+    if (!onOverwriteFromCloud) return;
+    setOverwritingFromCloudId(s.id);
+    try {
+      onOverwriteFromCloud(s);
+    } finally {
+      // 由父组件触发数据刷新后会传入新的 sentences，loading 状态随之清除
+      // 此处设置 8 秒兜底超时，避免异常时按钮永久 disabled
+      setTimeout(() => {
+        setOverwritingFromCloudId(prev => prev === s.id ? null : prev);
+      }, 8000);
+    }
+  }, [onOverwriteFromCloud]);
+
   /** 构建 rowProps，sentences 引用变化时整个对象更新，触发 List 重渲染 */
   const rowProps: RowData = useMemo(() => ({
     sentences,
     editingId, editEn, editZh, editTags,
     audioDeleteConfirmId, generatingAudioId, generatingEngine, enginePopupId,
+    overwritingFromCloudId,
     onEdit, onDeleteAudio, onGenerateAudio,
+    onOverwriteFromCloud: onOverwriteFromCloud ? handleOverwriteFromCloud : undefined,
     setEditEn, setEditZh, setEditTags,
     startEditing, cancelEditing, handleSaveEdit,
     handleAudioDeleteClick, handleGenerateClick, toggleEnginePopup,
@@ -344,7 +380,9 @@ export const SentenceList: React.FC<SentenceListProps> = memo(({ sentences, onDe
     sentences,
     editingId, editEn, editZh, editTags,
     audioDeleteConfirmId, generatingAudioId, generatingEngine, enginePopupId,
+    overwritingFromCloudId,
     onEdit, onDeleteAudio, onGenerateAudio,
+    handleOverwriteFromCloud,
   ]);
 
   /** 动态行高：编辑中的行用更大的高度 */

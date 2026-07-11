@@ -700,6 +700,9 @@ class SupabaseService {
           return s;
         });
 
+        // 防线C：预查询未消费信号对应的句子ID，用于守卫跳过回推
+        const unconsumedSignalIds = await this.fetchUnconsumedSignalSentenceIds();
+
         const useIncremental = Date.now() - this.lastCloudFetchTime < this.CACHE_VALID_DURATION && this.lastSyncTime > 0;
         const cloudEnglishMap = await this.fetchCloudSentences(useIncremental);
 
@@ -768,9 +771,16 @@ class SupabaseService {
                 updatedAt: Date.now(),
               };
               merged.push(guarded);
-              const uploadData = this.mapSentenceToDb(guarded, this._userName);
-              uploadData.id = cloudSentence.id;
-              toUpload.push(this.preserveCloudAudioPaths(uploadData, cloudSentence));
+              // 防线C：若该句子有未消费的覆盖信号，不回推云端
+              // 原因：其他设备执行了单句覆盖（A push 云端为权威），本设备的旧学习状态不应污染云端
+              // 信号消费时会用 dbService.put 绕过守卫覆盖本地
+              if (unconsumedSignalIds.has(localSentence.id)) {
+                console.log('[TRACE-SYNC] 守卫跳过回推(有未消费信号) | english="' + (localSentence.english || '').substring(0, 20) + '"');
+              } else {
+                const uploadData = this.mapSentenceToDb(guarded, this._userName);
+                uploadData.id = cloudSentence.id;
+                toUpload.push(this.preserveCloudAudioPaths(uploadData, cloudSentence));
+              }
             } else {
               // 双方都已学或本地未学：用云端数据，但清除已学句子的脏 scheduledDate
               if ((cloudSentence2.intervalIndex ?? 0) > 0 && cloudSentence2.scheduledDate) {
@@ -864,6 +874,9 @@ class SupabaseService {
       }
       
       try {
+        // 防线C：预查询未消费信号对应的句子ID，用于守卫跳过回推
+        const unconsumedSignalIds = await this.fetchUnconsumedSignalSentenceIds();
+
         const cloudEnglishMap = await this.fetchCloudSentences(false);
         this.cloudSentencesCache = cloudEnglishMap;
         this.lastCloudFetchTime = Date.now();
@@ -958,10 +971,15 @@ class SupabaseService {
                 updatedAt: Date.now(),
               };
               merged.push(guarded);
+              // 防线C：若该句子有未消费的覆盖信号，不回推云端
               if (deviceService.canUploadSync()) {
-                const uploadData = this.mapSentenceToDb(guarded, this._userName);
-                uploadData.id = cloudSentence.id;
-                toUpload.push(this.preserveCloudAudioPaths(uploadData, cloudSentence));
+                if (unconsumedSignalIds.has(localSentence.id)) {
+                  console.log('[TRACE-SYNC] 守卫跳过回推(有未消费信号) | english="' + (localSentence.english || '').substring(0, 20) + '"');
+                } else {
+                  const uploadData = this.mapSentenceToDb(guarded, this._userName);
+                  uploadData.id = cloudSentence.id;
+                  toUpload.push(this.preserveCloudAudioPaths(uploadData, cloudSentence));
+                }
               }
             } else {
               // 双方都已学或本地未学：用云端数据，但清除已学句子的脏 scheduledDate
@@ -1436,6 +1454,408 @@ class SupabaseService {
       console.error('❌ 删除句子异常:', err instanceof Error ? err.message : err);
       return false;
     }
+  }
+
+  // ==============================================
+  // 单句覆盖相关方法（跨设备同步）
+  // ==============================================
+
+  /**
+   * 获取或创建持久化的设备 ID（基于 localStorage）
+   * 用于跨设备信号消费去重，避免同一设备重复消费同一信号
+   */
+  getDeviceId(): string {
+    const KEY = 'd3s_device_id';
+    let id = localStorage.getItem(KEY);
+    if (!id) {
+      id = `dev_${generateUUID()}`;
+      try {
+        localStorage.setItem(KEY, id);
+      } catch {
+        // localStorage 不可用时，使用内存中的 ID
+      }
+    }
+    return id;
+  }
+
+  /**
+   * 从云端拉取单条句子（用于覆盖本地）
+   * 双查询策略：先按 ID 精确查询，失败则按 english ilike 模糊查询兜底
+   */
+  async fetchSingleCloudSentence(
+    sentenceId: string,
+    english?: string
+  ): Promise<Sentence | null> {
+    if (!this._client || !this.isReady) {
+      return null;
+    }
+
+    return this.enqueueSync<Sentence | null>(async () => {
+      if (!this._client) return null;
+
+      try {
+        // 查询1：按 ID 精确匹配
+        const { data: byId, error: errById } = await this._client
+          .from('sentences')
+          .select('*')
+          .eq('id', sentenceId)
+          .eq('username', this._userName)
+          .maybeSingle();
+
+        if (!errById && byId) {
+          return this.mapDbToSentence(byId as CloudSentenceData);
+        }
+
+        // 查询2：按 english 模糊匹配兜底（仅当传入 english 时）
+        if (english && english.trim()) {
+          const { data: byEn, error: errByEn } = await this._client
+            .from('sentences')
+            .select('*')
+            .eq('username', this._userName)
+            .ilike('english', english.trim())
+            .maybeSingle();
+
+          if (!errByEn && byEn) {
+            return this.mapDbToSentence(byEn as CloudSentenceData);
+          }
+        }
+
+        return null;
+      } catch (err) {
+        console.error('❌ fetchSingleCloudSentence 失败:', err instanceof Error ? err.message : err);
+        return null;
+      }
+    }, {
+      type: 'sentence',
+      id: `fetch_single_${sentenceId}`,
+      deduplicate: true,
+      entityId: `fetch_single_${sentenceId}`,
+      timeout: 15000,
+    });
+  }
+
+  /**
+   * 向 sync_signals 表推送单句覆盖信号（用于跨设备同步）
+   * 其他设备在打开应用时会通过 checkAndConsumeSyncSignals 消费此信号
+   */
+  async pushSingleSentenceOverwriteSignal(
+    sentenceId: string,
+    english: string,
+    originalUpdatedAt: number
+  ): Promise<SyncResult> {
+    if (!this._client || !this.isReady) {
+      return { success: false, message: '☁️ 云同步未配置，跳过信号推送' };
+    }
+
+    return this.enqueueSync<SyncResult>(async () => {
+      if (!this._client) {
+        return { success: false, message: '☁️ 云同步未配置，跳过信号推送' };
+      }
+
+      try {
+        const record = {
+          user_name: this._userName,
+          sentence_id: sentenceId,
+          english: english,
+          original_updated_at: originalUpdatedAt,
+          payload: { originalUpdatedAt, english },
+          consumed_by: [],
+          created_at: new Date().toISOString(),
+        };
+
+        const { error } = await this._client
+          .from('sync_signals')
+          .insert(record);
+
+        if (error) {
+          // 表不存在等错误静默处理，避免影响主流程
+          console.warn('⚠️ pushSingleSentenceOverwriteSignal 失败（可能 sync_signals 表未创建）:', error.message);
+          return { success: false, message: error.message };
+        }
+
+        console.log(`✅ 单句覆盖信号已推送 | sentenceId=${sentenceId}`);
+        return { success: true, message: '信号推送成功' };
+      } catch (err) {
+        console.error('❌ pushSingleSentenceOverwriteSignal 异常:', err instanceof Error ? err.message : err);
+        return { success: false, message: err instanceof Error ? err.message : String(err) };
+      }
+    }, {
+      type: 'sentence',
+      id: `push_signal_${sentenceId}`,
+      deduplicate: true,
+      entityId: `push_signal_${sentenceId}`,
+      timeout: 15000,
+    });
+  }
+
+  /**
+   * 检查并消费本设备未处理的单句覆盖信号
+   * 按 sentenceId 去重（同句子多个信号取最新一条）
+   * 消费后通过 consumed_by 数组标记本设备，避免重复消费
+   *
+   * 返回的信号列表已通过陈旧检查（双重保护在调用方执行）
+   */
+  async checkAndConsumeSyncSignals(): Promise<Array<{
+    sentenceId: string;
+    english: string;
+    originalUpdatedAt: number;
+    signalCreatedAt: string;
+  }>> {
+    if (!this._client || !this.isReady) {
+      return [];
+    }
+
+    try {
+      const deviceId = this.getDeviceId();
+
+      // 查询本设备未消费的所有信号
+      const { data, error } = await this._client
+        .from('sync_signals')
+        .select('id, sentence_id, english, original_updated_at, payload, created_at, consumed_by')
+        .eq('user_name', this._userName)
+        .not('consumed_by', 'cs', `{${deviceId}}`)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        // 表不存在等错误静默处理
+        console.warn('⚠️ checkAndConsumeSyncSignals 查询失败（可能 sync_signals 表未创建）:', error.message);
+        return [];
+      }
+
+      if (!data || data.length === 0) {
+        return [];
+      }
+
+      // 按 sentenceId 去重：保留最新一条
+      const signalMap = new Map<string, {
+        sentenceId: string;
+        english: string;
+        originalUpdatedAt: number;
+        signalCreatedAt: string;
+        _signalId: string;
+      }>();
+
+      for (const row of data) {
+        const sid = row.sentence_id as string;
+        if (!sid) continue;
+        const existing = signalMap.get(sid);
+        const createdAt = String(row.created_at || '');
+        if (!existing || createdAt > existing.signalCreatedAt) {
+          signalMap.set(sid, {
+            sentenceId: sid,
+            english: String(row.english || ''),
+            originalUpdatedAt: Number(row.original_updated_at || (row.payload?.originalUpdatedAt) || 0),
+            signalCreatedAt: createdAt,
+            _signalId: String(row.id),
+          });
+        }
+      }
+
+      const result = Array.from(signalMap.values()).map(({ _signalId, ...rest }) => rest);
+
+      // 异步标记为已消费（不阻塞返回）
+      const signalIds = Array.from(signalMap.values()).map(s => s._signalId);
+      if (signalIds.length > 0) {
+        // 用 Promise.resolve 包装：rpc 返回 PromiseLike（无 .catch），转为 Promise 以便捕获异常
+        Promise.resolve(
+          this._client.rpc('array_append_consumed_by', {
+            signal_ids: signalIds,
+            device_id: deviceId,
+          })
+        ).then(({ error: rpcErr }: { error: { message?: string } | null }) => {
+          if (rpcErr) {
+            // RPC 函数可能不存在，退化为逐条 update
+            console.warn('⚠️ array_append_consumed_by RPC 失败，退化为逐条更新:', rpcErr.message);
+            this._fallbackMarkConsumed(signalIds, deviceId);
+          }
+        }).catch((e: unknown) => {
+          console.warn('⚠️ 标记信号已消费失败:', e instanceof Error ? e.message : String(e));
+        });
+      }
+
+      return result;
+    } catch (err) {
+      console.error('❌ checkAndConsumeSyncSignals 异常:', err instanceof Error ? err.message : err);
+      return [];
+    }
+  }
+
+  /**
+   * 退化的逐条标记消费（RPC 函数不存在时使用）
+   * 注意：此路径存在读-改-写竞态，多设备并发消费同一信号时可能丢失某设备标记
+   * 生产环境应优先使用 RPC array_append 原子操作，此为降级方案
+   */
+  private async _fallbackMarkConsumed(signalIds: string[], deviceId: string): Promise<void> {
+    if (!this._client) return;
+    for (const id of signalIds) {
+      try {
+        // 先读后写：避免并发覆盖其他设备的 consumed_by
+        const { data: row } = await this._client
+          .from('sync_signals')
+          .select('consumed_by')
+          .eq('id', id)
+          .maybeSingle();
+
+        const existing: string[] = Array.isArray(row?.consumed_by) ? row!.consumed_by : [];
+        if (existing.includes(deviceId)) continue;
+
+        await this._client
+          .from('sync_signals')
+          .update({ consumed_by: [...existing, deviceId] })
+          .eq('id', id);
+      } catch {
+        // 单条失败不影响整体流程
+      }
+    }
+  }
+
+  /**
+   * 清理 sync_signals 表中已过期的信号（默认 30 天）
+   * 避免 sync_signals 表只写不删导致无限增长
+   * 防线B：从 7 天延长到 30 天，给离线设备充足时间消费信号
+   * 静默失败，不影响主流程
+   */
+  async cleanupExpiredSyncSignals(olderThanDays: number = 30): Promise<number> {
+    if (!this._client || !this.isReady) {
+      return 0;
+    }
+
+    try {
+      const cutoffDate = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+
+      const { data, error } = await this._client
+        .from('sync_signals')
+        .delete()
+        .lt('created_at', cutoffDate)
+        .select('id');
+
+      if (error) {
+        // 表不存在等错误静默处理
+        console.warn('⚠️ cleanupExpiredSyncSignals 失败（可能 sync_signals 表未创建）:', error.message);
+        return 0;
+      }
+
+      const deleted = Array.isArray(data) ? data.length : 0;
+      if (deleted > 0) {
+        console.log(`[OVERWRITE-SIGNAL] 清理 ${deleted} 条过期信号（>${olderThanDays}天）`);
+      }
+      return deleted;
+    } catch (err) {
+      console.warn('⚠️ cleanupExpiredSyncSignals 异常:', err instanceof Error ? err.message : String(err));
+      return 0;
+    }
+  }
+
+  /**
+   * 防线C：获取当前设备未消费的覆盖信号对应的句子ID集合
+   *
+   * 用途：在 syncSentences / syncSentencesWithFreshData 的已学守卫中，
+   * 若该句子有未消费的覆盖信号，则不回推云端（避免旧数据污染云端）
+   *
+   * @returns 句子ID集合（空集合表示无未消费信号或查询失败）
+   */
+  private async fetchUnconsumedSignalSentenceIds(): Promise<Set<string>> {
+    if (!this._client || !this.isReady) return new Set();
+
+    try {
+      const deviceId = this.getDeviceId();
+      const { data, error } = await this._client
+        .from('sync_signals')
+        .select('sentence_id, consumed_by')
+        .eq('user_name', this._userName);
+
+      if (error || !data) return new Set();
+
+      const result = new Set<string>();
+      for (const row of data) {
+        const consumedBy: string[] = Array.isArray(row?.consumed_by) ? row.consumed_by : [];
+        if (!consumedBy.includes(deviceId)) {
+          if (row.sentence_id) result.add(row.sentence_id);
+        }
+      }
+      return result;
+    } catch {
+      return new Set();
+    }
+  }
+
+  /**
+   * 带乐观锁的单条句子强制更新（用于从云端恢复后的回写）
+   *
+   * 实现：用 filter 式 update + .eq('updatedat', expectedCloudUpdatedAt)
+   * 只有云端 updatedat 仍等于拉取时的值时才执行更新
+   *
+   * @param sentence 要推送的句子数据（updatedAt 应为调用方设定的 now()）
+   * @param expectedCloudUpdatedAt 拉取时记录的云端 updatedat（乐观锁期望值）
+   * @returns success=true 表示推送成功；success=false + actualData 表示并发冲突
+   */
+  async forceUpdateSentenceWithLock(
+    sentence: Sentence,
+    expectedCloudUpdatedAt: number
+  ): Promise<{ success: boolean; actualData?: Sentence; message: string }> {
+    if (!this._client || !this.isReady) {
+      return { success: false, message: '☁️ 云同步未配置' };
+    }
+
+    return this.enqueueSync(async () => {
+      if (!this._client) {
+        return { success: false, message: '☁️ 云同步未配置' };
+      }
+
+      try {
+        const dbSentence = this.mapSentenceToDb(sentence, this._userName);
+
+        // 乐观锁：WHERE id = ? AND username = ? AND updatedat = ?
+        const { data, error, count } = await this._client
+          .from('sentences')
+          .update(dbSentence)
+          .eq('id', sentence.id)
+          .eq('username', this._userName)
+          .eq('updatedat', expectedCloudUpdatedAt)
+          .select('*');
+
+        if (error) {
+          return { success: false, message: `乐观锁推送失败: ${error.message}` };
+        }
+
+        // 成功更新：data 非空表示云端 matched 并更新了
+        if (data && data.length > 0) {
+          // 更新本地缓存
+          const normalizedEnglish = sentence.english.trim().toLowerCase();
+          this.cloudSentencesCache.set(normalizedEnglish, data[0] as CloudSentenceData);
+          console.log(`[OPT-LOCK] 乐观锁推送成功 | english="${sentence.english.substring(0, 20)}" | new updatedAt=${sentence.updatedAt}`);
+          return { success: true, message: '推送成功' };
+        }
+
+        // 0 行受影响 → 云端 updatedat 已变（并发冲突）
+        // 重新拉取最新云端数据返回给调用方
+        const { data: latestData } = await this._client
+          .from('sentences')
+          .select('*')
+          .eq('id', sentence.id)
+          .eq('username', this._userName)
+          .maybeSingle();
+
+        const latestSentence = latestData ? this.mapDbToSentence(latestData as CloudSentenceData) : undefined;
+        console.warn(`[OPT-LOCK] 乐观锁冲突 | english="${sentence.english.substring(0, 20)}" | expected=${expectedCloudUpdatedAt} | cloud已变更`);
+        return {
+          success: false,
+          actualData: latestSentence,
+          message: '云端数据已被其他设备更新',
+        };
+      } catch (err) {
+        return {
+          success: false,
+          message: `乐观锁推送异常: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }, {
+      type: 'sentence',
+      id: `force_update_${sentence.id}`,
+      deduplicate: true,
+      entityId: `force_update_${sentence.id}`,
+      timeout: 15000,
+    });
   }
 }
 

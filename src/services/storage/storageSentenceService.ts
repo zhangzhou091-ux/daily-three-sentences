@@ -270,5 +270,87 @@ export const storageSentenceService = {
     await dbService.clear();
     localStorage.clear();
     supabaseService.clearConfig();
-  }
+  },
+
+  // ==============================================
+  // 单句覆盖相关方法
+  // ==============================================
+
+  /**
+   * 用云端句子覆盖本地数据（绕过守卫，直接 dbService.put）
+   *
+   * 关键设计：
+   * 1. 直接调用 dbService.put，绕过 addSentence/updateSentenceFields 的已学守卫
+   *    （这是用户主动确认的覆盖操作，允许重置学习状态）
+   * 2. 保留本地音频缓存路径（ttsAudioPathEl/ttsAudioPathMm）
+   *    避免覆盖后丢失已下载的音频文件
+   * 3. 已学句子（intervalIndex > 0）清除 scheduledDate，避免脏预约数据
+   * 4. 返回备份快照，供 5 秒撤销使用
+   * 5. 不覆盖 updatedAt：由调用方控制，使本地与云端 updatedAt 一致
+   *    （配合乐观锁 Push，保证本地=云端的时间戳）
+   *
+   * @param cloudSentence 云端拉取的句子数据（updatedAt 应为调用方设定的值）
+   * @returns 备份快照（覆盖前的本地数据）；若本地无此句子则返回 null
+   */
+  overwriteSingleSentence: async (cloudSentence: Sentence): Promise<Sentence | null> => {
+    const normalizedEnglish = cloudSentence.english.trim().toLowerCase();
+    const existing = await dbService.findByEnglish(normalizedEnglish);
+
+    // 若本地无此句子，无法覆盖（也无撤销需求），直接写入新条目
+    if (!existing) {
+      const newEntry: Sentence = {
+        ...cloudSentence,
+        english: cloudSentence.english.trim(),
+        // 保留传入的 updatedAt（与乐观锁 Push 的时间戳一致）
+      };
+      // 已学句子清除脏 scheduledDate
+      if ((newEntry.intervalIndex ?? 0) > 0 && newEntry.scheduledDate) {
+        newEntry.scheduledDate = undefined;
+      }
+      await dbService.put(newEntry);
+      try { localStorage.setItem('d3s_has_data', '1'); } catch { /* ignore */ }
+      return null;
+    }
+
+    // 备份覆盖前的本地状态，用于撤销
+    const backup: Sentence = { ...existing };
+
+    // 构造覆盖后的数据
+    // 关键：保留本地音频路径 + 不覆盖 updatedAt（由调用方控制）
+    const overwritten: Sentence = {
+      ...cloudSentence,
+      // 保留本地 ID（避免 ID 不一致）
+      id: existing.id,
+      // 保留本地音频缓存路径
+      ttsAudioPathEl: existing.ttsAudioPathEl ?? cloudSentence.ttsAudioPathEl,
+      ttsAudioPathMm: existing.ttsAudioPathMm ?? cloudSentence.ttsAudioPathMm,
+      // 已学句子清除脏 scheduledDate（单次清除，不重复）
+      scheduledDate: (cloudSentence.intervalIndex ?? 0) > 0 ? undefined : cloudSentence.scheduledDate,
+      // 保留传入的 updatedAt（与乐观锁 Push 一致，不再 Date.now() 覆盖）
+    };
+
+    await dbService.put(overwritten);
+    try { localStorage.setItem('d3s_has_data', '1'); } catch { /* ignore */ }
+
+    // 不主动推送 supabaseService.syncSentences：避免覆盖后立即又被云端拉回原状态
+    // 云端数据已是最新版本，无需推送
+
+    console.log('[OVERWRITE] 单句覆盖完成 | english="' + (overwritten.english || '').substring(0, 30) + '" | intervalIndex=' + existing.intervalIndex + ' → ' + overwritten.intervalIndex);
+    return backup;
+  },
+
+  /**
+   * 撤销单句覆盖：用备份快照恢复本地数据
+   * 同样使用 dbService.put 直接写入（绕过守卫）
+   *
+   * @param backup 覆盖前的本地快照
+   */
+  undoRestoreSingleSentence: async (backup: Sentence): Promise<void> => {
+    const restored: Sentence = {
+      ...backup,
+      updatedAt: Date.now(),
+    };
+    await dbService.put(restored);
+    console.log('[OVERWRITE] 撤销单句覆盖 | english="' + (restored.english || '').substring(0, 30) + '" | intervalIndex=' + restored.intervalIndex);
+  },
 };

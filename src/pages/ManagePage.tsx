@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { Sentence } from '../types';
 import { storageService } from '../services/storage';
+import { supabaseService } from '../services/supabaseService';
 import { sentenceAudioService } from '../services/sentenceAudioService';
 import { elevenLabsService } from '../services/elevenLabsService';
 import { ttsCloudCacheService } from '../services/ttsCloudCacheService';
@@ -113,6 +114,15 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [isCalendarCollapsed, setIsCalendarCollapsed] = useState(true);
+
+  // 单句覆盖撤销 Toast 状态
+  const [undoToast, setUndoToast] = useState<{ show: boolean; message: string; sentenceId: string | null }>({
+    show: false,
+    message: '',
+    sentenceId: null,
+  });
+  const undoBackupRef = useRef<Sentence | null>(null);
+  const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   const [importProgress, setImportProgress] = useState<ImportProgress>({
     total: 0,
@@ -139,6 +149,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
         abortControllerRef.current.abort();
       }
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
     };
   }, []);
 
@@ -326,6 +337,167 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
     } catch (err) {
       const msg = err instanceof Error ? err.message : '未知错误';
       showToast(`修改失败: ${msg}`, 'error');
+    }
+  }, [onUpdate, showToast]);
+
+  /**
+   * 从云端拉取单条句子并覆盖本地（用户主动触发）
+   *
+   * 流程：
+   * 1. 二次确认（window.confirm 展示字段差异）
+   * 2. 调用 supabaseService.fetchSingleCloudSentence 拉取云端数据
+   * 3. 调用 syncQueueService.removeTasksForSentence 清理本地待同步队列
+   *    （避免旧状态的同步任务把云端又改回旧状态）
+   * 4. 调用 storageService.overwriteSingleSentence 覆盖本地（返回备份）
+   * 5. 触发 onUpdate 刷新 UI
+   * 6. 异步推送跨设备信号（pushSingleSentenceOverwriteSignal）
+   * 7. 显示 5 秒撤销 Toast（仅当本地原 intervalIndex >= 云端时才允许撤销）
+   */
+  const handleRestoreFromCloud = useCallback(async (sentence: Sentence) => {
+    if (!supabaseService.isReady) {
+      showToast('☁️ 云同步未配置，无法从云端恢复', 'error');
+      return;
+    }
+
+    // 步骤 1：二次确认
+    const confirmMsg = `确定要从云端恢复该句子吗？\n\n` +
+      `当前本地状态：\n` +
+      `  • 英文：${sentence.english}\n` +
+      `  • 阶段：${sentence.intervalIndex}\n` +
+      `  • 复习次数：${sentence.timesReviewed}\n` +
+      `  • 稳定度：${sentence.stability ?? 0}\n\n` +
+      `此操作将用云端数据完全覆盖本地学习进度和状态。\n` +
+      `本地音频缓存将保留。`;
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      // 步骤 2：拉取云端数据（记录拉取时的云端 updatedAt 作为乐观锁期望值）
+      const cloudSentence = await supabaseService.fetchSingleCloudSentence(
+        sentence.id,
+        sentence.english
+      );
+
+      if (!cloudSentence) {
+        showToast('☁️ 云端未找到该句子', 'error');
+        return;
+      }
+
+      const cloudBeforeUpdatedAt = cloudSentence.updatedAt || 0;
+      const restoreTime = Date.now();
+
+      // 步骤 3：构造恢复后的数据（updatedAt = 恢复操作时间）
+      // 目的：让云端 updatedAt 成为权威，使其他设备通过正常时间戳比较自动用云端覆盖本地
+      const restoredSentence: Sentence = {
+        ...cloudSentence,
+        id: sentence.id, // 使用本地 ID（与云端一致）
+        updatedAt: restoreTime,
+      };
+
+      // 步骤 4：乐观锁 Push（filter 式 update + .eq('updatedat', cloudBeforeUpdatedAt)）
+      // 成功：云端 updatedAt = restoreTime，成为最新
+      // 失败：云端已被其他设备更新，重新拉取最新用之
+      const lockResult = await supabaseService.forceUpdateSentenceWithLock(
+        restoredSentence,
+        cloudBeforeUpdatedAt
+      );
+
+      let finalSentence: Sentence;
+      if (lockResult.success) {
+        // 乐观锁成功：用 restoredSentence（updatedAt = restoreTime）
+        finalSentence = restoredSentence;
+      } else if (lockResult.actualData) {
+        // 乐观锁失败（并发冲突）：云端已被其他设备更新
+        // 简化处理：用最新云端数据覆盖本地（用户已主动确认"信任云端"）
+        console.log('[RESTORE] 乐观锁冲突，改用最新云端数据:', lockResult.message);
+        finalSentence = {
+          ...lockResult.actualData,
+          id: sentence.id,
+          updatedAt: lockResult.actualData.updatedAt || restoreTime,
+        };
+        showToast('ℹ️ 云端有更新版本，已用最新数据覆盖', 'success');
+      } else {
+        // Push 失败但无法获取最新数据 → 仍用原始拉取的云端数据覆盖本地
+        console.warn('[RESTORE] 乐观锁失败且无法获取最新云端:', lockResult.message);
+        finalSentence = restoredSentence;
+      }
+
+      // 步骤 5：清理本地待同步队列（动态导入避免循环依赖）
+      const { syncQueueService } = await import('../services/syncQueueService');
+      syncQueueService.removeTasksForSentence(sentence.id);
+
+      // 记录本地原 intervalIndex（用于决定是否允许撤销）
+      const localOriginalInterval = sentence.intervalIndex || 0;
+      const cloudInterval = finalSentence.intervalIndex || 0;
+
+      // 步骤 6：覆盖本地（返回备份）
+      // finalSentence.updatedAt 与乐观锁 Push 的时间戳一致
+      const backup = await storageService.overwriteSingleSentence(finalSentence);
+
+      // 步骤 7：刷新 UI
+      await onUpdate();
+
+      // 步骤 8：异步推送跨设备信号（仅当乐观锁 Push 成功时才推信号）
+      // 原因：信号 originalUpdatedAt = restoreTime 必须等于云端当前 updatedAt
+      //       若 Push 失败，云端 updatedAt ≠ restoreTime，信号检查1会误判
+      if (lockResult.success) {
+        supabaseService.pushSingleSentenceOverwriteSignal(
+          sentence.id,
+          sentence.english,
+          restoreTime // 信号生成时间 = 恢复操作时间 = 云端新 updatedAt
+        ).catch(err => {
+          console.warn('⚠️ 推送跨设备信号失败（不影响本次覆盖）:', err instanceof Error ? err.message : String(err));
+        });
+      }
+
+      // 步骤 9：显示 5 秒撤销 Toast
+      // 限制：仅当本地原 intervalIndex >= 云端 intervalIndex 时才允许撤销
+      // 原因：若本地 < 云端，说明本地状态已过时，撤销会恢复"脏数据"
+      if (backup && localOriginalInterval >= cloudInterval) {
+        undoBackupRef.current = backup;
+        // 清除之前的 undo 计时器
+        if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+
+        setUndoToast({
+          show: true,
+          message: '✅ 已从云端恢复',
+          sentenceId: sentence.id,
+        });
+
+        undoTimerRef.current = setTimeout(() => {
+          setUndoToast({ show: false, message: '', sentenceId: null });
+          undoBackupRef.current = null;
+          undoTimerRef.current = null;
+        }, 5000);
+      } else {
+        showToast('✅ 已从云端恢复', 'success');
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '未知错误';
+      showToast(`从云端恢复失败: ${msg}`, 'error');
+    }
+  }, [onUpdate, showToast]);
+
+  /**
+   * 撤销单句覆盖：用备份快照恢复本地数据
+   */
+  const handleUndoRestore = useCallback(async () => {
+    const backup = undoBackupRef.current;
+    if (!backup) return;
+
+    if (undoTimerRef.current) {
+      clearTimeout(undoTimerRef.current);
+      undoTimerRef.current = null;
+    }
+
+    try {
+      await storageService.undoRestoreSingleSentence(backup);
+      undoBackupRef.current = null;
+      setUndoToast({ show: false, message: '', sentenceId: null });
+      showToast('↩️ 已撤销恢复', 'success');
+      await onUpdate();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '未知错误';
+      showToast(`撤销失败: ${msg}`, 'error');
     }
   }, [onUpdate, showToast]);
 
@@ -1040,13 +1212,26 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
         </div>
 
         {/* 使用提取后的句子列表组件 */}
-        <SentenceList 
-          sentences={filteredSentences} 
+        <SentenceList
+          sentences={filteredSentences}
           onDeleteAudio={deleteSentenceAudio}
           onGenerateAudio={generateSentenceAudio}
           onEdit={editSentence}
+          onOverwriteFromCloud={handleRestoreFromCloud}
         />
       </div>
+
+      {undoToast.show && (
+        <div className="fixed bottom-20 left-4 right-4 z-[100] px-4 py-3 rounded-xl text-sm font-medium shadow-lg animate-fade-in flex items-center justify-between bg-blue-500 text-white">
+          <span>{undoToast.message}</span>
+          <button
+            onClick={handleUndoRestore}
+            className="ml-3 px-3 py-1 bg-white text-blue-600 rounded-lg text-xs font-black uppercase tracking-wider active:scale-95 transition-transform"
+          >
+            撤销
+          </button>
+        </div>
+      )}
 
       {toast.show && (
         <div className={`fixed bottom-20 left-4 right-4 z-[100] px-4 py-2 rounded-xl text-sm font-medium shadow-lg animate-fade-in flex items-center justify-center ${
