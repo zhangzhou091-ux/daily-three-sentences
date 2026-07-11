@@ -534,8 +534,9 @@ function checkEnv(): CheckItem {
 function checkScheduledSentences(sentences: Sentence[], todayIds: string[]): CheckItem {
   const today = getLocalDateString();
   // 与生成逻辑一致：scheduledDate <= today 表示今日到期或过期，都应被纳入今日学习
-  const dueScheduled = sentences.filter(s =>
-    s.scheduledDate && s.scheduledDate <= today && s.intervalIndex === 0
+  // 使用 type predicate 缩窄类型，使后续访问 s.scheduledDate 为 string（filter 已保证非空）
+  const dueScheduled = sentences.filter((s): s is Sentence & { scheduledDate: string } =>
+    !!s.scheduledDate && s.scheduledDate <= today && s.intervalIndex === 0
   );
   const todayScheduled = dueScheduled.filter(s => s.scheduledDate === today);
   const expiredScheduled = dueScheduled.filter(s => s.scheduledDate < today);

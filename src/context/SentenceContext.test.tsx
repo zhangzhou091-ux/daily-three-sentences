@@ -139,4 +139,145 @@ describe('mergeSentencesByUpdatedAt — 编辑后不丢数据', () => {
     ]);
     expect(state[0].english).toBe('Hello v3');
   });
+
+  // 守卫触发场景：本地已学(intervalIndex>0)，云端旧快照(intervalIndex=0)，应保护所有学习字段
+  it('守卫#1：本地已学，云端旧快照 intervalIndex=0，应保护全部 18 个学习字段', () => {
+    const local: Sentence[] = [
+      makeSentence({
+        id: 's1',
+        english: 'Hello',
+        chinese: '你好',
+        intervalIndex: 2,
+        reps: 5,
+        timesReviewed: 5,
+        stability: 10.5,
+        difficulty: 0.4,
+        lapses: 1,
+        state: 2,
+        isPendingFirstReview: false,
+        learnedAt: 1234,
+        lastReviewedAt: 5678,
+        nextReviewDate: 9999,
+        scheduledDays: 3,
+        masteryLevel: 3,
+        wrongDictations: 2,
+        isManual: true,
+        ttsAudioPathEl: 'el-path',
+        ttsAudioPathMm: 'mm-path',
+        updatedAt: 2000,
+      }),
+    ];
+    const cloud: Sentence[] = [
+      makeSentence({
+        id: 's1',
+        english: 'Hello (cloud edit)',
+        chinese: '你好 (云端)',
+        intervalIndex: 0,  // 云端旧快照，未学状态
+        reps: 0,
+        timesReviewed: 0,
+        stability: 0,
+        difficulty: 0,
+        lapses: 0,
+        state: 0,
+        isPendingFirstReview: false,
+        learnedAt: undefined,
+        lastReviewedAt: null,
+        nextReviewDate: null,
+        scheduledDays: 0,
+        masteryLevel: 0,
+        wrongDictations: 0,
+        isManual: false,
+        ttsAudioPathEl: undefined,
+        ttsAudioPathMm: undefined,
+        scheduledDate: '2026-07-06',
+        updatedAt: 3000,  // 云端 updatedAt 更新
+      }),
+    ];
+
+    const result = mergeSentencesByUpdatedAt(local, cloud);
+
+    expect(result).toHaveLength(1);
+    // 非学习字段：用云端
+    expect(result[0].english).toBe('Hello (cloud edit)');
+    expect(result[0].chinese).toBe('你好 (云端)');
+    expect(result[0].updatedAt).toBe(3000);
+    // 学习字段：从本地保护
+    expect(result[0].intervalIndex).toBe(2);
+    expect(result[0].reps).toBe(5);
+    expect(result[0].timesReviewed).toBe(5);
+    expect(result[0].stability).toBe(10.5);
+    expect(result[0].difficulty).toBe(0.4);
+    expect(result[0].lapses).toBe(1);
+    expect(result[0].state).toBe(2);
+    expect(result[0].isPendingFirstReview).toBe(false);
+    expect(result[0].learnedAt).toBe(1234);
+    expect(result[0].lastReviewedAt).toBe(5678);
+    expect(result[0].nextReviewDate).toBe(9999);
+    expect(result[0].scheduledDays).toBe(3);
+    expect(result[0].masteryLevel).toBe(3);
+    expect(result[0].wrongDictations).toBe(2);
+    expect(result[0].isManual).toBe(true);
+    expect(result[0].ttsAudioPathEl).toBe('el-path');
+    expect(result[0].ttsAudioPathMm).toBe('mm-path');
+    // scheduledDate：已学句子清除
+    expect(result[0].scheduledDate).toBeUndefined();
+  });
+
+  // 守卫边界：本地未学(intervalIndex=0)时，云端 intervalIndex=0，不触发守卫，用云端
+  it('守卫#2：本地未学，云端也未学，不触发守卫，用云端数据', () => {
+    const local: Sentence[] = [
+      makeSentence({
+        id: 's1',
+        english: 'Hello',
+        chinese: '你好',
+        intervalIndex: 0,
+        updatedAt: 1000,
+      }),
+    ];
+    const cloud: Sentence[] = [
+      makeSentence({
+        id: 's1',
+        english: 'Hello (cloud)',
+        chinese: '你好 (云端)',
+        intervalIndex: 0,
+        updatedAt: 2000,
+      }),
+    ];
+
+    const result = mergeSentencesByUpdatedAt(local, cloud);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].english).toBe('Hello (cloud)');
+  });
+
+  // 守卫边界：本地已学，云端也已学(intervalIndex>0)，不触发守卫，用云端
+  it('守卫#3：本地已学，云端也已学，不触发守卫，用云端数据', () => {
+    const local: Sentence[] = [
+      makeSentence({
+        id: 's1',
+        english: 'Hello',
+        chinese: '你好',
+        intervalIndex: 2,
+        reps: 5,
+        updatedAt: 1000,
+      }),
+    ];
+    const cloud: Sentence[] = [
+      makeSentence({
+        id: 's1',
+        english: 'Hello (cloud)',
+        chinese: '你好 (云端)',
+        intervalIndex: 3,
+        reps: 8,
+        updatedAt: 2000,
+      }),
+    ];
+
+    const result = mergeSentencesByUpdatedAt(local, cloud);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].english).toBe('Hello (cloud)');
+    expect(result[0].intervalIndex).toBe(3);
+    expect(result[0].reps).toBe(8);
+  });
 });

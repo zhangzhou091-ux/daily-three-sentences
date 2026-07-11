@@ -204,10 +204,14 @@ export const useDailySelection = ({
               s.intervalIndex === 0 && !cachedIdSet.has(s.id)
             );
             if (newScheduledToday.length > 0) {
-              console.log('[TRACE-SCHEDULE] RC#1 ⚠️ 缓存路径缺失新预约句子 | 有' + newScheduledToday.length + '条今日/过期预约句子不在缓存中 | retained=' + retained.length + '/' + LIMIT + ' | forceRegenerate=false 导致被跳过');
+              console.log('[TRACE-SCHEDULE] RC#1 ⚠️ 缓存路径缺失新预约句子 | 有' + newScheduledToday.length + '条今日/过期预约句子不在缓存中 | retained=' + retained.length + '/' + LIMIT + ' | 设置 forceRegenerate=true');
               newScheduledToday.forEach(s => {
                 console.log('[TRACE-SCHEDULE]   RC#1 ⚠️ 缺失: english="' + (s.english || '').substring(0, 30) + '" | scheduledDate=' + s.scheduledDate + ' | todayDateStr=' + todayDateStr + ' | intervalIndex=' + s.intervalIndex + ' | 未进入retained');
               });
+              // F1修复: 缓存满额但新预约句子缺失 → 强制重新走优先级路径(P1→P2→P3),不改变优先级
+              forceRegenerate = true;
+              retained = [];
+              console.log('[TRACE-SCHEDULE] RC#1 修复: forceRegenerate=true 清空 retained 将重走优先级路径');
             }
           }
           
@@ -216,7 +220,7 @@ export const useDailySelection = ({
             console.log('[TRACE-SCHEDULE] 触发forceRegenerate | 原因: hasOutdatedCache=true');
             forceRegenerate = true;
             retained = [];
-          } else {
+          } else if (!forceRegenerate) {
             console.log('[TRACE-SCHEDULE] 维持缓存路径 | forceRegenerate=false | 不重新检查优先级');
           }
         }
@@ -431,6 +435,16 @@ export const useDailySelection = ({
       // 无论成功还是异常，都在 finally 中统一释放锁并更新 loading 状态
       isGeneratingRef.current = false;
       setIsGenerating(false);
+      // F7修复: 补检 — 若生成期间发生过跨日(如 iOS 后台冻结导致 Promise 挂起),释放锁后立即重新生成
+      // 解决 checkCrossDay 被 isGeneratingRef 阻塞导致跨日检测丢失的问题
+      const currentToday = getLocalDateString();
+      if (lastGeneratedDateRef.current && lastGeneratedDateRef.current !== currentToday) {
+        console.log('[TRACE-CROSSDAY] F7 | finally补检命中 | lastGenerated=' + lastGeneratedDateRef.current + ' | today=' + currentToday + ' | 触发重新生成');
+        hasGeneratedTodayRef.current = false;
+        lastGeneratedDateRef.current = currentToday;
+        try { localStorage.setItem('d3s_last_gen_date', currentToday); } catch { /* ignore */ }
+        generateDailySelection();
+      }
     }
   }, [sentences, isGeneratingRef]);
 
@@ -510,13 +524,19 @@ export const useDailySelection = ({
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     // RC#4 埋点：pageshow 事件覆盖 BFCache 恢复场景
+    // F2修复: 移除 event.persisted 限制,iOS PWA 非BFCache恢复(persisted=false)也需检测跨日
     const handlePageShow = (event: PageTransitionEvent) => {
       console.log('[TRACE-CROSSDAY] RC#4 | pageshow触发 | persisted=' + event.persisted + ' | 从BFCache恢复=' + (event.persisted ? '是' : '否'));
-      if (event.persisted) {
-        checkCrossDay();
-      }
+      checkCrossDay();
     };
     window.addEventListener('pageshow', handlePageShow);
+
+    // F3修复: focus 事件作为第三道防线,覆盖 visibilitychange/pageshow 均未触发的异常场景
+    const handleFocus = () => {
+      console.log('[TRACE-CROSSDAY] RC#4 | focus触发');
+      checkCrossDay();
+    };
+    window.addEventListener('focus', handleFocus);
 
     const intervalId = window.setInterval(() => {
       console.log('[TRACE-CROSSDAY] RC#4 | setInterval(60s) 定时检测触发');
@@ -526,6 +546,7 @@ export const useDailySelection = ({
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('pageshow', handlePageShow);
+      window.removeEventListener('focus', handleFocus);
       window.clearInterval(intervalId);
     };
   }, [generateDailySelection]);

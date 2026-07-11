@@ -959,7 +959,8 @@ export const elevenLabsService = {
     text: string,
     apiKey: string,
     voiceId: string,
-    modelId?: string
+    modelId?: string,
+    options?: { checkCloudFirst?: boolean }
   ): Promise<Blob | null> {
     if (!text || !text.trim()) return null;
     if (!apiKey || !apiKey.trim()) return null;
@@ -967,6 +968,18 @@ export const elevenLabsService = {
 
     const trimmedText = text.trim();
     const model = modelId || DEFAULT_MODEL;
+
+    // 守卫:仅生成场景启用(ManagePage 传 checkCloudFirst: true)
+    // 播放路径(geminiService)不传该参数,行为完全不变,避免误伤
+    if (options?.checkCloudFirst) {
+      try {
+        const guard = await ttsCloudCacheService.checkCloudAudioExists(trimmedText);
+        if (guard.exists) {
+          console.warn(`🔊 [ElevenLabs] 服务层守卫拦截:supabase 已有 ${guard.engine || ''} 录音,拒绝生成 | [文本] ${trimmedText.slice(0, 30)}`);
+          return null;
+        }
+      } catch { /* fail-open,守卫失败不阻塞生成 */ }
+    }
 
     try {
       const cachedBlob = await elevenLabsCacheService.get(trimmedText, voiceId, model);

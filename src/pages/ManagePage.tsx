@@ -3,6 +3,7 @@ import { Sentence } from '../types';
 import { storageService } from '../services/storage';
 import { sentenceAudioService } from '../services/sentenceAudioService';
 import { elevenLabsService } from '../services/elevenLabsService';
+import { ttsCloudCacheService } from '../services/ttsCloudCacheService';
 import { generateUUID } from '../utils/uuid';
 import { getSafeTags } from '../utils/format';
 import { getLocalDateString } from '../utils/date';
@@ -237,11 +238,22 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
   }, [onUpdate, showToast]);
 
   const generateSentenceAudio = useCallback(async (sentence: Sentence, engine: 'elevenlabs' | 'minimax') => {
+    // L1 守卫:本地元数据快速拦截(同步,无网络开销)
     if (sentence.ttsAudioPathEl || sentence.ttsAudioPathMm) {
       const existingEngine = sentence.ttsAudioPathEl ? 'ElevenLabs' : 'MiniMax';
       showToast(`⛔ 云端已有 ${existingEngine} 语音，禁止重新生成`, 'error');
       return;
     }
+
+    // L2 守卫:直查 supabase + 文件验证(防御本地元数据与云端不一致)
+    try {
+      const guard = await ttsCloudCacheService.checkCloudAudioExists(sentence.english);
+      if (guard.exists) {
+        const existingEngine = guard.engine === 'elevenlabs' ? 'ElevenLabs' : 'MiniMax';
+        showToast(`⛔ 云端已有 ${existingEngine} 语音，禁止重新生成`, 'error');
+        return;
+      }
+    } catch { /* fail-open,守卫失败不阻塞生成 */ }
 
     const settings = storageService.getSettings();
     const text = sentence.english.trim();
@@ -256,7 +268,8 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
           return;
         }
         const voiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
-        blob = await elevenLabsService.fetchAudioBlob(text, apiKey, voiceId);
+        // L3 守卫:服务层兜底(防 L2 与 fetchAudioBlob 之间的竞态)
+        blob = await elevenLabsService.fetchAudioBlob(text, apiKey, voiceId, undefined, { checkCloudFirst: true });
       } else {
         const { minimaxTtsService } = await import('../services/minimaxTtsService');
         const apiKey = settings.minimaxApiKey || '';
@@ -265,7 +278,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
           return;
         }
         const voiceId = settings.minimaxVoiceId || minimaxTtsService.getDefaultVoiceId();
-        blob = await minimaxTtsService.fetchAudioBlob(text, apiKey, voiceId);
+        blob = await minimaxTtsService.fetchAudioBlob(text, apiKey, voiceId, undefined, { checkCloudFirst: true });
       }
 
       if (blob) {
@@ -274,6 +287,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
         showToast('🔊 语音生成成功', 'success');
         await onUpdate();
       } else {
+        // L3 兜底拦截也会落到这里,极少数竞态下用户重试时 L2 会给出准确提示
         showToast('语音生成失败，请检查 API Key 和网络连接', 'error');
       }
     } catch (err) {

@@ -1815,27 +1815,7 @@ class SyncQueueService {
               toUpload.push(uploadData);
               merged.push(localSentence);
             } else {
-              merged.push({
-                id: cloudSentence.id,
-                english: cloudSentence.english,
-                chinese: '',
-                tags: [],
-                intervalIndex: 0,
-                addedAt: 0,
-                nextReviewDate: null,
-                lastReviewedAt: null,
-                timesReviewed: 0,
-                isManual: false,
-                updatedAt: cloudSentence.updatedat,
-                stability: 0,
-                difficulty: 0,
-                reps: 0,
-                lapses: 0,
-                state: 0,
-                scheduledDays: 0,
-                masteryLevel: 0,
-                wrongDictations: 0
-              });
+              merged.push(localSentence);
             }
           } else {
             let validId = localSentence.id;

@@ -591,7 +591,7 @@ const formatSize = (bytes: number): string => {
   return `${(bytes / 1048576).toFixed(1)} MB`;
 };
 
-const hexToBytes = (hex: string): Uint8Array => {
+const hexToBytes = (hex: string): Uint8Array<ArrayBuffer> => {
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < hex.length; i += 2) {
     bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
@@ -599,7 +599,7 @@ const hexToBytes = (hex: string): Uint8Array => {
   return bytes;
 };
 
-const base64ToBytes = (b64: string): Uint8Array => {
+const base64ToBytes = (b64: string): Uint8Array<ArrayBuffer> => {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
@@ -982,13 +982,27 @@ export const minimaxTtsService = {
   async fetchAudioBlob(
     text: string,
     apiKey: string,
-    voiceId: string
+    voiceId: string,
+    _modelId?: string,
+    options?: { checkCloudFirst?: boolean }
   ): Promise<Blob | null> {
     if (!text || !text.trim()) return null;
     if (!apiKey || !apiKey.trim()) return null;
     if (!voiceId) return null;
 
     const trimmedText = text.trim();
+
+    // 守卫:仅生成场景启用(ManagePage 传 checkCloudFirst: true)
+    // 播放路径(geminiService)不传该参数,行为完全不变,避免误伤
+    if (options?.checkCloudFirst) {
+      try {
+        const guard = await ttsCloudCacheService.checkCloudAudioExists(trimmedText);
+        if (guard.exists) {
+          console.warn(`🔊 [MiniMax] 服务层守卫拦截:supabase 已有 ${guard.engine || ''} 录音,拒绝生成 | [文本] ${trimmedText.slice(0, 30)}`);
+          return null;
+        }
+      } catch { /* fail-open,守卫失败不阻塞生成 */ }
+    }
 
     try {
       const cachedBlob = await getCachedAudio(trimmedText, voiceId);

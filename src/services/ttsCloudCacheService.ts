@@ -598,6 +598,113 @@ export const ttsCloudCacheService = {
     return activeUploads;
   },
 
+  /**
+   * 校验 Storage 桶中文件是否实际存在(不下载文件内容)
+   * 使用 list API 轻量校验,iOS 弱网友好
+   * fail-open:任何异常返回 false,避免阻塞生成流程
+   */
+  async verifyFileExists(storagePath: string): Promise<boolean> {
+    if (!isSupabaseReady()) return false;
+    if (!storagePath || !storagePath.trim()) return false;
+
+    const client = supabaseService.client!;
+    const trimmedPath = storagePath.trim();
+    const lastSlash = trimmedPath.lastIndexOf('/');
+    const directory = lastSlash > 0 ? trimmedPath.substring(0, lastSlash) : '';
+    const filename = lastSlash > 0 ? trimmedPath.substring(lastSlash + 1) : trimmedPath;
+
+    if (!filename) return false;
+
+    try {
+      const { data, error } = await client.storage
+        .from(BUCKET_NAME)
+        .list(directory, { limit: 1000, search: filename });
+
+      if (error) {
+        console.warn(`🔊 [CloudCache] 文件存在性校验失败 | [路径] ${storagePath}`, error.message);
+        return false;
+      }
+
+      const exists = Array.isArray(data) && data.some(item => item && item.name === filename);
+      return exists;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`🔊 [CloudCache] 文件存在性校验异常 | [路径] ${storagePath}`, msg);
+      return false;
+    }
+  },
+
+  /**
+   * 三阶段校验:supabase 是否已存在该句子的录音
+   * 阶段1:本地 IndexedDB(无网络开销)
+   * 阶段2:本地无记录时兜底直查 supabase sentences 表
+   * 阶段3:对元数据存在的文件做 Storage list 验证(默认开启,可跳过)
+   * fail-open:任何异常返回 { exists: false }
+   *
+   * @param options.skipFileVerify 弱网场景可传 true 跳过文件验证(仅查元数据)
+   */
+  async checkCloudAudioExists(
+    text: string,
+    options?: { skipFileVerify?: boolean }
+  ): Promise<{ exists: boolean; engine?: TTSEngineType; path?: string }> {
+    const trimmedText = text?.trim();
+    if (!trimmedText) return { exists: false };
+
+    let cloudPathEl: string | null = null;
+    let cloudPathMm: string | null = null;
+
+    // 阶段1:本地 IndexedDB(无网络开销,iOS 弱网友好)
+    try {
+      const sentence = await dbService.findByEnglish(trimmedText);
+      if (sentence) {
+        cloudPathEl = sentence.ttsAudioPathEl || null;
+        cloudPathMm = sentence.ttsAudioPathMm || null;
+      }
+    } catch { /* ignore, fail-open */ }
+
+    // 阶段2:本地无记录时兜底直查 supabase sentences 表(避免本地数据陈旧)
+    if (!cloudPathEl && !cloudPathMm && isSupabaseReady()) {
+      try {
+        const client = supabaseService.client!;
+        const { data } = await client
+          .from('sentences')
+          .select('tts_audio_path_el, tts_audio_path_mm')
+          .ilike('english', trimmedText)
+          .limit(1)
+          .single();
+        if (data) {
+          cloudPathEl = data.tts_audio_path_el || null;
+          cloudPathMm = data.tts_audio_path_mm || null;
+        }
+      } catch { /* ignore, fail-open */ }
+    }
+
+    const candidates: Array<{ path: string; engine: TTSEngineType }> = [];
+    if (cloudPathEl) candidates.push({ path: cloudPathEl, engine: 'elevenlabs' });
+    if (cloudPathMm) candidates.push({ path: cloudPathMm, engine: 'minimax' });
+
+    if (candidates.length === 0) {
+      return { exists: false };
+    }
+
+    // 弱网场景跳过文件验证,仅依据元数据判定
+    if (options?.skipFileVerify === true) {
+      const first = candidates[0];
+      return { exists: true, engine: first.engine, path: first.path };
+    }
+
+    // 阶段3:对元数据存在的文件做 Storage list 验证(防止孤儿元数据)
+    for (const { path, engine } of candidates) {
+      const fileExists = await this.verifyFileExists(path);
+      if (fileExists) {
+        return { exists: true, engine, path };
+      }
+    }
+
+    console.warn(`🔊 [CloudCache] 检测到孤儿元数据 | [文本] ${trimmedText.slice(0, 30)} | 路径: ${candidates.map(c => c.path).join(', ')}`);
+    return { exists: false };
+  },
+
   async getAnyEngine(
     text: string,
     preferredEngine?: TTSEngineType

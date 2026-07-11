@@ -7,7 +7,7 @@ import { getLocalDateString } from '../utils/date';
 
 interface SentenceContextType {
   sentences: Sentence[];
-  refreshSentences: () => Promise<void>;
+  refreshSentences: (opts?: { forceSync?: boolean }) => Promise<void>;
   isSyncing: boolean;
   syncMessage: string;
   isInitialLoading: boolean;
@@ -40,7 +40,27 @@ export function mergeSentencesByUpdatedAt(
           // 守卫：云端数据不可用未学状态覆盖本地已学状态
           if (existingSentence.intervalIndex > 0 && (s.intervalIndex ?? 0) === 0) {
             console.log('[TRACE-CACHE] mergeSentencesByUpdatedAt守卫 | 阻止云端覆盖本地已学状态 | id=' + s.id + ' | english="' + ((s.english || '').substring(0, 20)) + '" | localIntervalIndex=' + existingSentence.intervalIndex + ' | cloudIntervalIndex=' + (s.intervalIndex ?? 0) + ' | localUpdatedAt=' + existingTime + ' | cloudUpdatedAt=' + incomingTime);
-            map.set(s.id, { ...s, intervalIndex: existingSentence.intervalIndex });
+            map.set(s.id, {
+              ...s,
+              intervalIndex: existingSentence.intervalIndex,
+              reps: existingSentence.reps,
+              timesReviewed: existingSentence.timesReviewed,
+              stability: existingSentence.stability,
+              difficulty: existingSentence.difficulty,
+              lapses: existingSentence.lapses,
+              state: existingSentence.state,
+              isPendingFirstReview: existingSentence.isPendingFirstReview,
+              learnedAt: existingSentence.learnedAt,
+              lastReviewedAt: existingSentence.lastReviewedAt,
+              nextReviewDate: existingSentence.nextReviewDate,
+              scheduledDays: existingSentence.scheduledDays,
+              masteryLevel: existingSentence.masteryLevel,
+              wrongDictations: existingSentence.wrongDictations,
+              isManual: existingSentence.isManual,
+              ttsAudioPathEl: existingSentence.ttsAudioPathEl,
+              ttsAudioPathMm: existingSentence.ttsAudioPathMm,
+              scheduledDate: undefined
+            });
           } else {
             map.set(s.id, s);
           }
@@ -75,8 +95,10 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
 
   // 跨日检测相关 ref
   const lastCrossDayDateRef = useRef<string>(getLocalDateString());
+  // F4: 记录后台时间戳,用于识别"从后台恢复"场景以跳过日节流强制拉取云端
+  const lastBackgroundTimestampRef = useRef(0);
 
-  const refreshSentences = useCallback(async () => {
+  const refreshSentences = useCallback(async (opts?: { forceSync?: boolean }) => {
     const currentRequestId = ++lastRequestId.current;
     const currentVersion = ++dataVersionRef.current;
 
@@ -111,9 +133,12 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
         const today = getLocalDateString();
         const lastSyncDate = localStorage.getItem(LAST_SYNC_DATE_KEY);
 
-        if (lastSyncDate === today && localData.length > 0) {
+        if (lastSyncDate === today && localData.length > 0 && !opts?.forceSync) {
           console.log('📚 SentenceContext: 今日已同步，跳过云端同步');
           return;
+        }
+        if (opts?.forceSync && lastSyncDate === today) {
+          console.log('📚 SentenceContext: forceSync=true,跳过日节流强制拉取云端新数据');
         }
 
         console.log('📚 SentenceContext: 开始云端同步...');
@@ -192,27 +217,59 @@ export const SentenceProvider: React.FC<{ children: ReactNode }> = ({ children }
   }, [isConfigured, isOnline, refreshSentences]);
 
   // 跨日检测：用户切回标签页或定时检查时，若日期变更则重新加载数据
+  // F4/F5/F6: 补充 pageshow/focus 监听 + 后台恢复 forceSync + 60s 间隔
   useEffect(() => {
+    const BACKGROUND_RESUME_WINDOW_MS = 10000;
+
+    const isRecentBackgroundResume = () => {
+      const now = Date.now();
+      return lastBackgroundTimestampRef.current > 0 &&
+             (now - lastBackgroundTimestampRef.current) < BACKGROUND_RESUME_WINDOW_MS;
+    };
+
     const checkCrossDay = () => {
       const today = getLocalDateString();
-      if (lastCrossDayDateRef.current !== today) {
+      const isNewDay = lastCrossDayDateRef.current !== today;
+      const shouldForceSync = isRecentBackgroundResume();
+
+      if (isNewDay) {
         console.log(`📚 SentenceContext: 检测到跨日（${lastCrossDayDateRef.current} → ${today}），触发数据刷新`);
         lastCrossDayDateRef.current = today;
-        refreshSentencesRef.current();
+        refreshSentencesRef.current({ forceSync: shouldForceSync });
+      } else if (shouldForceSync) {
+        console.log('📚 SentenceContext: 后台恢复(同日),forceSync=true 强制拉取云端新数据');
+        refreshSentencesRef.current({ forceSync: true });
       }
     };
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState === 'hidden') {
+        lastBackgroundTimestampRef.current = Date.now();
+      } else if (document.visibilityState === 'visible') {
         checkCrossDay();
       }
     };
 
+    // F6: pageshow 无条件触发,覆盖 BFCache 恢复和非 BFCache 恢复
+    const handlePageShow = () => {
+      checkCrossDay();
+    };
+
+    // F6: focus 作为第三道防线
+    const handleFocus = () => {
+      checkCrossDay();
+    };
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    const intervalId = setInterval(checkCrossDay, 5 * 60 * 1000); // 每5分钟检查一次
+    window.addEventListener('pageshow', handlePageShow);
+    window.addEventListener('focus', handleFocus);
+    // F5: 5min → 60s,与 useDailySelection 保持一致
+    const intervalId = setInterval(checkCrossDay, 60 * 1000);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pageshow', handlePageShow);
+      window.removeEventListener('focus', handleFocus);
       clearInterval(intervalId);
     };
   }, []);
