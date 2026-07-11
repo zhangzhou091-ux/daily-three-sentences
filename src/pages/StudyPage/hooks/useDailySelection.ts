@@ -58,6 +58,8 @@ export const useDailySelection = ({
   const generateVersionRef = useRef(0);
   const sentencesRef = useRef(sentences);
   const hasGeneratedTodayRef = useRef(false);
+  // 自愈脚本执行标记：每次冷启动只执行一次
+  const selfHealedRef = useRef(false);
   // RC#3 埋点：lastGeneratedDateRef 仅内存，PWA 冷启动后丢失
   const persistedLastGenDate = (() => {
     try { return localStorage.getItem('d3s_last_gen_date') || ''; } catch { return ''; }
@@ -382,7 +384,7 @@ export const useDailySelection = ({
         for (const sentence of missedScheduled) {
           // 方案A：顺延前用最新数据校验，避免过期快照覆盖已学状态
           const latest = await storageService.checkDuplicate(sentence.english, true);
-          if (latest && latest.intervalIndex > 0) {
+          if (latest && (latest.intervalIndex > 0 || latest.learnedAt)) {
             // 句子已被学习，不再顺延，并确保 scheduledDate 清空
             console.log('[TRACE-SCHEDULE] 顺延跳过(已学) | english="' + (sentence.english || '').substring(0, 30) + '" | latest.intervalIndex=' + latest.intervalIndex);
             await storageService.updateSentenceFields(sentence.english, { scheduledDate: undefined });
@@ -420,7 +422,37 @@ export const useDailySelection = ({
       } else {
         console.log('[TRACE-SCHEDULE] learnedButScheduled检查 | 无脏数据 ✅');
       }
-      
+
+      // 自愈：修复 learnedAt 存在但 intervalIndex 被重置为 0 的数据（云端覆盖导致学习进度丢失）
+      if (!selfHealedRef.current) {
+        selfHealedRef.current = true;
+        const learnedButReset = allDbSentences.filter(s =>
+          s.learnedAt &&
+          (s.intervalIndex ?? 0) === 0 &&
+          !s.isPendingFirstReview
+        );
+
+        if (learnedButReset.length > 0) {
+          console.log('[TRACE-SCHEDULE] 自愈检测 | learnedAt存在但intervalIndex=0 | 共' + learnedButReset.length + '条');
+          const tomorrowDate = new Date(now);
+          tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+          const tomorrowStr = getLocalDateString(tomorrowDate);
+          const healPromises = learnedButReset.map(async sentence => {
+            console.log('[TRACE-SCHEDULE]   自愈恢复 | english="' + (sentence.english || '').substring(0, 30) + '" | learnedAt=' + sentence.learnedAt + ' | → intervalIndex=1, nextReviewDate=' + tomorrowStr);
+            await storageService.updateSentenceFields(sentence.english, {
+              intervalIndex: 1,
+              scheduledDate: undefined,
+              nextReviewDate: tomorrowDate.getTime(),
+              isPendingFirstReview: false,
+            });
+          });
+          await Promise.all(healPromises);
+          console.log(`📚 自愈完成：${learnedButReset.length} 个学习进度被覆盖的句子已恢复（intervalIndex=1, nextReviewDate=${tomorrowStr}）`);
+        } else {
+          console.log('[TRACE-SCHEDULE] 自愈检测 | 无需恢复 ✅');
+        }
+      }
+
       console.log('[TRACE-SCHEDULE] generateDailySelection完成 | finalSelection=[' + finalSelection.map(s => (s.english || '').substring(0, 20)).join(',') + ']');
     } catch (err: unknown) {
       if (err instanceof Error) {

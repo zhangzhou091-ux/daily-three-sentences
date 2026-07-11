@@ -62,7 +62,11 @@ export function mergeSentencesByUpdatedAt(
               scheduledDate: undefined
             });
           } else {
-            map.set(s.id, s);
+            // 双方都已学或本地未学：用云端数据，但清除已学句子的脏 scheduledDate
+            map.set(s.id, (s.intervalIndex ?? 0) > 0 && s.scheduledDate
+              ? { ...s, scheduledDate: undefined }
+              : s
+            );
           }
         } else if (incomingTime === existingTime) {
           // 时间戳相同，保留已学状态更高的版本

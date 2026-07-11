@@ -741,7 +741,44 @@ class SupabaseService {
           const cloudTime = cloudSentence.updatedat ? new Date(cloudSentence.updatedat).getTime() : 0;
 
           if (cloudTime > localTime) {
-            merged.push(this.mapDbToSentence(cloudSentence));
+            const cloudSentence2 = this.mapDbToSentence(cloudSentence);
+            // 守卫：本地已学，云端未学 → 不可覆盖本地已学状态
+            if (localSentence.intervalIndex > 0 && (cloudSentence2.intervalIndex ?? 0) === 0) {
+              console.log('[TRACE-SYNC] syncSentences 已学守卫触发 | english="' + (localSentence.english || '').substring(0, 20) + '" | localInterval=' + localSentence.intervalIndex);
+              const guarded: Sentence = {
+                ...cloudSentence2,
+                intervalIndex: localSentence.intervalIndex,
+                reps: localSentence.reps,
+                timesReviewed: localSentence.timesReviewed,
+                stability: localSentence.stability,
+                difficulty: localSentence.difficulty,
+                lapses: localSentence.lapses,
+                state: localSentence.state,
+                isPendingFirstReview: localSentence.isPendingFirstReview,
+                learnedAt: localSentence.learnedAt,
+                lastReviewedAt: localSentence.lastReviewedAt,
+                nextReviewDate: localSentence.nextReviewDate,
+                scheduledDays: localSentence.scheduledDays,
+                masteryLevel: localSentence.masteryLevel,
+                wrongDictations: localSentence.wrongDictations,
+                isManual: localSentence.isManual,
+                ttsAudioPathEl: localSentence.ttsAudioPathEl,
+                ttsAudioPathMm: localSentence.ttsAudioPathMm,
+                scheduledDate: undefined,
+                updatedAt: Date.now(),
+              };
+              merged.push(guarded);
+              const uploadData = this.mapSentenceToDb(guarded, this._userName);
+              uploadData.id = cloudSentence.id;
+              toUpload.push(this.preserveCloudAudioPaths(uploadData, cloudSentence));
+            } else {
+              // 双方都已学或本地未学：用云端数据，但清除已学句子的脏 scheduledDate
+              if ((cloudSentence2.intervalIndex ?? 0) > 0 && cloudSentence2.scheduledDate) {
+                merged.push({ ...cloudSentence2, scheduledDate: undefined });
+              } else {
+                merged.push(cloudSentence2);
+              }
+            }
             return;
           }
 
@@ -755,7 +792,13 @@ class SupabaseService {
 
         this.cloudSentencesCache.forEach((cloudSentence) => {
           if (!localEnglishMap.has(cloudSentence.english.trim().toLowerCase())) {
-            merged.push(this.mapDbToSentence(cloudSentence));
+            const cloudSentence2 = this.mapDbToSentence(cloudSentence);
+            // 云端独有数据：清除已学句子的脏 scheduledDate
+            if ((cloudSentence2.intervalIndex ?? 0) > 0 && cloudSentence2.scheduledDate) {
+              merged.push({ ...cloudSentence2, scheduledDate: undefined });
+            } else {
+              merged.push(cloudSentence2);
+            }
           }
         });
 
@@ -888,7 +931,47 @@ class SupabaseService {
           const cloudTime = cloudSentence.updatedat ? new Date(cloudSentence.updatedat).getTime() : 0;
 
           if (cloudTime > localTime) {
-            merged.push(this.mapDbToSentence(cloudSentence));
+            const cloudSentence2 = this.mapDbToSentence(cloudSentence);
+            // 守卫：本地已学，云端未学 → 不可覆盖本地已学状态
+            if (localSentence.intervalIndex > 0 && (cloudSentence2.intervalIndex ?? 0) === 0) {
+              console.log('[TRACE-SYNC] 已学守卫触发 | 保留本地学习状态 | english="' + (localSentence.english || '').substring(0, 20) + '" | localInterval=' + localSentence.intervalIndex + ' | cloudInterval=0');
+              const guarded: Sentence = {
+                ...cloudSentence2,
+                intervalIndex: localSentence.intervalIndex,
+                reps: localSentence.reps,
+                timesReviewed: localSentence.timesReviewed,
+                stability: localSentence.stability,
+                difficulty: localSentence.difficulty,
+                lapses: localSentence.lapses,
+                state: localSentence.state,
+                isPendingFirstReview: localSentence.isPendingFirstReview,
+                learnedAt: localSentence.learnedAt,
+                lastReviewedAt: localSentence.lastReviewedAt,
+                nextReviewDate: localSentence.nextReviewDate,
+                scheduledDays: localSentence.scheduledDays,
+                masteryLevel: localSentence.masteryLevel,
+                wrongDictations: localSentence.wrongDictations,
+                isManual: localSentence.isManual,
+                ttsAudioPathEl: localSentence.ttsAudioPathEl,
+                ttsAudioPathMm: localSentence.ttsAudioPathMm,
+                scheduledDate: undefined,
+                updatedAt: Date.now(),
+              };
+              merged.push(guarded);
+              if (deviceService.canUploadSync()) {
+                const uploadData = this.mapSentenceToDb(guarded, this._userName);
+                uploadData.id = cloudSentence.id;
+                toUpload.push(this.preserveCloudAudioPaths(uploadData, cloudSentence));
+              }
+            } else {
+              // 双方都已学或本地未学：用云端数据，但清除已学句子的脏 scheduledDate
+              if ((cloudSentence2.intervalIndex ?? 0) > 0 && cloudSentence2.scheduledDate) {
+                console.log('[TRACE-SYNC] 已学守卫 | 清除云端脏 scheduledDate | english="' + (cloudSentence2.english || '').substring(0, 20) + '" | intervalIndex=' + cloudSentence2.intervalIndex);
+                merged.push({ ...cloudSentence2, scheduledDate: undefined });
+              } else {
+                merged.push(cloudSentence2);
+              }
+            }
             needsLocalUpdate = true;
             return;
           }
@@ -903,7 +986,13 @@ class SupabaseService {
 
         cloudEnglishMap.forEach((cloudSentence) => {
           if (!localEnglishMap.has(cloudSentence.english.trim().toLowerCase())) {
-            merged.push(this.mapDbToSentence(cloudSentence));
+            const cloudSentence2 = this.mapDbToSentence(cloudSentence);
+            // 云端独有数据：清除已学句子的脏 scheduledDate
+            if ((cloudSentence2.intervalIndex ?? 0) > 0 && cloudSentence2.scheduledDate) {
+              merged.push({ ...cloudSentence2, scheduledDate: undefined });
+            } else {
+              merged.push(cloudSentence2);
+            }
             needsLocalUpdate = true;
           }
         });
