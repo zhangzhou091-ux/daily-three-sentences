@@ -732,11 +732,13 @@ class SupabaseService {
 
           if (!cloudSentence) {
             merged.push(localSentence);
-            const uploadData = this.mapSentenceToDb(localSentence, this._userName);
-            if (!this.isValidUUID(localSentence.id)) {
-              uploadData.id = this.generateValidUUID();
+            if (deviceService.canUploadSync()) {
+              const uploadData = this.mapSentenceToDb(localSentence, this._userName);
+              if (!this.isValidUUID(localSentence.id)) {
+                uploadData.id = this.generateValidUUID();
+              }
+              toUpload.push(uploadData);
             }
-            toUpload.push(uploadData);
             return;
           }
 
@@ -776,10 +778,12 @@ class SupabaseService {
               // 信号消费时会用 dbService.put 绕过守卫覆盖本地
               if (unconsumedSignalIds.has(localSentence.id)) {
                 console.log('[TRACE-SYNC] 守卫跳过回推(有未消费信号) | english="' + (localSentence.english || '').substring(0, 20) + '"');
-              } else {
+              } else if (deviceService.canUploadSync()) {
                 const uploadData = this.mapSentenceToDb(guarded, this._userName);
                 uploadData.id = cloudSentence.id;
                 toUpload.push(this.preserveCloudAudioPaths(uploadData, cloudSentence));
+              } else {
+                console.log('[TRACE-SYNC] 守卫跳过回推(downloadOnly) | english="' + (localSentence.english || '').substring(0, 20) + '"');
               }
             } else {
               // 双方都已学或本地未学：用云端数据，但清除已学句子的脏 scheduledDate
@@ -793,7 +797,7 @@ class SupabaseService {
           }
 
           merged.push(localSentence);
-          if (localTime > cloudTime) {
+          if (localTime > cloudTime && deviceService.canUploadSync()) {
             const uploadData = this.mapSentenceToDb(localSentence, this._userName);
             uploadData.id = cloudSentence.id;
             toUpload.push(this.preserveCloudAudioPaths(uploadData, cloudSentence));
@@ -1415,6 +1419,11 @@ class SupabaseService {
       console.warn('❌ Supabase未初始化，删除句子失败');
       return false;
     }
+
+    if (!deviceService.canUploadSync()) {
+      console.log('⚠️ 电脑端禁止云端删除，跳过');
+      return false;
+    }
     
     try {
       const cleanUserName = this._userName;
@@ -1795,6 +1804,10 @@ class SupabaseService {
   ): Promise<{ success: boolean; actualData?: Sentence; message: string }> {
     if (!this._client || !this.isReady) {
       return { success: false, message: '☁️ 云同步未配置' };
+    }
+
+    if (!deviceService.canUploadSync()) {
+      return { success: false, message: '⚠️ 电脑端禁止云端写入，跳过乐观锁更新' };
     }
 
     return this.enqueueSync(async () => {

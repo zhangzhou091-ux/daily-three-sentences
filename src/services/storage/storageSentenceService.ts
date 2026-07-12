@@ -5,6 +5,15 @@ import { fsrsService, State } from '../fsrsService';
 import { localStorageService } from './localStorageService';
 import { normalizeEnglish, dedupeSentencesUtil } from '../../utils/validators';
 
+// 学习相关字段集合：更新这些字段时才刷新 updatedAt
+// 纯 scheduledDate 更新不刷新 updatedAt，防止未学脏数据时间戳反超云端已学数据
+const LEARNING_FIELDS = new Set<string>([
+  'intervalIndex', 'learnedAt', 'lastReviewedAt', 'nextReviewDate',
+  'reps', 'stability', 'difficulty', 'lapses', 'state',
+  'masteryLevel', 'wrongDictations', 'isPendingFirstReview',
+  'timesReviewed', 'scheduledDays',
+]);
+
 function stateToCardState(state: State): CardState {
   const mapping: Record<number, CardState> = {
     [State.New]: CardState.New,
@@ -176,7 +185,7 @@ export const storageSentenceService = {
       ...fields,
       id: existing.id,
       english: existing.english,
-      updatedAt: Date.now(),
+      updatedAt: Object.keys(fields).some(k => LEARNING_FIELDS.has(k)) ? Date.now() : existing.updatedAt,
     };
 
     // 守卫：已学句子不允许设有 scheduledDate，防止脏数据写入

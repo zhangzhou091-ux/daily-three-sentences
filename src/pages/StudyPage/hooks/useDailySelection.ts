@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, type RefObject } from 'react';
 import { Sentence } from '../../../types';
 import { storageService } from '../../../services/storage';
+import { supabaseService } from '../../../services/supabaseService';
 import { getLocalDateString } from '../../../utils/date';
 import { DAILY_LEARN_LIMIT } from '../../../constants';
 
@@ -60,6 +61,11 @@ export const useDailySelection = ({
   const hasGeneratedTodayRef = useRef(false);
   // 自愈脚本执行标记：每次冷启动只执行一次
   const selfHealedRef = useRef(false);
+  // 首次生成保护：冷启动首次 generateDailySelection 时跳过所有 DB 修改操作
+  // （顺延、脏数据清理、自愈），等云端同步完成后基于最新数据再次生成时再执行
+  // 边界1：仅当 supabaseService.isReady 时才跳过（纯本地使用时正常执行）
+  // 边界2：跨日重新生成时 ref 已被重置为 false（跨日不是"首次"）
+  const isFirstGenerationRef = useRef(true);
   // RC#3 埋点：lastGeneratedDateRef 仅内存，PWA 冷启动后丢失
   const persistedLastGenDate = (() => {
     try { return localStorage.getItem('d3s_last_gen_date') || ''; } catch { return ''; }
@@ -78,6 +84,7 @@ export const useDailySelection = ({
     const today = getLocalDateString();
     if (MEMORY_DAILY_CACHE && MEMORY_DAILY_CACHE.date === today) {
       hasGeneratedTodayRef.current = true;
+      isFirstGenerationRef.current = false; // 从缓存恢复不是冷启动
       const cached = MEMORY_DAILY_CACHE.data;
       console.log('[TRACE-CACHE] useState从缓存初始化 | date=' + today + ' | 缓存条数=' + cached.length + ' | 明细=' + JSON.stringify(cached.map(s => ({ id: s.id, english: (s.english || '').substring(0, 20), intervalIndex: s.intervalIndex, scheduledDate: s.scheduledDate }))));
       return cached;
@@ -378,7 +385,13 @@ export const useDailySelection = ({
         await storageService.saveTodaySelection(finalSelection.map(s => s.id));
       }
 
-      if (missedScheduled.length > 0) {
+      // 首次生成保护：冷启动且配置了云端同步时，跳过所有 DB 修改操作
+      // 等云端同步完成后 sentences 变化触发再次生成，基于最新数据执行
+      const skipDbModifications = isFirstGenerationRef.current && supabaseService.isReady;
+
+      if (missedScheduled.length > 0 && skipDbModifications) {
+        console.log('[TRACE-SCHEDULE] 首次生成保护：跳过顺延 | missedScheduled共' + missedScheduled.length + '条 | 等同步后二次生成处理');
+      } else if (missedScheduled.length > 0) {
         console.log('[TRACE-SCHEDULE] 开始顺延处理 | missedScheduled共' + missedScheduled.length + '条');
         const tomorrowDate = new Date(now);
         tomorrowDate.setDate(tomorrowDate.getDate() + 1);
@@ -417,13 +430,15 @@ export const useDailySelection = ({
       }
 
       // 方案C：清理基于最新库数据，不使用过期快照
-      const allDbSentences = await storageService.getSentences();
+      const allDbSentences = skipDbModifications ? [] : await storageService.getSentences();
       const learnedButScheduled = allDbSentences.filter(s =>
         s.scheduledDate &&
         s.intervalIndex > 0
       );
 
-      if (learnedButScheduled.length > 0) {
+      if (skipDbModifications) {
+        console.log('[TRACE-SCHEDULE] 首次生成保护：跳过脏数据清理 | 等同步后二次生成处理');
+      } else if (learnedButScheduled.length > 0) {
         console.log('[TRACE-SCHEDULE] learnedButScheduled脏数据清理 | 共' + learnedButScheduled.length + '条');
         learnedButScheduled.forEach(s => {
           console.log('[TRACE-SCHEDULE]   脏数据: english="' + (s.english || '').substring(0, 30) + '" | intervalIndex=' + s.intervalIndex + ' | scheduledDate=' + s.scheduledDate);
@@ -438,7 +453,7 @@ export const useDailySelection = ({
       }
 
       // 自愈：修复 learnedAt 存在但 intervalIndex 被重置为 0 的数据（云端覆盖导致学习进度丢失）
-      if (!selfHealedRef.current) {
+      if (!selfHealedRef.current && !skipDbModifications) {
         selfHealedRef.current = true;
         const learnedButReset = allDbSentences.filter(s =>
           s.learnedAt &&
@@ -481,6 +496,8 @@ export const useDailySelection = ({
       // 无论成功还是异常，都在 finally 中统一释放锁并更新 loading 状态
       isGeneratingRef.current = false;
       setIsGenerating(false);
+      // 首次生成保护结束：重置标记，后续生成（包括 F7 补检）正常执行 DB 操作
+      isFirstGenerationRef.current = false;
       // F7修复: 补检 — 若生成期间发生过跨日(如 iOS 后台冻结导致 Promise 挂起),释放锁后立即重新生成
       // 解决 checkCrossDay 被 isGeneratingRef 阻塞导致跨日检测丢失的问题
       const currentToday = getLocalDateString();
