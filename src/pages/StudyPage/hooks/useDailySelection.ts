@@ -154,7 +154,13 @@ export const useDailySelection = ({
 
       const savedIds = await storageService.getTodaySelection();
       console.log('[TRACE-SCHEDULE] savedIds加载 | 缓存ID数=' + savedIds.length + ' | ids=[' + savedIds.join(',') + ']');
-      
+
+      // 保存今日已显示过的句子ID集合，用于 missedScheduled 顺延前校验
+      // 原因：推送更新后冷启动可能触发 forceRegenerate 重走优先级路径，
+      // 今日已显示过的预约句子可能被昨日遗留挤占名额而进入 missedScheduled，
+      // 此时应保留 scheduledDate=今日 不变，避免已显示的句子突然消失变成明日预约
+      const savedIdSet = new Set(savedIds);
+
       let forceRegenerate = false;
       if (savedIds.length > 0) {
         console.log('[TRACE-SCHEDULE] 进入缓存路径 | 将逐条检查缓存句子的有效性');
@@ -380,6 +386,7 @@ export const useDailySelection = ({
 
         let rescheduledCount = 0;
         let skippedCount = 0;
+        let skippedBySavedCount = 0;
 
         for (const sentence of missedScheduled) {
           // 方案A：顺延前用最新数据校验，避免过期快照覆盖已学状态
@@ -391,14 +398,21 @@ export const useDailySelection = ({
             skippedCount++;
             continue;
           }
-          // 方案B：仅更新 scheduledDate 字段，不覆盖 intervalIndex 等学习状态
+          // 方案B：今日已在 savedIds 中显示过的句子保留 scheduledDate 不变，不顺延
+          // 原因：用户今日已看到该句子，顺延到明天会导致今日已显示的句子突然消失
+          if (savedIdSet.has(sentence.id)) {
+            console.log('[TRACE-SCHEDULE] 顺延跳过(今日已显示) | english="' + (sentence.english || '').substring(0, 30) + '" | 保留原 scheduledDate=' + sentence.scheduledDate);
+            skippedBySavedCount++;
+            continue;
+          }
+          // 方案C：仅更新 scheduledDate 字段，不覆盖 intervalIndex 等学习状态
           console.log('[TRACE-SCHEDULE] 顺延执行 | english="' + (sentence.english || '').substring(0, 30) + '" | 原scheduledDate=' + sentence.scheduledDate + ' → 新scheduledDate=' + tomorrowStr);
           await storageService.updateSentenceFields(sentence.english, { scheduledDate: tomorrowStr });
           rescheduledCount++;
         }
 
-        if (rescheduledCount > 0 || skippedCount > 0) {
-          console.log(`📚 后台静默处理：${rescheduledCount} 个预约句子顺延至 ${tomorrowStr}，${skippedCount} 个已学句子跳过顺延`);
+        if (rescheduledCount > 0 || skippedCount > 0 || skippedBySavedCount > 0) {
+          console.log(`📚 后台静默处理：${rescheduledCount} 个顺延至 ${tomorrowStr}，${skippedCount} 个已学跳过，${skippedBySavedCount} 个今日已显示跳过`);
         }
       }
 
