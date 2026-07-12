@@ -343,14 +343,21 @@ export const storageSentenceService = {
    * 撤销单句覆盖：用备份快照恢复本地数据
    * 同样使用 dbService.put 直接写入（绕过守卫）
    *
+   * 关键：updatedAt 必须对齐云端值（cloudUpdatedAt），而非 Date.now()。
+   * 若用 Date.now()，会导致 localTime > cloudTime，下次同步时将
+   * backup（旧本地数据）反向推送到云端，污染其他设备。
+   * 对齐后 localTime == cloudTime，同步逻辑（localTime > cloudTime 严格大于才推送）
+   * 不会触发反向推送，本地保留 backup 数据、云端保持恢复数据，分歧符合预期。
+   *
    * @param backup 覆盖前的本地快照
+   * @param cloudUpdatedAt 恢复操作时云端/最终句子的 updatedAt（用于对齐，避免反向推送）
    */
-  undoRestoreSingleSentence: async (backup: Sentence): Promise<void> => {
+  undoRestoreSingleSentence: async (backup: Sentence, cloudUpdatedAt?: number): Promise<void> => {
     const restored: Sentence = {
       ...backup,
-      updatedAt: Date.now(),
+      updatedAt: cloudUpdatedAt && cloudUpdatedAt > 0 ? cloudUpdatedAt : backup.updatedAt,
     };
     await dbService.put(restored);
-    console.log('[OVERWRITE] 撤销单句覆盖 | english="' + (restored.english || '').substring(0, 30) + '" | intervalIndex=' + restored.intervalIndex);
+    console.log('[OVERWRITE] 撤销单句覆盖 | english="' + (restored.english || '').substring(0, 30) + '" | intervalIndex=' + restored.intervalIndex + ' | updatedAt=' + restored.updatedAt + (cloudUpdatedAt ? ' (对齐云端)' : ' (保留原值)'));
   },
 };

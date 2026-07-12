@@ -1,5 +1,6 @@
 import React from 'react';
 import { Sentence } from '../../../types';
+import { CARD_MIN_HEIGHT } from './cardConstants';
 
 interface ReviewCardProps {
   sentence: Sentence;
@@ -35,7 +36,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({
       <div
         className={`card-inner apple-card ${isFlipped ? 'card-flipped' : ''}`}
         onClick={onFlip}
-        style={{ position: 'relative', width: '100%', minHeight: '380px', transformStyle: 'preserve-3d' }}
+        style={{ position: 'relative', width: '100%', minHeight: CARD_MIN_HEIGHT, transformStyle: 'preserve-3d' }}
       >
         <div
           className="card-front p-6 bg-white"

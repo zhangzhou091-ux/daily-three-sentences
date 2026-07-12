@@ -122,6 +122,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
     sentenceId: null,
   });
   const undoBackupRef = useRef<Sentence | null>(null);
+  const undoCloudUpdatedAtRef = useRef<number | null>(null);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   const [importProgress, setImportProgress] = useState<ImportProgress>({
@@ -454,6 +455,8 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
       // 原因：若本地 < 云端，说明本地状态已过时，撤销会恢复"脏数据"
       if (backup && localOriginalInterval >= cloudInterval) {
         undoBackupRef.current = backup;
+        // 存储云端 updatedAt，供撤销时对齐，避免反向推送污染
+        undoCloudUpdatedAtRef.current = finalSentence.updatedAt || restoreTime;
         // 清除之前的 undo 计时器
         if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
 
@@ -466,6 +469,7 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
         undoTimerRef.current = setTimeout(() => {
           setUndoToast({ show: false, message: '', sentenceId: null });
           undoBackupRef.current = null;
+          undoCloudUpdatedAtRef.current = null;
           undoTimerRef.current = null;
         }, 5000);
       } else {
@@ -479,9 +483,11 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
 
   /**
    * 撤销单句覆盖：用备份快照恢复本地数据
+   * 传入 cloudUpdatedAt 对齐时间戳，避免下次同步反向推送 backup 到云端
    */
   const handleUndoRestore = useCallback(async () => {
     const backup = undoBackupRef.current;
+    const cloudUpdatedAt = undoCloudUpdatedAtRef.current;
     if (!backup) return;
 
     if (undoTimerRef.current) {
@@ -490,8 +496,9 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
     }
 
     try {
-      await storageService.undoRestoreSingleSentence(backup);
+      await storageService.undoRestoreSingleSentence(backup, cloudUpdatedAt ?? undefined);
       undoBackupRef.current = null;
+      undoCloudUpdatedAtRef.current = null;
       setUndoToast({ show: false, message: '', sentenceId: null });
       showToast('↩️ 已撤销恢复', 'success');
       await onUpdate();

@@ -11,7 +11,7 @@ interface SentenceListProps {
   onGenerateAudio?: (sentence: Sentence, engine: TTSEngine) => void;
   onEdit?: (sentence: Sentence, english: string, chinese: string, tags: string[]) => void;
   /** 单句从云端恢复（覆盖本地） */
-  onOverwriteFromCloud?: (sentence: Sentence) => void;
+  onOverwriteFromCloud?: (sentence: Sentence) => Promise<void> | void;
 }
 
 const hasAudioCache = (s: Sentence): boolean => {
@@ -25,10 +25,10 @@ const getAudioEngineLabel = (s: Sentence): string | null => {
   return parts.length > 0 ? parts.join(' / ') : null;
 };
 
-/** 普通模式行高 */
-const NORMAL_ROW_HEIGHT = 300;
-/** 编辑模式行高 */
-const EDIT_ROW_HEIGHT = 420;
+/** 普通模式行高（360px 覆盖 3行英文+多tag+预约标签场景，实测最大 ~348px） */
+const NORMAL_ROW_HEIGHT = 360;
+/** 编辑模式行高（480px 覆盖 3个textarea+警告+按钮） */
+const EDIT_ROW_HEIGHT = 480;
 
 /** 传递给每行组件的额外 props */
 interface RowData {
@@ -354,14 +354,20 @@ export const SentenceList: React.FC<SentenceListProps> = memo(({ sentences, onDe
   const handleOverwriteFromCloud = useCallback(async (s: Sentence) => {
     if (!onOverwriteFromCloud) return;
     setOverwritingFromCloudId(s.id);
+    // 8 秒兜底超时：与操作并行运行，防止异常时按钮永久 disabled
+    const fallbackTimer = setTimeout(() => {
+      setOverwritingFromCloudId(prev => prev === s.id ? null : prev);
+    }, 8000);
     try {
-      onOverwriteFromCloud(s);
+      await onOverwriteFromCloud(s);
+    } catch (err) {
+      // handleRestoreFromCloud 内部已有 try/catch + showToast
+      // 此处兜底防止未预期异常成为 unhandled rejection
+      console.error('[SentenceList] 从云端恢复异常:', err instanceof Error ? err.message : String(err));
     } finally {
-      // 由父组件触发数据刷新后会传入新的 sentences，loading 状态随之清除
-      // 此处设置 8 秒兜底超时，避免异常时按钮永久 disabled
-      setTimeout(() => {
-        setOverwritingFromCloudId(prev => prev === s.id ? null : prev);
-      }, 8000);
+      clearTimeout(fallbackTimer);
+      // 操作完成（无论成功失败），立即清除 loading
+      setOverwritingFromCloudId(prev => prev === s.id ? null : prev);
     }
   }, [onOverwriteFromCloud]);
 
