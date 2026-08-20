@@ -150,6 +150,12 @@ describe('audioUnlockService - iOS 音频引擎解锁', () => {
     vi.resetModules();
     setupIOS();
     resetAudioMocks();
+    // 解锁服务会通过 createSilenceWavBlob 创建 blob URL
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: vi.fn(() => 'blob:unlock-silence'),
+      revokeObjectURL: vi.fn(),
+    });
   });
 
   afterEach(() => {
@@ -190,6 +196,15 @@ describe('mediaSessionService - 静音保活核心服务', () => {
     vi.resetModules();
     setupIOS();
     resetAudioMocks();
+    // mediaSessionService 使用 createSilenceWavBlob 创建 blob URL
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: vi.fn((blob: unknown) => {
+        if (blob && (blob as { type?: string })?.type === 'audio/wav') return 'blob:mock-url';
+        return 'blob:delay-audio';
+      }),
+      revokeObjectURL: vi.fn(),
+    });
   });
 
   afterEach(() => {
@@ -523,7 +538,7 @@ describe('continuousAudioPlayer - 连续播放器 iOS 兼容', () => {
     continuousAudioPlayer.primeAudioChannelWithSilence();
     const playerAudio = continuousAudioPlayer.getAudioElement() as MockAudio;
 
-    expect(playerAudio.src.startsWith('data:audio/mp3;base64,')).toBe(true);
+    expect(playerAudio.src.startsWith('blob:')).toBe(true);
     expect(playerAudio.loop).toBe(true);
     expect(mockAudioPlay).toHaveBeenCalledTimes(1);
   });
