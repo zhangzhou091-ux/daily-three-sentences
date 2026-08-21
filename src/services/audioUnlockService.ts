@@ -73,12 +73,14 @@ export const unlockAudioEngine = (): Promise<boolean> => {
       }
       console.log('🔊 [AudioUnlock] HTMLAudioElement 已创建（全零 WAV 静音源），准备播放静音解锁...');
 
-      // 统一清理：暂停 + 释放 src + 回收 blob URL（超时/失败/维持结束三条路径共用）
+      // 统一清理（超时/失败/维持结束三条路径共用）
       const cleanupSilence = () => {
         try {
           audio.pause();
-          audio.removeAttribute('src');
-          audio.load();
+          // 注意：不要 removeAttribute('src') + load()！
+          // iOS 上 load() 会重置共享音频会话，正在播放的 TTS 元素会出现瞬态爆音，
+          // 时刻(解锁后10s)恰逢第一句播放尾部——这正是"第一句尾部杂音"的残余来源。
+          // 静音 WAV 无声，元素保留已加载状态无副作用；URL 已被读取，revoke 安全。
         } catch { /* ignore */ }
         try { URL.revokeObjectURL(silenceUrl); } catch { /* ignore */ }
       };
