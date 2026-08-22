@@ -24,6 +24,10 @@ let activeUploads = 0;
 let bucketEnsured: boolean | null = null;
 
 const generateStoragePath = (engine: TTSEngineType, cacheKey: string): string => {
+  // elevenlabs 经尾部净化后输出 WAV，并加 v2 版本段使存量污染缓存失效（minimax 路径不变）
+  if (engine === 'elevenlabs') {
+    return `elevenlabs/v2/${cacheKey}.wav`;
+  }
   return `${engine}/${cacheKey}.mp3`;
 };
 
@@ -91,7 +95,7 @@ const executeUpload = async (task: UploadTask): Promise<void> => {
     const { error } = await client.storage
       .from(BUCKET_NAME)
       .upload(path, audioBlob, {
-        contentType: 'audio/mpeg',
+        contentType: audioBlob.type || 'audio/mpeg',
         upsert: true,
       });
 
@@ -105,7 +109,7 @@ const executeUpload = async (task: UploadTask): Promise<void> => {
           const { error: retryError } = await client.storage
             .from(BUCKET_NAME)
             .upload(path, audioBlob, {
-              contentType: 'audio/mpeg',
+              contentType: audioBlob.type || 'audio/mpeg',
               upsert: true,
             });
           if (!retryError) {
@@ -680,7 +684,10 @@ export const ttsCloudCacheService = {
     }
 
     const candidates: Array<{ path: string; engine: TTSEngineType }> = [];
-    if (cloudPathEl) candidates.push({ path: cloudPathEl, engine: 'elevenlabs' });
+    // 忽略旧格式 elevenlabs 路径（v1 污染音频），避免守卫误判已有录音而拒绝重新生成干净音频
+    if (cloudPathEl && cloudPathEl.startsWith('elevenlabs/v2/')) {
+      candidates.push({ path: cloudPathEl, engine: 'elevenlabs' });
+    }
     if (cloudPathMm) candidates.push({ path: cloudPathMm, engine: 'minimax' });
 
     if (candidates.length === 0) {

@@ -256,6 +256,134 @@ const disconnectSource = () => {
   }
 };
 
+interface SanitizeTtsResult {
+  blob: Blob;
+  trimmedMs: number;
+  tailRmsDb: number;
+}
+
+/**
+ * ElevenLabs 音频尾部净化：解码 → 扫描尾部无声区 → 裁剪 + 淡出 → 重封装 16-bit PCM WAV
+ *
+ * 解决两类尾部杂音：
+ * 1. eleven_v3 偶发坏生成导致的尾部毛刺/失真；
+ * 2. MP3 在非零振幅处截断产生的尾部 click。
+ *
+ * 算法：
+ * 1. decodeAudioData 解码（浏览器先正确解码 MP3，避免手工包装 PCM 的采样率/声道假设问题）
+ * 2. 从尾部向前扫描最后一个 > -45dB RMS（10ms 窗）的有声点
+ * 3. 截到 有声点 + 120ms 静音垫
+ * 4. 末尾 40ms 线性淡出（消除截断瞬态）
+ * 5. 重封装 16-bit PCM WAV（playAudioBlob 通过 blob.type 透传，audio/wav 无需改播放代码）
+ *
+ * 解码失败时原样返回，保底不破坏播放。
+ */
+const sanitizeTtsBlob = async (blob: Blob): Promise<SanitizeTtsResult> => {
+  let ctx: AudioContext | null = null;
+  try {
+    if (typeof window === 'undefined') {
+      return { blob, trimmedMs: 0, tailRmsDb: 0 };
+    }
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) {
+      return { blob, trimmedMs: 0, tailRmsDb: 0 };
+    }
+
+    ctx = new AudioCtx();
+    const audio = await ctx.decodeAudioData(await blob.arrayBuffer());
+
+    const sampleRate = audio.sampleRate;
+    const channelCount = audio.numberOfChannels;
+    const length = audio.length;
+
+    // 1. 从尾部向前扫描最后一个有声点（10ms 窗，RMS 阈值 -45dB ≈ 0.0056）
+    const win = Math.max(1, Math.floor(sampleRate * 0.01));
+    const ch0 = audio.getChannelData(0);
+    let lastSpeech = -1;
+    for (let end = length; end > 0; end -= win) {
+      const start = Math.max(0, end - win);
+      let sum = 0;
+      for (let i = start; i < end; i++) sum += ch0[i] * ch0[i];
+      const rms = Math.sqrt(sum / (end - start));
+      if (rms > 0.0056) {
+        lastSpeech = end;
+        break;
+      }
+    }
+
+    // 2. 截到有声点 + 120ms 静音垫（未找到有声点则全保留）
+    let cut = length;
+    if (lastSpeech >= 0) {
+      cut = Math.min(length, lastSpeech + Math.floor(sampleRate * 0.12));
+    }
+
+    // 3. 末尾 40ms 线性淡出（消除截断瞬态）
+    const fade = Math.max(0, Math.floor(sampleRate * 0.04));
+    const fadeStart = Math.max(0, cut - fade);
+    for (let c = 0; c < channelCount; c++) {
+      const data = audio.getChannelData(c);
+      for (let i = 0; i < fade && fadeStart + i < cut; i++) {
+        data[fadeStart + i] *= 1 - i / fade;
+      }
+    }
+
+    // 4. 计算被裁剪尾部 RMS(dB) 供日志观察坏生成率
+    let tailRmsDb = -120;
+    if (cut < length) {
+      let tailSum = 0;
+      for (let i = cut; i < length; i++) tailSum += ch0[i] * ch0[i];
+      const tailRms = Math.sqrt(tailSum / (length - cut));
+      if (tailRms > 0) tailRmsDb = Math.round(20 * Math.log10(tailRms));
+    }
+
+    // 5. 重封装 16-bit PCM WAV
+    const bytesPerSample = 2;
+    const dataSize = cut * channelCount * bytesPerSample;
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+
+    const writeString = (offset: number, value: string) => {
+      for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i));
+    };
+
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + dataSize, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);                     // PCM fmt chunk 大小
+    view.setUint16(20, 1, true);                      // 编码格式 = PCM
+    view.setUint16(22, channelCount, true);           // 声道数
+    view.setUint32(24, sampleRate, true);             // 采样率
+    view.setUint32(28, sampleRate * channelCount * bytesPerSample, true); // 字节率
+    view.setUint16(32, channelCount * bytesPerSample, true);             // 块对齐
+    view.setUint16(34, bytesPerSample * 8, true);     // 位深
+    writeString(36, 'data');
+    view.setUint32(40, dataSize, true);
+
+    let offset = 44;
+    for (let i = 0; i < cut; i++) {
+      for (let c = 0; c < channelCount; c++) {
+        const sample = Math.max(-1, Math.min(1, audio.getChannelData(c)[i]));
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+        offset += 2;
+      }
+    }
+
+    const trimmedMs = (length - cut) / sampleRate * 1000;
+    const wavBlob = new Blob([buffer], { type: 'audio/wav' });
+
+    console.log(`🔊 [ElevenLabs] 尾部净化 | [裁剪] ${trimmedMs.toFixed(1)}ms | [尾RMS] ${tailRmsDb}dB | [声道] ${channelCount} | [原始] ${blob.type || 'unknown'} → [输出] audio/wav`);
+    return { blob: wavBlob, trimmedMs, tailRmsDb };
+  } catch (err) {
+    console.warn('🔊 [ElevenLabs] 尾部净化失败，原样返回:', err instanceof Error ? err.message : String(err));
+    return { blob, trimmedMs: 0, tailRmsDb: 0 };
+  } finally {
+    if (ctx && ctx.state !== 'closed') {
+      try { ctx.close(); } catch { /* ignore */ }
+    }
+  }
+};
+
 const playAudioBlob = async (audioBlob: Blob, loop: boolean = false, rate: number = 1): Promise<void> => {
   const gen = ++audioGeneration;
   const isCurrentGen = () => gen === audioGeneration;
@@ -748,6 +876,10 @@ export const elevenLabsService = {
 
       console.log(`🔊 [ElevenLabs] 合成完成 | [大小] ${elevenLabsCacheService.formatSize(audioBlob.size)} | [类型] ${audioBlob.type}`);
 
+      // 尾部净化：解码→裁剪→淡出→重封装 WAV，接入于本地/云端缓存写入与播放之前
+      const sanitized = await sanitizeTtsBlob(audioBlob);
+      audioBlob = sanitized.blob;
+
       elevenLabsCacheService.put(trimmedText, voiceId, modelId, audioBlob).then((saved) => {
         if (saved) {
           console.log(`🔊 [ElevenLabs] 音频已缓存到本地`);
@@ -1034,6 +1166,10 @@ export const elevenLabsService = {
       }
 
       console.log(`🔊 [ElevenLabs] fetchAudioBlob: 合成完成 | [大小] ${(blob.size / 1024).toFixed(1)} KB`);
+
+      // 尾部净化：解码→裁剪→淡出→重封装 WAV，接入于缓存写入之前
+      const sanitized = await sanitizeTtsBlob(blob);
+      blob = sanitized.blob;
 
       elevenLabsCacheService.put(trimmedText, voiceId, model, blob).catch(() => {});
       ttsCloudCacheService.put(trimmedText, voiceId, 'elevenlabs', blob, model).catch(() => {});
