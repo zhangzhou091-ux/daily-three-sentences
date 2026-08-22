@@ -194,13 +194,15 @@ const SentenceRow = memo(({ index, style, ...data }: RowComponentProps<RowData>)
                             {audioDeleteConfirmId === s.id ? '⚠️ 确认清除?' : '🗑️ 清除语音'}
                           </button>
                         )}
-                        <button
-                          onClick={() => toggleEnginePopup(s.id)}
-                          className="text-[10px] font-bold text-gray-500 hover:text-blue-600 transition-colors"
-                          title={hasAudioCache(s) ? '重新生成语音' : '生成语音'}
-                        >
-                          {hasAudioCache(s) ? '🔄 重新生成' : '🔊 生成语音'}
-                        </button>
+                        {!hasAudioCache(s) && (
+                          <button
+                            onClick={() => toggleEnginePopup(s.id)}
+                            className="text-[10px] font-bold text-gray-500 hover:text-blue-600 transition-colors"
+                            title="生成语音"
+                          >
+                            🔊 生成语音
+                          </button>
+                        )}
                         {enginePopupId === s.id && (
                           <div className="absolute top-full right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 py-1 min-w-[110px]">
                             <button

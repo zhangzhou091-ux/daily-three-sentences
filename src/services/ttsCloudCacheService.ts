@@ -684,11 +684,11 @@ export const ttsCloudCacheService = {
     }
 
     const candidates: Array<{ path: string; engine: TTSEngineType }> = [];
-    // 忽略旧格式 elevenlabs 路径（v1 污染音频），避免守卫误判已有录音而拒绝重新生成干净音频
-    if (cloudPathEl && cloudPathEl.startsWith('elevenlabs/v2/')) {
-      candidates.push({ path: cloudPathEl, engine: 'elevenlabs' });
-    }
-    if (cloudPathMm) candidates.push({ path: cloudPathMm, engine: 'minimax' });
+    // 只要有录音（不论 v1/v2 新旧版本、不论引擎），一律视为已存在，禁止再次生成
+    // 'pending' 是本地占位符而非真实存储路径，不参与文件校验（L1 元数据守卫仍会拦截）
+    const isRealStoragePath = (p: string | null): p is string => !!p && p !== 'pending';
+    if (isRealStoragePath(cloudPathEl)) candidates.push({ path: cloudPathEl, engine: 'elevenlabs' });
+    if (isRealStoragePath(cloudPathMm)) candidates.push({ path: cloudPathMm, engine: 'minimax' });
 
     if (candidates.length === 0) {
       return { exists: false };
