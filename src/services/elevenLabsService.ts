@@ -54,6 +54,12 @@ interface PendingSpeakRequest {
 
 const API_BASE = 'https://api.elevenlabs.io';
 const DEFAULT_MODEL = 'eleven_v3';
+export const ELEVEN_MULTILINGUAL_V2_MODEL = 'eleven_multilingual_v2';
+
+/** 根据设置中的 TTS 引擎返回 ElevenLabs model_id：v2 引擎用 multilingual_v2，其余用默认模型 */
+export const getModelIdForEngine = (engine: string): string => {
+  return engine === 'eleven_multilingual_v2' ? ELEVEN_MULTILINGUAL_V2_MODEL : DEFAULT_MODEL;
+};
 const DEFAULT_OUTPUT_FORMAT = 'mp3_44100_128';
 const BASE_SPEAK_TIMEOUT = 20000;
 const VOICES_CACHE_TTL = 30 * 60 * 1000;

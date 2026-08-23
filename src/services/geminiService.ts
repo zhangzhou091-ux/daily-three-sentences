@@ -8,7 +8,7 @@
  */
 
 import { TTSEngine } from '../types';
-import { elevenLabsService } from './elevenLabsService';
+import { elevenLabsService, getModelIdForEngine } from './elevenLabsService';
 import { edgeTtsService } from './edgeTtsService';
 import { storageService } from './storage';
 import { mediaSessionService } from './mediaSessionService';
@@ -548,7 +548,7 @@ const syncToLocalCache = async (
   const trimmedText = text.trim();
   if (engine === 'elevenlabs') {
     const elVoiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
-    const elModelId = elevenLabsService.getDefaultModel();
+    const elModelId = getModelIdForEngine(settings.ttsEngine || 'elevenlabs');
     elevenLabsCacheService.put(trimmedText, elVoiceId, elModelId, blob).catch(() => {});
   } else {
     try {
@@ -570,7 +570,7 @@ const tryUnifiedCacheFirst = async (
   if (!trimmedText) return null;
 
   const elVoiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
-  const elModelId = elevenLabsService.getDefaultModel();
+  const elModelId = getModelIdForEngine(engine);
 
   try {
     const elCached = await elevenLabsCacheService.get(trimmedText, elVoiceId, elModelId);
@@ -688,8 +688,9 @@ export const geminiService = {
         return { success: false, error: '未配置 ElevenLabs API 密钥' };
       }
       try {
-        console.log(`🔊 [引擎] ElevenLabs | [语音] ${voiceId} | [循环] ${loop} | [语速] ${speechRate}`);
-        const result = await elevenLabsService.speak(text, apiKey, voiceId, loop, undefined, speechRate);
+        const modelId = getModelIdForEngine(ttsEngine);
+        console.log(`🔊 [引擎] ElevenLabs | [模型] ${modelId} | [语音] ${voiceId} | [循环] ${loop} | [语速] ${speechRate}`);
+        const result = await elevenLabsService.speak(text, apiKey, voiceId, loop, modelId, speechRate);
         if (result.success) return result;
         console.warn('🔊 ElevenLabs 播放失败:', result.error);
         return result;
@@ -745,7 +746,7 @@ export const geminiService = {
       });
     };
 
-    if (ttsEngine === 'elevenlabs') {
+    if (ttsEngine === 'elevenlabs' || ttsEngine === 'eleven_multilingual_v2') {
       const result = await tryElevenLabs();
       if (result.success) return result;
       console.error(`🔊 [ElevenLabs] 调用失败: ${result.error}`);
@@ -838,16 +839,16 @@ export const geminiService = {
   getCurrentEngineInfo(): { engine: string; voiceName: string; isLocal: boolean } {
     const settings = storageService.getSettings();
     const ttsEngine: TTSEngine = settings.ttsEngine || 'elevenlabs';
-    if (ttsEngine === 'elevenlabs') {
+    if (ttsEngine === 'elevenlabs' || ttsEngine === 'eleven_multilingual_v2') {
       const voiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
       const apiKey = settings.elevenLabsApiKey;
       // 检查加密或明文 API Key 是否存在
       const hasKey = apiKey && (apiKey.startsWith('aes:') || apiKey.trim());
       if (!hasKey) {
-        return { engine: 'ElevenLabs (未配置)', voiceName: '未配置', isLocal: false };
+        return { engine: ttsEngine === 'eleven_multilingual_v2' ? 'ElevenLabs Multilingual V2 (未配置)' : 'ElevenLabs (未配置)', voiceName: '未配置', isLocal: false };
       }
       const popularVoice = elevenLabsService.getPopularVoices().find(v => v.voice_id === voiceId);
-      return { engine: 'ElevenLabs', voiceName: popularVoice?.name || voiceId, isLocal: false };
+      return { engine: ttsEngine === 'eleven_multilingual_v2' ? 'ElevenLabs Multilingual V2' : 'ElevenLabs', voiceName: popularVoice?.name || voiceId, isLocal: false };
     }
     if (ttsEngine === 'minimax') {
       const voiceId = settings.minimaxVoiceId || 'English_expressive_narrator';
@@ -905,7 +906,7 @@ export const geminiService = {
     // 第一阶段：精确匹配并行（IndexedDB 读取，几乎无网络开销）
     try {
       const elVoiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
-      const elModelId = elevenLabsService.getDefaultModel();
+      const elModelId = getModelIdForEngine(ttsEngine);
       const { minimaxTtsService } = await import('./minimaxTtsService');
       const mmVoiceId = settings.minimaxVoiceId || minimaxTtsService.getDefaultVoiceId();
 
@@ -988,13 +989,13 @@ export const geminiService = {
       }
     }
 
-    if (ttsEngine === 'elevenlabs') {
+    if (ttsEngine === 'elevenlabs' || ttsEngine === 'eleven_multilingual_v2') {
       const apiKey = await decryptApiKey(settings.elevenLabsApiKey);
       const voiceId = settings.elevenLabsVoiceId || elevenLabsService.getDefaultVoiceId();
       if (!apiKey || !apiKey.trim()) return null;
       try {
         console.log(`🔊 [fetchBlob] ElevenLabs | [语音] ${voiceId}`);
-        return await elevenLabsService.fetchAudioBlob(text, apiKey, voiceId, undefined);
+        return await elevenLabsService.fetchAudioBlob(text, apiKey, voiceId, getModelIdForEngine(ttsEngine));
       } catch (err) {
         console.warn('🔊 [fetchBlob] ElevenLabs 失败:', err instanceof Error ? err.message : String(err));
         return null;

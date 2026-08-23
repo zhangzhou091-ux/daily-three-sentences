@@ -114,10 +114,10 @@ const runHealthCheck = async (
   try {
     const engine: TTSEngine = settings.ttsEngine || 'elevenlabs';
     const engineNames: Record<TTSEngine, string> = {
-      elevenlabs: 'ElevenLabs', minimax: 'MiniMax', edgeTts: 'EdgeTTS', webSpeech: 'Web Speech API',
+      elevenlabs: 'ElevenLabs', eleven_multilingual_v2: 'ElevenLabs Multilingual V2', minimax: 'MiniMax', edgeTts: 'EdgeTTS', webSpeech: 'Web Speech API',
     };
     const name = engineNames[engine];
-    if (engine === 'elevenlabs') {
+    if (engine === 'elevenlabs' || engine === 'eleven_multilingual_v2') {
       if (!settings.elevenLabsApiKey?.trim()) {
         update('tts_engine', { status: 'fail', detail: `${name}: 未配置 API 密钥`, suggestion: '请在设置中填写 ElevenLabs API 密钥，或在 elevenlabs.io 注册获取免费额度' });
       } else if (!settings.elevenLabsVoiceId) {
@@ -145,7 +145,7 @@ const runHealthCheck = async (
   update('tts_api', { status: 'checking', detail: '检测中...' });
   try {
     const engine: TTSEngine = settings.ttsEngine || 'elevenlabs';
-    if (engine === 'elevenlabs') {
+    if (engine === 'elevenlabs' || engine === 'eleven_multilingual_v2') {
       if (settings.elevenLabsApiKey?.trim()) {
         const result = await elevenLabsService.validateApiKey(settings.elevenLabsApiKey.trim());
         if (result.valid) {

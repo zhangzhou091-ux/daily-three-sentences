@@ -51,7 +51,7 @@ export type ViewType = 'study' | 'manage' | 'achievements' | 'settings';
 // 学习步骤类型
 export type StudyStep = 'learn' | 'review' | 'dictation';
 
-export type TTSEngine = 'elevenlabs' | 'minimax' | 'edgeTts' | 'webSpeech';
+export type TTSEngine = 'elevenlabs' | 'eleven_multilingual_v2' | 'minimax' | 'edgeTts' | 'webSpeech';
 
 export interface UserSettings {
   dailyTarget: number;

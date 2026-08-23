@@ -520,18 +520,19 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                 <label className="text-[10px] font-black text-gray-600 uppercase tracking-widest">TTS 引擎</label>
                 <select
                   value={settings.ttsEngine || 'elevenlabs'}
-                  onChange={(e) => handleUpdate('ttsEngine', e.target.value as 'elevenlabs' | 'minimax' | 'edgeTts' | 'webSpeech')}
+                  onChange={(e) => handleUpdate('ttsEngine', e.target.value as 'elevenlabs' | 'eleven_multilingual_v2' | 'minimax' | 'edgeTts' | 'webSpeech')}
                   className="text-sm font-bold text-gray-900 bg-gray-50 rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-blue-100 w-full cursor-pointer"
                   disabled={loading}
                 >
                   <option value="elevenlabs">ElevenLabs (最高质量，缓存后不消耗额度)</option>
+                  <option value="eleven_multilingual_v2">ElevenLabs Multilingual V2 (更稳定的多语言模型)</option>
                   <option value="minimax">MiniMax (直连 API，高质量多语言)</option>
                   <option value="edgeTts">EdgeTTS (微软免费语音，无需密钥)</option>
                   <option value="webSpeech">浏览器原生语音 (无需下载)</option>
                 </select>
                 <p className="text-[10px] text-gray-500">所选引擎失败时将直接报错，不自动回退</p>
               </div>
-              {settings.ttsEngine === 'elevenlabs' && (
+              {(settings.ttsEngine === 'elevenlabs' || settings.ttsEngine === 'eleven_multilingual_v2') && (
                 <div className="space-y-4 p-4 bg-gradient-to-br from-purple-50 to-indigo-50 rounded-2xl">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-sm">🎙️</span>
@@ -795,7 +796,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ sentencesCount, onConfigUpd
                   </div>
                 </div>
               )}
-              {(settings.ttsEngine === 'elevenlabs' || settings.ttsEngine === 'minimax') && (
+              {(settings.ttsEngine === 'elevenlabs' || settings.ttsEngine === 'eleven_multilingual_v2' || settings.ttsEngine === 'minimax') && (
                 <div className="space-y-4 p-4 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-sm">☁️</span>
