@@ -13,7 +13,7 @@ import { edgeTtsService } from './edgeTtsService';
 import { storageService } from './storage';
 import { mediaSessionService } from './mediaSessionService';
 import { continuousAudioPlayer } from './continuousAudioPlayer';
-import { ttsCloudCacheService } from './ttsCloudCacheService';
+import { ttsCloudCacheService, escapeLikePattern } from './ttsCloudCacheService';
 import { dbService } from './dbService';
 import { elevenLabsCacheService } from './elevenLabsCacheService';
 import { cryptoService } from './cryptoService';
@@ -622,14 +622,18 @@ const tryUnifiedCacheFirst = async (
     }
 
     // 兜底：本地 DB 无路径时，直连 Supabase sentences 表查询
+    // 修复 5：补 username 过滤 + ilike 转义，堵 limit(1) 随机取到他人/旧的无路径行
     if (!cloudPathEl && !cloudPathMm && supabaseService.client) {
       try {
-        const { data } = await supabaseService.client
+        const userName = supabaseService.userName;
+        const base = supabaseService.client
           .from('sentences')
           .select('tts_audio_path_el, tts_audio_path_mm')
-          .ilike('english', trimmedText)
-          .limit(1)
-          .single();
+          .ilike('english', escapeLikePattern(trimmedText))
+          .limit(1);
+        const { data } = userName
+          ? await base.eq('username', userName).single()
+          : await base.single();
         if (data) {
           cloudPathEl = data.tts_audio_path_el || null;
           cloudPathMm = data.tts_audio_path_mm || null;
@@ -665,6 +669,93 @@ const tryUnifiedCacheFirst = async (
   return null;
 };
 
+/**
+ * 修复 3：播放路径正向确认守卫——全部缓存未命中、即将调 TTS API 前的云端回收。
+ * 只做正向确认：尽力取回云端已有音频；取不回一律放行生成（fail-open 收敛，绝不制造静音）。
+ * - 元数据确认存在 → 尽力取回（SDK 重试 + public URL 直链兜底）→ 拿到即跳过 TTS API
+ * - notFound（确定孤儿 404）→ 放行生成，顺带清除该句陈旧元数据（合法自愈）
+ * - 网络错误 → 直链兜底重试一次 → 仍失败放行生成
+ * - 元数据完全缺失 → 无从取回，直接放行（与现状一致）
+ */
+const tryCloudRecoveryBeforeApi = async (
+  text: string,
+  settings: ReturnType<typeof storageService.getSettings>
+): Promise<Blob | null> => {
+  const trimmedText = text.trim();
+  if (!trimmedText) return null;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return null;
+  if (!supabaseService.client) return null;
+
+  try {
+    // 元数据确认（本地 IndexedDB → 云端 sentences 表兜底直查，含修复 5 加固）
+    let cloudPathEl: string | null = null;
+    let cloudPathMm: string | null = null;
+
+    try {
+      const sentence = await dbService.findByEnglish(trimmedText);
+      if (sentence) {
+        cloudPathEl = sentence.ttsAudioPathEl || null;
+        cloudPathMm = sentence.ttsAudioPathMm || null;
+      }
+    } catch { /* ignore */ }
+
+    if (!cloudPathEl && !cloudPathMm) {
+      try {
+        const userName = supabaseService.userName;
+        const base = supabaseService.client
+          .from('sentences')
+          .select('tts_audio_path_el, tts_audio_path_mm')
+          .ilike('english', escapeLikePattern(trimmedText))
+          .limit(1);
+        const { data } = userName
+          ? await base.eq('username', userName).single()
+          : await base.single();
+        if (data) {
+          cloudPathEl = data.tts_audio_path_el || null;
+          cloudPathMm = data.tts_audio_path_mm || null;
+        }
+      } catch { /* 网络层异常被吞 → fail-open 放行 */ }
+    }
+
+    // 'pending' 为本地占位符，非真实存储路径，不参与回收
+    const isRealPath = (p: string | null): p is string => !!p && p !== 'pending';
+    const candidates: Array<{ path: string; engine: 'elevenlabs' | 'minimax' }> = [];
+    if (isRealPath(cloudPathEl)) candidates.push({ path: cloudPathEl, engine: 'elevenlabs' });
+    if (isRealPath(cloudPathMm)) candidates.push({ path: cloudPathMm, engine: 'minimax' });
+
+    if (candidates.length === 0) return null;
+
+    for (const { path, engine } of candidates) {
+      const result = await ttsCloudCacheService.downloadByPathDetailed(path);
+
+      if ('blob' in result) {
+        console.log(`🔊 [守卫] 云端回收命中（跳过 TTS API） | [${engine}] | [路径] ${path}`);
+        syncToLocalCache(trimmedText, result.blob, engine, settings).catch(() => {});
+        return result.blob;
+      }
+
+      if ('notFound' in result) {
+        // 404 = 文件确认不存在 = 重生成是合法自愈，放行并清掉陈旧元数据
+        console.warn(`🔊 [守卫] 确定孤儿（404），放行生成并清除陈旧元数据 | [路径] ${path}`);
+        await ttsCloudCacheService.clearSentenceAudioMetadata(trimmedText, engine).catch(() => {});
+        continue;
+      }
+
+      // 网络错误 → public URL 直链兜底再试一次
+      const directBlob = await ttsCloudCacheService.downloadViaPublicUrl(path);
+      if (directBlob) {
+        console.log(`🔊 [守卫] 直链重试命中（跳过 TTS API） | [${engine}] | [路径] ${path}`);
+        syncToLocalCache(trimmedText, directBlob, engine, settings).catch(() => {});
+        return directBlob;
+      }
+
+      console.warn(`🔊 [守卫] 云端取回失败（网络），放行生成 | [路径] ${path}`);
+    }
+  } catch { /* 整体 fail-open */ }
+
+  return null;
+};
+
 export const geminiService = {
   async speak(text: string, loop: boolean = false): Promise<SpeakResult> {
     mediaSessionService.holdAudioFocus();
@@ -680,6 +771,14 @@ export const geminiService = {
 
     const cacheResult = await tryUnifiedCacheFirst(text, loop, speechRate, settings, ttsEngine);
     if (cacheResult) return cacheResult;
+
+    // 修复 3：云端回收守卫——全部缓存未命中、调 TTS API 前的最后回收（正向确认，不拦截生成）
+    const recoveredBlob = await tryCloudRecoveryBeforeApi(text, settings);
+    if (recoveredBlob) {
+      const played = await playCachedBlob(recoveredBlob, loop, speechRate);
+      if (played) return { success: true };
+      console.warn('🔊 [守卫] 回收音频播放失败，转入 API 路径');
+    }
 
     const tryElevenLabs = async (): Promise<SpeakResult> => {
       const apiKey = await decryptApiKey(settings.elevenLabsApiKey);
@@ -938,14 +1037,18 @@ export const geminiService = {
       }
 
       // 兜底：本地 DB 无路径时，直连 Supabase sentences 表查询
+      // 修复 5：补 username 过滤 + ilike 转义，堵 limit(1) 随机取到他人/旧的无路径行
       if (!cloudPathEl && !cloudPathMm && supabaseService.client) {
         try {
-          const { data } = await supabaseService.client
+          const userName = supabaseService.userName;
+          const base = supabaseService.client
             .from('sentences')
             .select('tts_audio_path_el, tts_audio_path_mm')
-            .ilike('english', trimmedText)
-            .limit(1)
-            .single();
+            .ilike('english', escapeLikePattern(trimmedText))
+            .limit(1);
+          const { data } = userName
+            ? await base.eq('username', userName).single()
+            : await base.single();
           if (data) {
             cloudPathEl = data.tts_audio_path_el || null;
             cloudPathMm = data.tts_audio_path_mm || null;
@@ -974,6 +1077,13 @@ export const geminiService = {
         } catch { /* ignore */ }
       }
     } catch { /* ignore */ }
+
+    // 修复 3：云端回收守卫——全部缓存未命中、调 TTS API 前的最后回收（正向确认，不拦截生成）
+    const recoveredBlob = await tryCloudRecoveryBeforeApi(trimmedText, settings);
+    if (recoveredBlob) {
+      console.log(`🔊 [fetchBlob] 守卫回收命中，跳过 TTS API`);
+      return recoveredBlob;
+    }
 
     if (ttsEngine === 'minimax') {
       try {

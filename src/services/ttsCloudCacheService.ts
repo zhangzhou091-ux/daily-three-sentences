@@ -17,7 +17,17 @@ interface UploadTask {
   rate: number;
   retryCount: number;
   resolve: (success: boolean) => void;
+  /** 修复 1：元数据补写阶段标记——上传已成功，仅补写 sentences 表元数据 */
+  metadataOnly?: boolean;
+  /** 修复 1：metadataOnly 阶段携带的 Storage 路径（上传成功时计算得出） */
+  storagePath?: string;
 }
+
+/** 修复 3：带错误类型的路径下载结果 */
+export type CloudDownloadResult =
+  | { blob: Blob }
+  | { notFound: true }
+  | { error: true };
 
 let uploadQueue: UploadTask[] = [];
 let activeUploads = 0;
@@ -71,10 +81,44 @@ const processUploadQueue = (): void => {
 };
 
 const executeUpload = async (task: UploadTask): Promise<void> => {
-  const { text, voice, engine, modelId, audioBlob, retryCount, resolve } = task;
+  const { text, voice, engine, modelId, audioBlob, retryCount, resolve, metadataOnly } = task;
 
   if (!isSupabaseReady()) {
     resolve(false);
+    return;
+  }
+
+  // 修复 1：元数据补写阶段——上传已成功，仅重试云端 sentences 表写入（本地 put 幂等，重做无害）
+  if (metadataOnly) {
+    const path = task.storagePath!;
+    try {
+      const { cloudOk } = await updateSentenceAudioPath(text, voice, engine, modelId, path);
+      if (cloudOk) {
+        console.log(`🔊 [CloudCache] 元数据补写成功（重试） | [${engine}] | [路径] ${path}`);
+        resolve(true);
+      } else if (retryCount < MAX_UPLOAD_RETRIES) {
+        console.warn(`🔊 [CloudCache] 元数据补写失败 [${engine}]，第 ${retryCount + 1}/${MAX_UPLOAD_RETRIES} 次重试`);
+        setTimeout(() => {
+          uploadQueue.push({ ...task, retryCount: retryCount + 1 });
+          processUploadQueue();
+        }, UPLOAD_RETRY_DELAY * (retryCount + 1));
+      } else {
+        console.warn(`🔊 [CloudCache] 元数据补写失败 [${engine}]，已耗尽重试（同设备本地路径不受影响，跨设备将由守卫自愈）`);
+        resolve(false);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (retryCount < MAX_UPLOAD_RETRIES) {
+        console.warn(`🔊 [CloudCache] 元数据补写异常 [${engine}]，第 ${retryCount + 1}/${MAX_UPLOAD_RETRIES} 次重试: ${msg}`);
+        setTimeout(() => {
+          uploadQueue.push({ ...task, retryCount: retryCount + 1 });
+          processUploadQueue();
+        }, UPLOAD_RETRY_DELAY * (retryCount + 1));
+      } else {
+        console.warn(`🔊 [CloudCache] 元数据补写异常 [${engine}]，已耗尽重试: ${msg}`);
+        resolve(false);
+      }
+    }
     return;
   }
 
@@ -113,9 +157,7 @@ const executeUpload = async (task: UploadTask): Promise<void> => {
               upsert: true,
             });
           if (!retryError) {
-            await updateSentenceAudioPath(text, voice, engine, modelId, path);
-            console.log(`🔊 [CloudCache] 已上传 | [${engine}] [语音] ${voice} | [大小] ${formatSize(audioBlob.size)}`);
-            resolve(true);
+            await handleMetadataWrite(task, path);
             return;
           }
         }
@@ -138,9 +180,7 @@ const executeUpload = async (task: UploadTask): Promise<void> => {
       return;
     }
 
-    await updateSentenceAudioPath(text, voice, engine, modelId, path);
-    console.log(`🔊 [CloudCache] 已上传 | [${engine}] [语音] ${voice} | [大小] ${formatSize(audioBlob.size)}`);
-    resolve(true);
+    await handleMetadataWrite(task, path);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
 
@@ -161,7 +201,36 @@ const executeUpload = async (task: UploadTask): Promise<void> => {
   }
 };
 
-const escapeLikePattern = (text: string): string => {
+/**
+ * 修复 1：上传成功后的元数据写入收口。
+ * 云端 sentences 表写入失败（error / 匹配 0 行 / 未就绪）时，任务以 metadataOnly
+ * 重新入队，走既有 MAX_UPLOAD_RETRIES + 退避逻辑，堵「跨设备孤儿文件」事故源。
+ */
+const handleMetadataWrite = async (task: UploadTask, storagePath: string): Promise<void> => {
+  const { text, voice, engine, modelId, resolve, audioBlob } = task;
+  const { cloudOk } = await updateSentenceAudioPath(text, voice, engine, modelId, storagePath);
+
+  if (cloudOk) {
+    console.log(`🔊 [CloudCache] 已上传 | [${engine}] [语音] ${voice} | [大小] ${formatSize(audioBlob.size)} | [路径] ${storagePath}`);
+    resolve(true);
+    return;
+  }
+
+  console.warn(`🔊 [CloudCache] 上传成功但元数据写入失败，转入 metadataOnly 重试 | [${engine}] | [路径] ${storagePath}`);
+  setTimeout(() => {
+    uploadQueue.push({
+      ...task,
+      metadataOnly: true,
+      storagePath,
+      retryCount: 0,
+      audioBlob: new Blob(), // metadataOnly 阶段不再需要音频内容，释放大对象引用
+    });
+    processUploadQueue();
+  }, UPLOAD_RETRY_DELAY);
+};
+
+/** 修复 5:导出供 geminiService 的兜底查询复用,统一 ilike 转义 */
+export const escapeLikePattern = (text: string): string => {
   return text.replace(/[%_]/g, '\\$&');
 };
 
@@ -171,10 +240,12 @@ const updateSentenceAudioPath = async (
   engine: TTSEngineType,
   modelId: string,
   storagePath: string
-): Promise<void> => {
+): Promise<{ localOk: boolean; cloudOk: boolean }> => {
   const trimmedText = text.trim();
   const column = engine === 'elevenlabs' ? 'tts_audio_path_el' : 'tts_audio_path_mm';
   const localField = engine === 'elevenlabs' ? 'ttsAudioPathEl' : 'ttsAudioPathMm';
+
+  let localOk = false;
 
   try {
     const localSentence = await dbService.findByEnglish(trimmedText);
@@ -185,36 +256,51 @@ const updateSentenceAudioPath = async (
         updatedAt: Date.now(),
       };
       await dbService.put(updatedSentence);
+      localOk = true;
       console.log(`🔊 [CloudCache] 本地句子音频路径已更新 | [${engine}] | [字段] ${localField}`);
     } else {
+      // 本地写失败分类①：本地句子不存在——会话内重试本地写入无意义，
+      // metadataOnly 重试实际服务的是云端写入（届时本地可能已同步到该句子）
       console.warn(`🔊 [CloudCache] 本地未找到对应句子，跳过本地更新 | [文本] ${trimmedText.slice(0, 30)}`);
     }
   } catch (err) {
+    // 本地写失败分类②：IndexedDB put 异常
     console.warn(`🔊 [CloudCache] 更新本地句子音频路径异常:`, err instanceof Error ? err.message : String(err));
   }
 
-  if (!isSupabaseReady()) return;
+  if (!isSupabaseReady()) return { localOk, cloudOk: false };
 
   const client = supabaseService.client!;
   const userName = supabaseService.userName;
-  if (!userName) return;
+  if (!userName) return { localOk, cloudOk: false };
 
   try {
     const now = Date.now();
     const escapedText = escapeLikePattern(trimmedText);
     const { error, count } = await client
       .from('sentences')
-      .update({ [column]: storagePath, updatedat: now })
+      .update({ [column]: storagePath, updatedat: now }, { count: 'exact' })
       .eq('username', userName)
       .ilike('english', escapedText);
 
     if (error) {
       console.warn(`🔊 [CloudCache] 更新云端音频路径失败 [${engine}]:`, error.message);
-    } else {
-      console.log(`🔊 [CloudCache] 云端音频路径已更新到 sentences 表 | [${engine}] | [列] ${column} | [匹配行数] ${count ?? 'unknown'}`);
+      return { localOk, cloudOk: false };
     }
+
+    // 修复 1：count === 0 —— 句子行尚未被同步到云端表，update 未命中任何行。
+    // 不报错但什么都没写，视为可重试失败（行稍后由 syncQueueService 同步，届时才能命中；
+    // 否则 Storage 有文件、sentences 表无路径，形成跨设备孤儿）
+    if (count === 0) {
+      console.warn(`🔊 [CloudCache] 云端 update 匹配 0 行（句子行尚未同步），视为可重试 | [${engine}] | [文本] ${trimmedText.slice(0, 30)}`);
+      return { localOk, cloudOk: false };
+    }
+
+    console.log(`🔊 [CloudCache] 云端音频路径已更新到 sentences 表 | [${engine}] | [列] ${column} | [匹配行数] ${count ?? 'unknown'}`);
+    return { localOk, cloudOk: true };
   } catch (err) {
     console.warn(`🔊 [CloudCache] 更新云端音频路径异常:`, err instanceof Error ? err.message : String(err));
+    return { localOk, cloudOk: false };
   }
 };
 
@@ -350,12 +436,23 @@ export const ttsCloudCacheService = {
   },
 
   async downloadByPath(storagePath: string): Promise<Blob | null> {
+    const result = await this.downloadByPathDetailed(storagePath);
+    return 'blob' in result ? result.blob : null;
+  },
+
+  /**
+   * 修复 3：带错误类型的路径下载。
+   * - { blob }        下载成功
+   * - { notFound: true } 确定不存在（404 / 0 字节）——孤儿元数据，调用方清理后放行
+   * - { error: true } 网络等其他失败——fail-open 语义，调用方放行
+   */
+  async downloadByPathDetailed(storagePath: string): Promise<CloudDownloadResult> {
     if (!isSupabaseReady()) {
-      return null;
+      return { error: true };
     }
 
     if (!storagePath || !storagePath.trim()) {
-      return null;
+      return { notFound: true };
     }
 
     const client = supabaseService.client!;
@@ -366,20 +463,90 @@ export const ttsCloudCacheService = {
         .download(storagePath);
 
       if (error) {
-        console.warn(`🔊 [CloudCache] 路径下载失败: ${storagePath}`, error.message);
-        return null;
+        const msg = error.message || '';
+        if (msg.includes('not found') || msg.includes('404') || msg.includes('does not exist')) {
+          return { notFound: true };
+        }
+        console.warn(`🔊 [CloudCache] 路径下载失败: ${storagePath}`, msg);
+        return { error: true };
       }
 
       if (!data || data.size === 0) {
-        return null;
+        return { notFound: true };
       }
 
       console.log(`🔊 [CloudCache] 路径下载成功 | [路径] ${storagePath} | [大小] ${formatSize(data.size)}`);
-      return data;
+      return { blob: data };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`🔊 [CloudCache] 路径下载异常: ${storagePath}`, msg);
+      return { error: true };
+    }
+  },
+
+  /**
+   * 修复 3：public URL 直链下载兜底。SDK 下载失败但网络仍在时，
+   * 用 getPublicUrl + fetch 走另一条传输路径再试一次（桶 public:true，无需鉴权）。
+   * 不手工拼 URL 字符串——自定义域名/存储端点偏移时手拼会静默 404。
+   */
+  async downloadViaPublicUrl(storagePath: string): Promise<Blob | null> {
+    if (!isSupabaseReady()) return null;
+    if (!storagePath || !storagePath.trim()) return null;
+
+    try {
+      const client = supabaseService.client!;
+      const { data } = client.storage.from(BUCKET_NAME).getPublicUrl(storagePath.trim());
+      const response = await fetch(data.publicUrl);
+      if (!response.ok) return null;
+      const blob = await response.blob();
+      if (!blob || blob.size === 0) return null;
+      console.log(`🔊 [CloudCache] 直链下载成功 | [路径] ${storagePath} | [大小] ${formatSize(blob.size)}`);
+      return blob;
+    } catch {
       return null;
+    }
+  },
+
+  /**
+   * 修复 3：清除句子的陈旧音频元数据（文件已确认不存在的 404 孤儿场景）。
+   * 清空本地与云端两列路径，使守卫不再误判、后续可正常重新生成。
+   * 不删 Storage 文件——调用场景即文件已不存在。
+   */
+  async clearSentenceAudioMetadata(text: string, engine: TTSEngineType): Promise<void> {
+    const trimmedText = text?.trim();
+    if (!trimmedText) return;
+    const column = engine === 'elevenlabs' ? 'tts_audio_path_el' : 'tts_audio_path_mm';
+    const localField = engine === 'elevenlabs' ? 'ttsAudioPathEl' : 'ttsAudioPathMm';
+
+    try {
+      const localSentence = await dbService.findByEnglish(trimmedText);
+      if (localSentence && localSentence[localField]) {
+        const updatedSentence = { ...localSentence, [localField]: undefined, updatedAt: Date.now() };
+        await dbService.put(updatedSentence);
+        console.log(`🔊 [CloudCache] 已清除本地陈旧音频元数据 | [${engine}] | [文本] ${trimmedText.slice(0, 30)}`);
+      }
+    } catch (err) {
+      console.warn(`🔊 [CloudCache] 清除本地音频元数据异常:`, err instanceof Error ? err.message : String(err));
+    }
+
+    if (!isSupabaseReady()) return;
+    const client = supabaseService.client!;
+    const userName = supabaseService.userName;
+    if (!userName) return;
+
+    try {
+      const { error } = await client
+        .from('sentences')
+        .update({ [column]: null, updatedat: Date.now() })
+        .eq('username', userName)
+        .ilike('english', escapeLikePattern(trimmedText));
+      if (error) {
+        console.warn(`🔊 [CloudCache] 清除云端音频元数据失败 [${engine}]:`, error.message);
+      } else {
+        console.log(`🔊 [CloudCache] 已清除云端陈旧音频元数据 | [${engine}] | [文本] ${trimmedText.slice(0, 30)}`);
+      }
+    } catch (err) {
+      console.warn(`🔊 [CloudCache] 清除云端音频元数据异常:`, err instanceof Error ? err.message : String(err));
     }
   },
 
@@ -604,8 +771,11 @@ export const ttsCloudCacheService = {
 
   /**
    * 校验 Storage 桶中文件是否实际存在(不下载文件内容)
-   * 使用 list API 轻量校验,iOS 弱网友好
-   * fail-open:任何异常返回 false,避免阻塞生成流程
+   * 修复 4:HEAD 直链探测——一次请求替代 list,去掉 search 语义依赖与全目录开销,弱网成功率更高
+   * - 2xx → 存在;404 → 不存在
+   * - 403(私有桶)→ 退回 SDK download 第二判定(无 error → 存在)
+   * - 405(不支持 HEAD)→ 退化 Range:bytes=0-0 GET(206/2xx → 存在)
+   * - 其他状态码/网络异常 → false(fail-open「未能确认」语义,调用方放行)
    */
   async verifyFileExists(storagePath: string): Promise<boolean> {
     if (!isSupabaseReady()) return false;
@@ -613,24 +783,27 @@ export const ttsCloudCacheService = {
 
     const client = supabaseService.client!;
     const trimmedPath = storagePath.trim();
-    const lastSlash = trimmedPath.lastIndexOf('/');
-    const directory = lastSlash > 0 ? trimmedPath.substring(0, lastSlash) : '';
-    const filename = lastSlash > 0 ? trimmedPath.substring(lastSlash + 1) : trimmedPath;
-
-    if (!filename) return false;
 
     try {
-      const { data, error } = await client.storage
-        .from(BUCKET_NAME)
-        .list(directory, { limit: 1000, search: filename });
+      const { data } = client.storage.from(BUCKET_NAME).getPublicUrl(trimmedPath);
+      const response = await fetch(data.publicUrl, { method: 'HEAD' });
 
-      if (error) {
-        console.warn(`🔊 [CloudCache] 文件存在性校验失败 | [路径] ${storagePath}`, error.message);
-        return false;
+      if (response.ok) return true;
+      if (response.status === 404) return false;
+
+      if (response.status === 403) {
+        // 私有桶:直链 403 → SDK download 第二判定(当前 public:true 下不会走到)
+        const { error } = await client.storage.from(BUCKET_NAME).download(trimmedPath);
+        return !error;
       }
 
-      const exists = Array.isArray(data) && data.some(item => item && item.name === filename);
-      return exists;
+      if (response.status === 405) {
+        // 服务端不支持 HEAD → 退化 Range GET
+        const rangeResponse = await fetch(data.publicUrl, { headers: { Range: 'bytes=0-0' } });
+        return rangeResponse.ok || rangeResponse.status === 206;
+      }
+
+      return false;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`🔊 [CloudCache] 文件存在性校验异常 | [路径] ${storagePath}`, msg);
@@ -667,15 +840,19 @@ export const ttsCloudCacheService = {
     } catch { /* ignore, fail-open */ }
 
     // 阶段2:本地无记录时兜底直查 supabase sentences 表(避免本地数据陈旧)
+    // 修复 5:补 username 过滤 + ilike 转义,堵 limit(1) 随机取到他人/旧的无路径行
     if (!cloudPathEl && !cloudPathMm && isSupabaseReady()) {
       try {
         const client = supabaseService.client!;
-        const { data } = await client
+        const userName = supabaseService.userName;
+        const base = client
           .from('sentences')
           .select('tts_audio_path_el, tts_audio_path_mm')
-          .ilike('english', trimmedText)
-          .limit(1)
-          .single();
+          .ilike('english', escapeLikePattern(trimmedText))
+          .limit(1);
+        const { data } = userName
+          ? await base.eq('username', userName).single()
+          : await base.single();
         if (data) {
           cloudPathEl = data.tts_audio_path_el || null;
           cloudPathMm = data.tts_audio_path_mm || null;

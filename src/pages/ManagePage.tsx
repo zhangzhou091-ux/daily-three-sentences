@@ -14,6 +14,17 @@ import { Calendar } from '../components/calendar/Calendar';
 
 const BATCH_SIZE = 100;
 
+/**
+ * 修复 5(v2.1):弱网检测(Network Information API,仅 Chromium 系可用,iOS Safari 缺失时返回 false)。
+ * 弱网时 L2 守卫跳过阶段 3 文件验证——其弱网下本就 fail-open,跳过行为等价且省一次 Storage 请求。
+ */
+const isWeakNetwork = (): boolean => {
+  const conn = (navigator as Navigator & { connection?: { effectiveType?: string; saveData?: boolean } }).connection;
+  if (!conn) return false;
+  if (conn.saveData) return true;
+  return ['slow-2g', '2g'].includes(conn.effectiveType || '');
+};
+
 interface ExcelValidationResult {
   valid: boolean;
   error?: string;
@@ -251,15 +262,25 @@ const ManagePage: React.FC<ManagePageProps> = ({ sentences, onUpdate }) => {
 
   const generateSentenceAudio = useCallback(async (sentence: Sentence, engine: 'elevenlabs' | 'minimax') => {
     // L1 守卫:本地元数据快速拦截(同步,无网络开销)
-    if (sentence.ttsAudioPathEl || sentence.ttsAudioPathMm) {
-      const existingEngine = sentence.ttsAudioPathEl ? 'ElevenLabs' : 'MiniMax';
+    // 修复 2:'pending' 是上次生成未完成的本地占位符(云端大概率无文件),与真实路径分开提示
+    const hasRealPath = (v?: string) => !!v && v !== 'pending';
+    if (hasRealPath(sentence.ttsAudioPathEl) || hasRealPath(sentence.ttsAudioPathMm)) {
+      const existingEngine = hasRealPath(sentence.ttsAudioPathEl) ? 'ElevenLabs' : 'MiniMax';
       showToast(`⛔ 云端已有 ${existingEngine} 语音，禁止重新生成`, 'error');
+      return;
+    }
+    if (sentence.ttsAudioPathEl === 'pending' || sentence.ttsAudioPathMm === 'pending') {
+      showToast('上次生成未完成（云端无文件），请先清除语音缓存后重试', 'error');
       return;
     }
 
     // L2 守卫:直查 supabase + 文件验证(防御本地元数据与云端不一致)
+    // 修复 5(v2.1):弱网时跳过阶段 3 文件验证(其弱网下本就 fail-open,跳过等价且省一次请求)
     try {
-      const guard = await ttsCloudCacheService.checkCloudAudioExists(sentence.english);
+      const guard = await ttsCloudCacheService.checkCloudAudioExists(
+        sentence.english,
+        isWeakNetwork() ? { skipFileVerify: true } : undefined
+      );
       if (guard.exists) {
         const existingEngine = guard.engine === 'elevenlabs' ? 'ElevenLabs' : 'MiniMax';
         showToast(`⛔ 云端已有 ${existingEngine} 语音，禁止重新生成`, 'error');
