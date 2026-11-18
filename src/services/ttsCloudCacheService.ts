@@ -415,11 +415,11 @@ export const ttsCloudCacheService = {
       return false;
     }
 
-    if (rate !== 1) {
-      console.log(`🔊 [CloudCache] 非原速音频跳过上传 | [语速] ${rate}x`);
-      return false;
-    }
-
+    // 修复 6（八轮对证终局）：删除 rate !== 1 跳过上传。经核实传入的 blob 恒为原速音频——
+    // MiniMax 三处合成的 voice_setting.speed 硬编码为 1；ElevenLabs 请求体仅 text/model_id/output_format，
+    // 变速仅在播放时经 playbackRate 生效。原判断为过度保守的遗留逻辑，副作用是焊死孤儿句子的
+    // 云端自愈通道（跳过上传 → 不写元数据 → 非 1x 播放反复合成，跨设备/跨缓存清空循环）。
+    // 现任意语速播放均可上传 + 写元数据，孤儿句在任意语速下播放一次即自愈。
     return new Promise((resolve) => {
       uploadQueue.push({
         text,
